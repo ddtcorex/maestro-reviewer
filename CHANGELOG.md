@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.12.1] - 2026-10-17
+
+### Fixed
+
+- **Declare `webServer` on the `connection` entry for DSH 0.2.x.** On
+  0.2.x `ctx.connection.rpc.handle` resolves `webServer` on the connection
+  row's own fiber, so the settings-rpc row-level inject could not reach it:
+  `maestro-review-settings-rpc` never activated and `/dsh-maestro-review`
+  answered 405. The bundle patch now carries the top-level
+  `- id: connection` entry with `[webStartup, webServer]`, identical to
+  core/remote/memory/notifier, pinned by `tests/connection-inject.spec.ts`.
+
 ## [0.12.0] - 2026-10-10
 
 ### Removed
