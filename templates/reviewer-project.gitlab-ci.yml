@@ -3,7 +3,7 @@ stages: [review]
 
 variables:
   # Image registry — pin the SHA for reproducibility
-  REVIEWER_IMAGE: "ddtcorex/maestro-reviewer:0.10.0"
+  REVIEWER_IMAGE: "ddtcorex/maestro-reviewer:0.12.1"
   # Or use $CI_REGISTRY_IMAGE:$CI_COMMIT_SHA when building the image in the same project
 
 review:

@@ -1,7 +1,7 @@
 {
   "name": "@ddtcorex/dsh-maestro-review",
   "private": false,
-  "version": "0.12.0",
+  "version": "0.12.1",
   "description": "Maestro Review: GitLab review pipeline + orchestrator for automated MR review",
   "license": "MIT",
   "repository": {
@@ -38,7 +38,7 @@
     "build": "tsc -p tsconfig.json && tsc -p tsconfig.client.json && node scripts/build-client.mjs",
     "test": "NODE_ENV=test vitest run",
     "verify": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.client.json --noEmit",
-    "docker:build": "docker build -f docker/Dockerfile -t ddtcorex/maestro-reviewer:0.12.0 -t ddtcorex/maestro-reviewer:latest ."
+    "docker:build": "docker build -f docker/Dockerfile -t ddtcorex/maestro-reviewer:0.12.1 -t ddtcorex/maestro-reviewer:latest ."
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "~4.0.4",
