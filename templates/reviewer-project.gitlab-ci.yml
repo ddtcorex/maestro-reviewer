@@ -62,6 +62,11 @@ review:
 #   project, so it is kept out of the review job, where an LLM agent reads
 #   untrusted MR content.
 #
+# Allowlist, environment scope * (required; resolve refuses to run without it):
+# - REVIEW_ALLOWED_NAMESPACES: comma-separated groups or projects allowed to
+#   use this reviewer, for example "my-group/, other-group/app". A source
+#   project outside it gets no review and no note.
+#
 # Provider, defaults at environment scope *:
 # - DEEPSEEK_API_KEY: the baked deepseek-official route, or
 # - REVIEW_LLM_API_KEY + REVIEW_LLM_BASE_URL + REVIEW_LLM_MODEL (optional

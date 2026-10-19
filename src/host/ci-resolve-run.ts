@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import { join } from 'node:path'
 import { gitlabAuthHeaders } from './gitlab-auth.js'
 import { fetchBotUserId } from './ci-coexist.js'
-import { childPipelineYaml, decideRoute, noopChildYaml, parseMrRef, SCOPED_LLM_NAMES, type ScopedLlm } from './ci-resolve.js'
+import { childPipelineYaml, decideRoute, namespaceAllowed, noopChildYaml, parseAllowedNamespaces, parseMrRef, SCOPED_LLM_NAMES, type ScopedLlm } from './ci-resolve.js'
 
 /**
  * The resolve job of the reviewer pipeline (spec 3.2). Under the
@@ -52,6 +52,10 @@ export async function runResolve(env: Record<string, string | undefined>, deps: 
     const image = need('REVIEWER_IMAGE')
     const resolveToken = need('REVIEW_RESOLVE_TOKEN')
     const botToken = need('MAESTRO_GITLAB_TOKEN')
+    // Only allowlisted namespaces may spend the reviewer's keys or expose its
+    // bot token to an agent reading their content.
+    const allowed = parseAllowedNamespaces(env.REVIEW_ALLOWED_NAMESPACES)
+    if (allowed.length === 0) throw new ResolveError('REVIEW_ALLOWED_NAMESPACES is not set: list the groups or projects allowed to use this reviewer, comma separated (for example "my-group/, other-group/app")')
     const server = env.CI_SERVER_URL ?? `https://${host}`
     const api = `${server}/api/v4`
     const get = async (token: string, path: string) => deps.fetcher(`${api}${path}`, { headers: gitlabAuthHeaders(token) })
@@ -94,9 +98,9 @@ export async function runResolve(env: Record<string, string | undefined>, deps: 
     }
 
     // 2. Who triggered this pipeline, asked of GitLab rather than of variables.
-    const query = `{ project(fullPath: ${JSON.stringify(need('CI_PROJECT_PATH'))}) { pipeline(id: ${JSON.stringify(`gid://gitlab/Ci::Pipeline/${need('CI_PIPELINE_ID')}`)}) { upstream { id project { id } } } } }`
+    const query = `{ project(fullPath: ${JSON.stringify(need('CI_PROJECT_PATH'))}) { pipeline(id: ${JSON.stringify(`gid://gitlab/Ci::Pipeline/${need('CI_PIPELINE_ID')}`)}) { upstream { id project { id fullPath } } } } }`
     const gq = await deps.fetcher(`${server}/api/graphql`, { method: 'POST', headers: { ...gitlabAuthHeaders(botToken), 'content-type': 'application/json' }, body: JSON.stringify({ query }) })
-    const upstream = gq.ok ? (await gq.json() as { data?: { project?: { pipeline?: { upstream?: { id?: string; project?: { id?: string } } | null } } } }).data?.project?.pipeline?.upstream : undefined
+    const upstream = gq.ok ? (await gq.json() as { data?: { project?: { pipeline?: { upstream?: { id?: string; project?: { id?: string; fullPath?: string } } | null } } } }).data?.project?.pipeline?.upstream : undefined
     const upstreamId = gid(upstream?.id)
     const sourceId = gid(upstream?.project?.id)
     if (upstreamId === undefined || sourceId === undefined) {
@@ -105,6 +109,13 @@ export async function runResolve(env: Record<string, string | undefined>, deps: 
       }
       deps.log('[review] not triggered by a source pipeline, nothing to review')
       await write(noopChildYaml('not triggered by a source pipeline, nothing to review', image))
+      return { exitCode: 0, childPath }
+    }
+
+    const sourcePath = upstream?.project?.fullPath ?? ''
+    if (!namespaceAllowed(sourcePath, allowed)) {
+      deps.log(`[review] project ${sourcePath || sourceId} is not in REVIEW_ALLOWED_NAMESPACES; not reviewing`)
+      await write(noopChildYaml(`project ${sourcePath || sourceId} is not allowed to use this reviewer`, image))
       return { exitCode: 0, childPath }
     }
 

@@ -79,8 +79,14 @@ maintainers' local rig reruns them after every GitLab version change.
 | `MAESTRO_GITLAB_TOKEN` | `*` | bot token, `api` scope: Developer on every source project, at least Reporter on this project (see [Bot identity](#bot-identity)) |
 | `REVIEW_RESOLVE_TOKEN` | `resolve` | project access token **of this project**, Maintainer, `read_api` |
 | `REVIEW_BOT_USERNAME` | `*` | the bot's username (recognition label for its own markers) |
+| `REVIEW_ALLOWED_NAMESPACES` | `*` | **required**: comma-separated groups or projects allowed to use this reviewer (for example `my-group/, other-group/app`); an entry matches itself and everything below it |
 | `DEEPSEEK_API_KEY`, or the `REVIEW_LLM_*` triple | `*` | the default provider, see [section 6](#6-model-selection) |
 | `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` | `*` | optional review digest |
+
+The allowlist matters because every source developer is a Developer here: without
+it, anyone could point a personal project's bridge at this reviewer, spend the
+default key, and feed content to an agent holding `MAESTRO_GITLAB_TOKEN`. A
+project outside the list gets a no-op child pipeline and no note.
 
 `REVIEW_RESOLVE_TOKEN` can read the setting and every project's scoped
 variables, including other clients' keys. Its `resolve` scope is what keeps it
@@ -296,7 +302,9 @@ GitLab user.
 1. Move each source project's bridge variables (`REVIEW_MODE`,
    `REVIEW_PROFILE`, `REVIEW_ON_PUSH`) to reviewer variables scoped
    `review/<id>`.
-2. Set the reviewer project's pipeline variables to **No one allowed**.
+2. Set the reviewer project's pipeline variables to **No one allowed**, protect
+   its pipeline branch for Maintainers only, and set
+   `REVIEW_ALLOWED_NAMESPACES`.
 3. Create `REVIEW_RESOLVE_TOKEN` (scope `resolve`), and give the bot user at
    least Reporter on the reviewer project.
 4. Replace the reviewer project's pipeline file and every source bridge with
@@ -326,6 +334,9 @@ works by design; build and test it on a separate reviewer project.
 - **`the project key changed since resolve`**: the project's scoped key was
   changed or deleted after `resolve` ran (or an old child job was retried);
   rerun the whole reviewer pipeline, never only the child job.
+- **`REVIEW_ALLOWED_NAMESPACES is not set`** or **`project ... is not in
+  REVIEW_ALLOWED_NAMESPACES`**: add the project's group (or the project) to the
+  allowlist.
 - **`incomplete provider settings for project <id>`**: the project's scope is
   partial; the message names the missing variables
   ([section 3](#3-per-project-settings)).

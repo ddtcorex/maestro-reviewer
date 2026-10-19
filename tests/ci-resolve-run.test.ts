@@ -11,7 +11,7 @@ const MR = 7
 interface World {
   setting?: string | null
   settingStatus?: number
-  upstream?: { id: number; project: number } | null
+  upstream?: { id: number; project: number; path?: string } | null
   ref?: string
   labels?: string[]
   scoped?: Record<string, string>
@@ -31,8 +31,8 @@ function gitlab(w: World) {
     seenTokens.push(`${u.pathname} ${tok}`)
     const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status })
     if (u.pathname === '/api/graphql') {
-      const up = w.upstream === undefined ? { id: 31, project: SOURCE } : w.upstream
-      return json(200, { data: { project: { pipeline: { upstream: up ? { id: `gid://gitlab/Ci::Pipeline/${up.id}`, project: { id: `gid://gitlab/Project/${up.project}` } } : null } } } })
+      const up = w.upstream === undefined ? { id: 31, project: SOURCE, path: 'clients/acme/shop' } : w.upstream
+      return json(200, { data: { project: { pipeline: { upstream: up ? { id: `gid://gitlab/Ci::Pipeline/${up.id}`, project: { id: `gid://gitlab/Project/${up.project}`, fullPath: up.path ?? 'clients/acme/shop' } } : null } } } })
     }
     const p = u.pathname.replace('/api/v4', '')
     if (p === `/projects/${REVIEWER}`) {
@@ -69,7 +69,8 @@ function gitlab(w: World) {
 const env = (o: Record<string, string | undefined> = {}) => ({
   CI_PROJECT_ID: String(REVIEWER), CI_PROJECT_PATH: 'ci/reviewer', CI_COMMIT_REF_NAME: 'main', CI_PIPELINE_ID: '77', CI_PIPELINE_SOURCE: 'pipeline',
   CI_SERVER_HOST: 'git.example.com', CI_SERVER_URL: 'https://git.example.com', CI_PROJECT_DIR: '/builds/ci/reviewer',
-  REVIEWER_IMAGE: 'ddtcorex/maestro-reviewer:0.14.0', REVIEW_RESOLVE_TOKEN: RESOLVE, MAESTRO_GITLAB_TOKEN: BOT, ...o,
+  REVIEWER_IMAGE: 'ddtcorex/maestro-reviewer:0.14.0', REVIEW_RESOLVE_TOKEN: RESOLVE, MAESTRO_GITLAB_TOKEN: BOT,
+  REVIEW_ALLOWED_NAMESPACES: 'internal/, clients/acme', ...o,
 })
 
 async function run(w: World, e = env()) {
@@ -165,6 +166,31 @@ describe('runResolve', () => {
       expect(r.child).toBeUndefined()
     }
     expect((await run({ protection: { allow_force_push: false, push_access_levels: lv(0), merge_access_levels: lv(40) } })).exitCode).toBe(0)
+  })
+
+  it('refuses to run without an allowlist of source namespaces', async () => {
+    for (const value of [undefined, '', ' , ']) {
+      const r = await run({}, env({ REVIEW_ALLOWED_NAMESPACES: value }))
+      expect(r.exitCode).toBe(1)
+      expect(r.logs.join('\n')).toMatch(/REVIEW_ALLOWED_NAMESPACES/)
+    }
+  })
+
+  it('reviews nothing for a project outside the allowlist, and posts nothing there', async () => {
+    for (const path of ['someone/personal', 'clients/acme-other/shop', 'internalx/tool']) {
+      const r = await run({ upstream: { id: 31, project: SOURCE, path }, scoped: { REVIEW_REQUIRE_PROJECT_KEY: '1' } })
+      expect(r.exitCode).toBe(0)
+      expect(Object.keys(r.child ?? {})).toEqual(['skip'])
+      expect(r.posted).toHaveLength(0)
+      expect(r.logs.join('\n')).toContain(path)
+    }
+  })
+
+  it('matches an allowlist entry as a whole path segment prefix or as an exact project', async () => {
+    for (const path of ['clients/acme', 'clients/acme/shop', 'internal/tools/ci']) {
+      const r = await run({ upstream: { id: 31, project: SOURCE, path } })
+      expect(r.child?.review).toBeDefined()
+    }
   })
 
   it('asks for deep when the MR carries the label', async () => {

@@ -36,6 +36,16 @@ export type Route =
   | { route: 'unconfigured' }
   | { route: 'invalid'; missing: string[] }
 
+/** Allowlist entries from REVIEW_ALLOWED_NAMESPACES (comma separated). */
+export function parseAllowedNamespaces(value: string | undefined): string[] {
+  return (value ?? '').split(',').map(e => e.trim().replace(/\/+$/, '')).filter(Boolean)
+}
+
+/** A project path is allowed when an entry is the project itself or one of its parent namespaces. */
+export function namespaceAllowed(projectPath: string, entries: readonly string[]): boolean {
+  return entries.some(e => projectPath === e || projectPath.startsWith(`${e}/`))
+}
+
 /** MR iid of a merge request pipeline ref (head, merge or train), else undefined. */
 export function parseMrRef(ref: string): number | undefined {
   const m = /^refs\/merge-requests\/(\d+)\/(?:head|merge|train)$/.exec(ref)

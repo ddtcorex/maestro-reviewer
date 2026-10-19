@@ -10,6 +10,10 @@
   own image with the reviewer's secrets or redirect its token and LLM key.
   The reviewer project must now forbid pipeline variables, bridges pass none,
   and a new `resolve` job learns the MR from GitLab (GraphQL upstream).
+- **Namespace allowlist:** `REVIEW_ALLOWED_NAMESPACES` (required) lists the
+  groups or projects allowed to use the reviewer; any other source project
+  gets no review, so a personal project can neither spend the default key nor
+  feed content to an agent holding the bot token.
 - `resolve` also refuses to run unless the reviewer pipeline branch is
   Maintainer-only (push, merge, no force push), while a project variable
   shadows a value the child pipeline pins, or when a project's base URL or
