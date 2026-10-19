@@ -41,11 +41,9 @@ describe('latestCompletedReview', () => {
     expect((await latestCompletedReview(fetcher, opts))?.headSha).toBe('abc123')
   })
 
-  it('reads a pre-metadata bot comment through its marker, so an upgrade does not re-review everything', async () => {
+  it('ignores a bot comment without metadata (no pre-0.14 compatibility)', async () => {
     const { fetcher } = gitlab([[note(1, BOT, `## Review\n\n${reviewMarker('d00d00', 'ci-deep')}`)]])
-    const prior = await latestCompletedReview(fetcher, opts)
-    expect(prior?.headSha).toBe('d00d00')
-    expect(prior?.mode).toBe('deep')
+    expect(await latestCompletedReview(fetcher, opts)).toBeUndefined()
   })
 
   it('returns undefined when the MR has no bot review', async () => {

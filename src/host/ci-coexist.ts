@@ -65,8 +65,7 @@ export async function fetchBotUserId(fetcher: typeof fetch, baseUrl: string, tok
 /**
  * The newest completed review on the MR, read from GitLab (spec §4.1): the
  * first note, newest first, authored by the token's own user that carries
- * valid review metadata, or (for comments from before the metadata) a
- * completed marker. Notes by anyone else are ignored, so a pasted block can
+ * valid review metadata. Notes by anyone else are ignored, so a pasted block can
  * never suppress a review. Throws when GitLab cannot be read so the caller
  * can fall back; returns undefined when the MR simply has no bot review.
  */
@@ -88,10 +87,6 @@ export async function latestCompletedReview(
       if (note.system === true || note.author?.id !== botId || typeof note.body !== 'string') continue
       const meta = parseReviewMeta(note.body)
       if (meta !== undefined) return meta
-      const marker = parseReviewMarker(note.body)
-      if (marker?.status === 'completed') {
-        return { v: 1, headSha: marker.sha, mode: marker.flow === 'ci-deep' ? 'deep' : 'quick', models: [], findings: [], at: note.created_at ?? '' }
-      }
     }
     page = res.headers.get('x-next-page') ?? ''
   }
@@ -100,7 +95,7 @@ export async function latestCompletedReview(
 
 /**
  * Whether the bot already posted a deep review for this head SHA (metadata
- * mode deep, or a pre-metadata `flow=ci-deep` marker). Read failures answer
+ * mode deep). Read failures answer
  * false: a missing signal never blocks a requested review.
  */
 export async function hasCompletedDeepReview(
@@ -121,12 +116,7 @@ export async function hasCompletedDeepReview(
       for (const note of notes) {
         if (note.system === true || note.author?.id !== opts.botUserId || typeof note.body !== 'string') continue
         const meta = parseReviewMeta(note.body)
-        if (meta !== undefined) {
-          if (meta.mode === 'deep' && meta.headSha.toLowerCase() === sha) return true
-          continue
-        }
-        const marker = parseReviewMarker(note.body)
-        if (marker?.status === 'completed' && marker.flow === 'ci-deep' && marker.sha.toLowerCase() === sha) return true
+        if (meta?.mode === 'deep' && meta.headSha.toLowerCase() === sha) return true
       }
       page = res.headers.get('x-next-page') ?? ''
     }

@@ -50,6 +50,12 @@ describe('deep review on request, once per head SHA', () => {
     expect(labelPuts).toHaveLength(1)
   })
 
+  it('does not count a deep marker without metadata', async () => {
+    const markerOnly = { id: 1, system: false, author: { id: BOT }, body: reviewMarker('cafe01', 'ci-deep'), created_at: '2026-10-19T00:00:00Z' }
+    const { ctx } = await gate(DEEP, [markerOnly])
+    expect(ctx.reviewRunner).toHaveBeenCalledTimes(1)
+  })
+
   it('removes the label once after a successful deep review', async () => {
     const { labelPuts } = await gate(DEEP, [])
     expect(labelPuts).toHaveLength(1)
