@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { createReviewSignals } from '../src/host/review-signals.js'
+import { createReviewSignals } from '../src/host/forge/gitlab/review-signals.js'
 
 describe('review-signals', () => {
   afterEach(() => {

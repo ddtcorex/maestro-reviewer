@@ -1,10 +1,7 @@
 import { describe, it, expect } from 'vitest'
-import {
-  buildReviewComment,
-  countFindingSeverities,
-  postReviewFindings,
-  severityPrefix,
-} from '../src/host/orchestrator.js'
+import { buildReviewComment } from '../src/host/orchestrator.js'
+import { countFindingSeverities, severityPrefix } from '../src/host/severity.js'
+import { postReviewFindings } from '../src/host/forge/gitlab/mr-api.js'
 
 const DIFF_REFS = { base_sha: 'b', start_sha: 's', head_sha: 'h' }
 const DIFF = '@@ -1,2 +1,3 @@\n context\n+added\n context2'

@@ -10,7 +10,6 @@ import type { AgentHandle, ModelSelection } from '@deepseek-ai/dsh-agent'
 import { installModelSelection } from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-agent-preset-registry'
 import type {} from '@deepseek-ai/dsh-session-title'
-import * as GitlabClient from './gitlab-client.js'
 import * as ReviewFindingsTool from './review-findings-tool.js'
 import * as SearchTool from './search-tool.js'
 import * as HyvaThemeInspectTool from './hyva-theme-inspect-tool.js'
@@ -23,20 +22,21 @@ import * as PerfLogStatsTool from './perf-log-stats-tool.js'
 import * as ReviewToolPolicy from './tool-policy.js'
 import { detectGovardLint } from './govard-lint-detection.js'
 import type { ReviewFinding } from './review-findings-tool.js'
+import type { ReviewForge } from './forge/types.js'
+import { gitlabForge } from './forge/gitlab/index.js'
+import { countFindingSeverities } from './severity.js'
 import type { ReviewRequest, ReviewResult } from './events.js'
 import { lastCompletedReview, recordReviewFinish, recordReviewStart } from './review-history.js'
-import { buildIncrementalBlock, fetchCompare, fetchMrDetailHeadSha } from './incremental.js'
-import { createReviewSignals } from './review-signals.js'
+import { buildIncrementalBlock } from './incremental.js'
 import { loadedReviewProfile, type ReviewSkillProfile } from './skills-tool.js'
 import { REVIEW_SOURCE_KIND } from './source.js'
-import { gitlabAuthHeaders } from './gitlab-auth.js'
 import { cloneSourceRepo, defaultRun } from './ci-clone.js'
 import {
   agentOptionsForModel, assertSafeBranchName, assertTurnSucceededOrSalvage, auditorOutputFromSession, buildAuditorPrompt,
-  buildReviewerScopePrompt, countFindingSeverities, fetchMrBaseSha, getTurnErrorMessage, isBranchNotFoundError,
-  isUnsupportedReasoningError, mountAgentPreset, postReviewFindings, reviewerSummary, runDiffOnlyReview, runReviewAndAudit,
+  buildReviewerScopePrompt, getTurnErrorMessage, isBranchNotFoundError,
+  isUnsupportedReasoningError, mountAgentPreset, reviewerSummary, runDiffOnlyReview, runReviewAndAudit,
   whenIdleWithTimeout, withAuditorDegrade,
-  type DiffOnlyReviewDeps, type GitlabFindingPoster, type ReviewAndAuditDeps, type ReviewOutcome,
+  type DiffOnlyReviewDeps, type ReviewAndAuditDeps, type ReviewOutcome,
 } from './orchestrator.js'
 
 /**
@@ -78,13 +78,15 @@ export interface EngineRunOptions {
   reviewProfile?: ReviewSkillProfile
   model: ModelSelection
   agentTimeoutMs: number
+  /** The forge of this MR; defaults to GitLab at `gitlab`. */
+  forge?: ReviewForge
   /** Final status of a run that did review (not of a deduped one). */
   notify?(status: 'completed' | 'failed', summary?: string): void
 }
 
 export interface ReviewEngine { run(payload: ReviewRequest, opts: EngineRunOptions): Promise<ReviewResult> }
 
-export interface AgentRunConfig { gitlab: EngineGitlab; model: ModelSelection; agentTimeoutMs: number }
+export interface AgentRunConfig { gitlab: EngineGitlab; forge: ReviewForge; model: ModelSelection; agentTimeoutMs: number }
 
 /** The reviewer and auditor agent runs; separate so the run flow can be tested without agents. */
 export interface EngineAgents {
@@ -124,28 +126,11 @@ export function summarizeReport(body: string | undefined): string | undefined {
   return `${(lastSpace > 80 ? cut.slice(0, lastSpace) : cut).trim()} …`
 }
 
-/** Comment posting on the MR (or a discussion reply), as the engine and its callers post. */
-export function createCommentPoster(gitlab: EngineGitlab, payload: Pick<ReviewRequest, 'projectId' | 'mrIid'>) {
-  const post = async (url: string, body: string) => {
-    const response = await GitlabClient.fetchWithTimeout(url, {
-      method: 'POST',
-      headers: { ...gitlabAuthHeaders(gitlab.token), 'Content-Type': 'application/json' },
-      body: JSON.stringify({ body }),
-    })
-    if (!response.ok) throw new Error(`GitLab API error ${response.status}: ${await response.text()}`)
-  }
-  const mr = `${gitlab.baseUrl}/api/v4/projects/${payload.projectId}/merge_requests/${payload.mrIid}`
-  return {
-    postComment: (body: string) => post(`${mr}/notes`, body),
-    replyToDiscussion: (discussionId: string, body: string) => post(`${mr}/discussions/${encodeURIComponent(discussionId)}/notes`, body),
-  }
-}
-
 export function createEngineAgents(ctx: Context): EngineAgents {
   async function reviewer(worktreePath: string | undefined, payload: ReviewRequest, run: AgentRunConfig, reviewProfile?: ReviewSkillProfile, incrementalBlock?: string): Promise<ReviewOutcome> {
     // MR base SHA feeds the govard diff-scope lint command; undefined omits the
     // lint rule instead of sending a wasted govard invocation.
-    const lintDefaultBase = await fetchMrBaseSha(run.gitlab.baseUrl, run.gitlab.token, payload.projectId, payload.mrIid)
+    const lintDefaultBase = await run.forge.mrBaseSha()
     const primaryOptions = agentOptionsForModel(run.model)
     const fallbackOptions: ModelSelection = { provider: primaryOptions.provider, model: primaryOptions.model }
     let lastHandle: AgentHandle | undefined
@@ -162,14 +147,7 @@ export function createEngineAgents(ctx: Context): EngineAgents {
             installModelSelection(agentCtx, { current: agentOptions, assembled: undefined })
             await agentCtx.plugin(ReviewToolPolicy)
             await mountAgentPreset(ctx.agentPresets, agentCtx, 'dsh-maestro-reviewer')
-            await agentCtx.plugin(GitlabClient, {
-              baseUrl: run.gitlab.baseUrl,
-              projectId: payload.projectId,
-              mrIid: payload.mrIid,
-              token: run.gitlab.token,
-              botUsername: run.gitlab.botUsername,
-              onDiffTruncated: () => { diffTruncated = true },
-            })
+            await run.forge.mountAgentTools(agentCtx, { onDiffTruncated: () => { diffTruncated = true } })
             await agentCtx.plugin(ReviewFindingsTool, { onReport: (findings) => { capturedFindings = findings } })
             // Diff-only runs have no worktree; nothing to search there.
             if (worktreePath !== undefined) {
@@ -228,15 +206,9 @@ export function createEngineAgents(ctx: Context): EngineAgents {
         const failures: string[] = []
         let postedNew = 0
         let postedReplies = 0
-        const findingPoster: GitlabFindingPoster = {
-          baseUrl: run.gitlab.baseUrl,
-          token: run.gitlab.token,
-          projectId: payload.projectId,
-          mrIid: payload.mrIid,
-        }
         for (const finding of capturedFindings) {
           try {
-            await postReviewFindings([finding], findingPoster)
+            await run.forge.postFindings([finding])
             if (finding.status === 'new') postedNew++
             else postedReplies++
           } catch (err) {
@@ -289,13 +261,7 @@ export function createEngineAgents(ctx: Context): EngineAgents {
           installModelSelection(agentCtx, { current: agentOptions, assembled: undefined })
           await agentCtx.plugin(ReviewToolPolicy)
           await mountAgentPreset(ctx.agentPresets, agentCtx, 'dsh-maestro-auditor')
-          await agentCtx.plugin(GitlabClient, {
-            baseUrl: run.gitlab.baseUrl,
-            projectId: payload.projectId,
-            mrIid: payload.mrIid,
-            token: run.gitlab.token,
-            botUsername: run.gitlab.botUsername,
-          })
+          await run.forge.mountAgentTools(agentCtx, {})
         },
       })
     } catch (err) {
@@ -322,12 +288,12 @@ export function createReviewEngine(ctx: Context, agents: EngineAgents = createEn
   async function run(payload: ReviewRequest, opts: EngineRunOptions): Promise<ReviewResult> {
     const t0 = Date.now()
     const { gitlab, access } = opts
-    const agentRun: AgentRunConfig = { gitlab, model: opts.model, agentTimeoutMs: opts.agentTimeoutMs }
+    const forge = opts.forge ?? gitlabForge(gitlab, payload)
+    const agentRun: AgentRunConfig = { gitlab, forge, model: opts.model, agentTimeoutMs: opts.agentTimeoutMs }
     const notify = (status: 'completed' | 'failed', summary?: string) => opts.notify?.(status, summary)
     try {
       const historyId = `${payload.projectId}-${payload.mrIid}-${Date.now()}`
-      const currentHeadSha = await fetchMrDetailHeadSha(gitlab.baseUrl, gitlab.token, payload.projectId, payload.mrIid)
-        .catch(() => undefined) as string | undefined
+      const currentHeadSha = await forge.mrHeadSha().catch(() => undefined)
       await recordReviewStart({
         id: historyId,
         projectId: payload.projectId,
@@ -345,7 +311,7 @@ export function createReviewEngine(ctx: Context, agents: EngineAgents = createEn
         // CI hands over the prior head it read from GitLab; the history store is runner-local there.
         const priorHeadSha = payload.priorHeadSha ?? (await lastCompletedReview(payload.projectId, payload.mrIid))?.headSha
         if (priorHeadSha !== undefined && currentHeadSha !== undefined && priorHeadSha !== currentHeadSha) {
-          const compare = await fetchCompare(gitlab.baseUrl, gitlab.token, payload.projectId, priorHeadSha, currentHeadSha)
+          const compare = await forge.compare(priorHeadSha, currentHeadSha)
           incrementalBlock = buildIncrementalBlock(compare, priorHeadSha, currentHeadSha)
         }
       } catch {
@@ -353,11 +319,10 @@ export function createReviewEngine(ctx: Context, agents: EngineAgents = createEn
       }
       // Award-emoji acknowledgements only make sense on the MR itself; inline
       // discussion reviews answer in-thread instead.
-      const signals = payload.scope.kind === 'mr'
-        ? createReviewSignals({ baseUrl: gitlab.baseUrl, token: gitlab.token, projectId: payload.projectId, mrIid: payload.mrIid, botUsername: gitlab.botUsername })
-        : undefined
+      const signals = payload.scope.kind === 'mr' ? forge.signals() : undefined
       await signals?.start()
-      const { postComment, replyToDiscussion } = createCommentPoster(gitlab, payload)
+      const postComment = (body: string) => forge.postNote(body)
+      const replyToDiscussion = (discussionId: string, body: string) => forge.replyToDiscussion(discussionId, body)
       const deduped = async (): Promise<ReviewResult> => {
         console.error(`maestro-orchestrator: deduped duplicate in-flight review project=${payload.projectPath} mr=!${payload.mrIid} trigger=${payload.trigger}`)
         await recordReviewFinish(historyId, { status: 'completed', summary: DEDUPED_SUMMARY })
@@ -391,7 +356,7 @@ export function createReviewEngine(ctx: Context, agents: EngineAgents = createEn
           const profile = opts.reviewProfile ?? 'generic'
           const cloneDir = join('/tmp', `maestro-ci-src-${payload.projectId}-${payload.mrIid}`)
           // D3: make the MR merge base reachable from the head in the shallow clone.
-          const baseSha = await fetchMrBaseSha(gitlab.baseUrl, gitlab.token, payload.projectId, payload.mrIid)
+          const baseSha = await forge.mrBaseSha()
           await cloneSourceRepo({ fetcher: fetch, run: defaultRun, host: access.host, projectId: payload.projectId, sourceBranch: payload.sourceBranch, headSha: payload.headSha as string, token: gitlab.token, dir: cloneDir, ...(baseSha ? { baseSha } : {}) })
           try {
             const ciEnsureWorktree = async (repoPath: string, branch: string, pid: number, iid: number, suffix?: string): Promise<string> => {

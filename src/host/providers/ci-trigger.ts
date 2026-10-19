@@ -8,7 +8,7 @@ import type { ModelSelection } from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-agent-default-model'
 import type { CodeAccess, EngineRunOptions } from '../engine.js'
 import type {} from '../engine-row.js'
-import { gitlabAuthHeaders } from '../gitlab-auth.js'
+import { gitlabAuthHeaders } from '../forge/gitlab/gitlab-auth.js'
 import { fetchBotUserId, hasCompletedDeepReview, hasCompletedReviewForSha, hasRunningEyes, latestCompletedReview, removeDeepLabel } from '../ci-coexist.js'
 
 export const name = 'maestro-review-ci-trigger'

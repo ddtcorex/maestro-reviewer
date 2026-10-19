@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { join } from 'node:path'
-import { gitlabAuthHeaders } from './gitlab-auth.js'
+import { gitlabAuthHeaders } from './forge/gitlab/gitlab-auth.js'
 import { fetchBotUserId } from './ci-coexist.js'
 import { childPipelineYaml, decideRoute, namespaceAllowed, noopChildYaml, parseAllowedNamespaces, parseMrRef, SCOPED_LLM_NAMES, type ScopedLlm } from './ci-resolve.js'
 

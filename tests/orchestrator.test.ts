@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { postReviewFindings, ensureWorktree } from '../src/host/orchestrator.js'
+import { ensureWorktree } from '../src/host/orchestrator.js'
+import { postReviewFindings } from '../src/host/forge/gitlab/mr-api.js'
 
 describe('postReviewFindings path matching', () => {
   const diffRefs = { base_sha: 'b', start_sha: 's', head_sha: 'h' }
@@ -98,7 +99,7 @@ describe('D1 signals timeout', () => {
           )
         }),
     )
-    const { createReviewSignals } = await import('../src/host/review-signals.js')
+    const { createReviewSignals } = await import('../src/host/forge/gitlab/review-signals.js')
     const signals = createReviewSignals({
       baseUrl: 'https://git.example.com', token: 'tok', projectId: 1345, mrIid: 30, botUsername: 'maestro',
     })

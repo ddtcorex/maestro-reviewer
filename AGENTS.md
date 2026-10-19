@@ -274,7 +274,7 @@ release, not after one goes wrong.
 
 ## Conventions
 
-- **GitLab only**: there is no provider abstraction. The `ReviewProvider` contract and the GitHub stub were removed as dead code; add one back only together with a real second forge.
+- **One forge, behind `forge/types.ts`**: the engine reaches the forge only through `ReviewForge` (head and base SHA, compare, notes, findings, signals, the agents' read tools); GitLab is the one implementation, in `src/host/forge/gitlab/`. Only that directory and the `ci-*` modules (GitLab CI by definition) build `/api/v4/` URLs, pinned by `tests/forge-boundary.test.ts`. A second forge is a sibling directory, added together with a real user of it.
 - **Tool-only review subagents**: review/audit subagents run with tool-only presets; findings are written via the `report_review_findings` tool, not free text.
 - **Secrets** — compare PINs/tokens with `secure-compare.ts`; never log or commit real tokens. In CI, `MAESTRO_GITLAB_TOKEN` must be a PAT/group token (`api` scope) — `CI_JOB_TOKEN` is read-only for posting (probed on GitLab 18.11); redact it from clone URLs and errors.
 - **CI trust model**: never read identity or configuration from a trigger. The reviewer project forbids pipeline variables; `resolve` learns the MR from GitLab (GraphQL `pipeline.upstream`, the upstream ref, MR labels) and writes the child pipeline with literal values. Per-project settings are reviewer variables scoped `review/<source project id>`; a project route is all or nothing. Reviewer-project reads use `REVIEW_RESOLVE_TOKEN` (Maintainer, environment scope `resolve`, never present in the review job); source reads use `MAESTRO_GITLAB_TOKEN`. No backward compatibility shims.

@@ -3,7 +3,6 @@ import { execFile } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { promisify } from 'node:util'
 import { join } from 'node:path'
-import { normalize as posixNormalize } from 'node:path/posix'
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { ReasoningEffortId } from '@deepseek-ai/dsh-llm'
@@ -13,20 +12,19 @@ import type { ModelSelection } from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-agent-preset-registry'
 import type {} from '@deepseek-ai/dsh-agent-default-model'
 import type {} from '@deepseek-ai/dsh-session-title'
-import * as GitlabClient from './gitlab-client.js'
+import * as GitlabClient from './forge/gitlab/gitlab-client.js'
 import { govardOnPath } from './govard-lint-detection.js'
 import type { ReviewFinding, FindingSeverity } from './review-findings-tool.js'
 import type { ReviewRequest, ReviewResult } from './events.js'
 import { loadUserConfig, type MaestroUserConfig, type ProjectMapping, type ReviewModelSelection } from './config-store.js'
 import { hasCompletedReview, pruneHistory, recordReviewFinish, recordReviewStart } from './review-history.js'
-import { fetchMrDetailHeadSha } from './incremental.js'
-import { createReviewSignals } from './review-signals.js'
+import { gitlabForge } from './forge/gitlab/index.js'
+import { SEVERITY_ORDER, severityPrefix } from './severity.js'
 import { reviewDigestText, type NotifierLike } from './notify.js'
 import type { ReviewSkillProfile } from './skills-tool.js'
 import './events.js'
-import { gitlabAuthHeaders } from './gitlab-auth.js'
 import { reviewMarker, resolveFlow, encodeReviewMeta, buildReviewMeta, type ReviewFlow, type ReviewMeta } from './review-marker.js'
-import { createCommentPoster, createReviewEngine, DEDUPED_SUMMARY, removeWorktree, writeFailedReport, type CodeAccess, type EngineGitlab } from './engine.js'
+import { createReviewEngine, DEDUPED_SUMMARY, removeWorktree, writeFailedReport, type CodeAccess, type EngineGitlab } from './engine.js'
 
 const execFileAsync = promisify(execFile)
 const GIT_TIMEOUT_MS = 60_000
@@ -35,36 +33,6 @@ const GIT_TIMEOUT_MS = 60_000
  * Finding severity, assigned by the reviewer. Display order is fixed
  * (blocking first) wherever counts are rendered.
  */
-export const SEVERITY_ORDER: readonly FindingSeverity[] = ['blocking', 'major', 'minor', 'nit'] as const
-
-const SEVERITY_LABEL: Record<FindingSeverity, string> = {
-  blocking: '🔴 Blocking',
-  major: '🟡 Major',
-  minor: '🔵 Minor',
-  nit: '⚪ Nit',
-}
-
-/** Missing or unknown severities degrade to `minor` — never drop a finding. */
-export function normalizeFindingSeverity(severity: unknown): FindingSeverity {
-  return severity === 'blocking' || severity === 'major' || severity === 'minor' || severity === 'nit'
-    ? severity
-    : 'minor'
-}
-
-export function severityPrefix(severity: unknown): string {
-  return SEVERITY_LABEL[normalizeFindingSeverity(severity)]
-}
-
-/** Count findings per severity; zero counts are omitted. */
-export function countFindingSeverities(findings: ReviewFinding[]): Partial<Record<FindingSeverity, number>> {
-  const counts: Partial<Record<FindingSeverity, number>> = {}
-  for (const finding of findings) {
-    const level = normalizeFindingSeverity(finding.severity)
-    counts[level] = (counts[level] ?? 0) + 1
-  }
-  return counts
-}
-
 export interface ReviewerScopePromptOpts {
   scopeKind: 'discussion' | 'full'
   discussionId?: string
@@ -141,7 +109,7 @@ export function buildReviewComment(opts: {
         if (opts.findings.severityCounts !== undefined) {
           for (const level of SEVERITY_ORDER) {
             const count = opts.findings.severityCounts[level] ?? 0
-            if (count > 0) parts.push(`${SEVERITY_LABEL[level].split(' ')[0]} ${count} ${level}`)
+            if (count > 0) parts.push(`${severityPrefix(level).split(' ')[0]} ${count} ${level}`)
           }
         }
         if (parts.length === 0) parts.push('no inline findings')
@@ -437,161 +405,6 @@ export interface ReviewCommentDeps {
   postComment(body: string): Promise<void>
   replyToDiscussion(discussionId: string, body: string): Promise<void>
   writeFailedReport(mrIid: number, body: string): Promise<void>
-}
-
-export interface GitlabFindingPoster {
-  baseUrl: string
-  token: string
-  projectId: number
-  mrIid: number
-  fetcher?: typeof fetch
-  /** Internal per-review cache: all positions must use one MR diff snapshot. */
-  snapshot?: Promise<GitlabDiffSnapshot>
-}
-
-interface GitlabMrChange {
-  old_path: string
-  new_path: string
-  diff: string
-  collapsed?: boolean
-  too_large?: boolean
-  deleted_file?: boolean
-}
-
-interface GitlabDiffPosition {
-  oldLine?: number
-  newLine?: number
-}
-
-interface GitlabDiffSnapshot {
-  diffRefs: { base_sha: string; start_sha: string; head_sha: string }
-  changes: GitlabMrChange[]
-}
-
-/** Map a new-side line number to its exact unified-diff position. */
-export function diffPositionForNewLine(diff: string, targetLine: number): GitlabDiffPosition | undefined {
-  let oldLine = 0
-  let newLine = 0
-  for (const row of diff.split('\n')) {
-    const header = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(row)
-    if (header !== null) {
-      oldLine = Number(header[1])
-      newLine = Number(header[2])
-      continue
-    }
-    if (row.startsWith('\\')) continue
-    if (row.startsWith('+')) {
-      if (newLine === targetLine) return { newLine }
-      newLine++
-      continue
-    }
-    if (row.startsWith('-')) {
-      oldLine++
-      continue
-    }
-    if (row.startsWith(' ')) {
-      if (newLine === targetLine) return { oldLine, newLine }
-      oldLine++
-      newLine++
-    }
-  }
-  return undefined
-}
-
-async function loadLatestDiffSnapshot(fetcher: typeof fetch, apiBase: string, headers: Record<string, string>): Promise<GitlabDiffSnapshot> {
-  const versionsResponse = await fetcher(`${apiBase}/versions`, { headers })
-  if (!versionsResponse.ok) throw new Error(`GitLab API error ${versionsResponse.status}: ${await versionsResponse.text()}`)
-  const versions = await versionsResponse.json() as Array<{ id?: number }>
-  const latest = versions[0]
-  if (latest?.id === undefined) throw new Error('GitLab merge request has no available diff version')
-  const versionResponse = await fetcher(`${apiBase}/versions/${latest.id}`, { headers })
-  if (!versionResponse.ok) throw new Error(`GitLab API error ${versionResponse.status}: ${await versionResponse.text()}`)
-  const version = await versionResponse.json() as {
-    base_commit_sha?: string
-    start_commit_sha?: string
-    head_commit_sha?: string
-    diffs?: GitlabMrChange[]
-  }
-  if (version.base_commit_sha === undefined || version.start_commit_sha === undefined || version.head_commit_sha === undefined) {
-    throw new Error('GitLab merge request diff version has incomplete SHA references')
-  }
-  if (version.diffs === undefined) throw new Error('GitLab merge request diff version has no file diffs')
-  return {
-    diffRefs: { base_sha: version.base_commit_sha, start_sha: version.start_commit_sha, head_sha: version.head_commit_sha },
-    changes: version.diffs,
-  }
-}
-
-/**
- * Collapse `.`/`..`/duplicate slashes so worktree-relative finding paths
- * (which legitimately contain `../` segments when a template references a
- * sibling theme directory) compare equal to GitLab's canonical diff paths.
- */
-function normalizedDiffPath(path: string): string {
-  return posixNormalize(path)
-}
-
-/**
- * Publish agent findings from the orchestrator's own context. Agent tools are
- * mounted inside a setup child fiber and are not guaranteed to remain
- * executable through `handle.agent.ctx` after the agent turn ends.
- */
-export async function postReviewFindings(findings: ReviewFinding[], config: GitlabFindingPoster): Promise<void> {
-  const fetcher = config.fetcher ?? fetch
-  const apiBase = `${config.baseUrl}/api/v4/projects/${config.projectId}/merge_requests/${config.mrIid}`
-  const headers = { ...gitlabAuthHeaders(config.token), 'Content-Type': 'application/json' }
-  for (const finding of findings) {
-    let response: Response
-    const label = severityPrefix(finding.severity)
-    const body = finding.body.startsWith(label) ? finding.body : `${label}\n\n${finding.body}`
-    if (finding.status === 'reply') {
-      if (finding.discussionId === undefined) throw new Error('reply finding missing discussionId')
-      response = await fetcher(`${apiBase}/discussions/${encodeURIComponent(finding.discussionId)}/notes`, {
-        method: 'POST', headers, body: JSON.stringify({ body }),
-      })
-    } else {
-      if (finding.path === undefined || finding.line === undefined) throw new Error('new finding missing path or line')
-      config.snapshot ??= loadLatestDiffSnapshot(fetcher, apiBase, headers)
-      const snapshot = await config.snapshot
-      const requestedPath = normalizedDiffPath(finding.path)
-      const change = snapshot.changes.find(candidate => normalizedDiffPath(candidate.new_path) === requestedPath)
-        ?? snapshot.changes.find(candidate => normalizedDiffPath(candidate.old_path) === requestedPath)
-      if (change === undefined) throw new Error(`cannot post inline finding at ${finding.path}:${finding.line}: file is not in the current MR diff`)
-      if (change.collapsed === true || change.too_large === true || change.diff === '') {
-        throw new Error(`cannot post inline finding at ${finding.path}:${finding.line}: GitLab did not return this file's complete diff`)
-      }
-      // A deleted file has no "new" side to attach an inline comment to — post as a
-      // top-level note instead of relying on diffPositionForNewLine() incidentally
-      // returning undefined (true today since a full deletion has no +/context rows,
-      // but that's a byproduct of diff-hunk mechanics, not a designed guard).
-      if (change.deleted_file === true) {
-        response = await fetcher(`${apiBase}/notes`, {
-          method: 'POST', headers,
-          body: JSON.stringify({ body: `**Inline fallback — \`${finding.path}\` was deleted in this MR (no line ${finding.line} to attach a comment to)**\n\n${body}` }),
-        })
-        if (!response.ok) throw new Error(`GitLab API error ${response.status}: ${await response.text()}`)
-        continue
-      }
-      const linePosition = diffPositionForNewLine(change.diff, finding.line)
-      if (linePosition === undefined) {
-        // Line not in diff — fallback to MR note so finding is not silently lost.
-        response = await fetcher(`${apiBase}/notes`, {
-          method: 'POST', headers,
-          body: JSON.stringify({ body: `**Inline fallback — \`${finding.path}:${finding.line}\` line is not in current MR diff**\n\n${body}` }),
-        })
-      } else {
-        response = await fetcher(`${apiBase}/discussions`, {
-          method: 'POST', headers,
-          body: JSON.stringify({ body, position: {
-            position_type: 'text', ...snapshot.diffRefs, old_path: change.old_path, new_path: change.new_path,
-            ...linePosition.oldLine === undefined ? {} : { old_line: linePosition.oldLine },
-            ...linePosition.newLine === undefined ? {} : { new_line: linePosition.newLine },
-          } }),
-        })
-      }
-    }
-    if (!response.ok) throw new Error(`GitLab API error ${response.status}: ${await response.text()}`)
-  }
 }
 
 /**
@@ -941,30 +754,6 @@ export function govardWorktreeOverride(projectId: number, mrIid: number, keySuff
   return `project_name: ${name}\ndomain: ${name}.test\nstack:\n  features:\n    xdebug: false\n`
 }
 
-/**
- * Fetch the MR's diff base SHA for govard diff-scope runs. Best-effort:
- * returns undefined (the reviewer prompt then omits the lint rule) rather
- * than failing the review when GitLab is unreachable.
- */
-export async function fetchMrBaseSha(
-  baseUrl: string,
-  token: string,
-  projectId: number,
-  mrIid: number,
-  fetcher: typeof fetch = fetch,
-): Promise<string | undefined> {
-  try {
-    const response = await fetcher(
-      `${baseUrl}/api/v4/projects/${projectId}/merge_requests/${mrIid}`,
-      { headers: gitlabAuthHeaders(token) },
-    )
-    if (!response.ok) return undefined
-    const mr = await response.json() as { diff_refs?: { base_sha?: string } }
-    return mr.diff_refs?.base_sha
-  } catch {
-    return undefined
-  }
-}
 
 async function pathExists(path: string): Promise<boolean> {
   try {
@@ -1257,8 +1046,8 @@ async function declineUnmappedDeep(
   t0: number,
 ): Promise<ReviewResult> {
   const historyId = `${payload.projectId}-${payload.mrIid}-${Date.now()}`
-  const currentHeadSha = await fetchMrDetailHeadSha(gitlab.baseUrl, gitlab.token, payload.projectId, payload.mrIid)
-    .catch(() => undefined) as string | undefined
+  const forge = gitlabForge(gitlab, payload)
+  const currentHeadSha = await forge.mrHeadSha().catch(() => undefined)
   await recordReviewStart({
     id: historyId,
     projectId: payload.projectId,
@@ -1270,11 +1059,10 @@ async function declineUnmappedDeep(
     startedAt: Date.now(),
     headSha: currentHeadSha,
   })
-  const signals = payload.scope.kind === 'mr'
-    ? createReviewSignals({ baseUrl: gitlab.baseUrl, token: gitlab.token, projectId: payload.projectId, mrIid: payload.mrIid, botUsername: gitlab.botUsername })
-    : undefined
+  const signals = payload.scope.kind === 'mr' ? forge.signals() : undefined
   await signals?.start()
-  const { postComment, replyToDiscussion } = createCommentPoster(gitlab, payload)
+  const postComment = (body: string) => forge.postNote(body)
+  const replyToDiscussion = (discussionId: string, body: string) => forge.replyToDiscussion(discussionId, body)
   try {
     const declined = await declineUnmappedDeepReview(payload, { postComment, replyToDiscussion, writeFailedReport, gitlabBaseUrl: gitlab.baseUrl } as unknown as ReviewCommentDeps)
     if (!declined) {

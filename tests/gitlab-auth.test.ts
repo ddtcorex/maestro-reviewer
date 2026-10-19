@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest'
-import { gitlabAuthHeaders } from '../src/host/gitlab-auth.js'
+import { gitlabAuthHeaders } from '../src/host/forge/gitlab/gitlab-auth.js'
 
 describe('gitlabAuthHeaders', () => {
   afterEach(() => { delete process.env.GITLAB_TOKEN_KIND })

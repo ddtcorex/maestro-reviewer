@@ -1,4 +1,4 @@
-import { gitlabAuthHeaders } from './gitlab-auth.js'
+import { gitlabAuthHeaders } from './forge/gitlab/gitlab-auth.js'
 import { parseReviewMarker, parseReviewMeta, type ReviewMeta } from './review-marker.js'
 
 /**
