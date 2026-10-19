@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { join } from 'node:path'
 import { gitlabAuthHeaders } from './gitlab-auth.js'
 import { fetchBotUserId } from './ci-coexist.js'
@@ -110,11 +111,13 @@ export async function runResolve(env: Record<string, string | undefined>, deps: 
     // 3. Provider route from the project's own scope only.
     const scope = `review/${sourceId}`
     const scoped: ScopedLlm = {}
+    let keySha: string | undefined
     for (const name of SCOPED_LLM_NAMES) {
       const res = await get(resolveToken, `/projects/${reviewerId}/variables/${name}?filter%5Benvironment_scope%5D=${encodeURIComponent(scope)}`)
       if (res.status === 404) continue
       if (!res.ok) throw new ResolveError(`cannot read variable ${name} at scope ${scope} (${res.status}): ${MAINTAINER_HINT}`)
       const value = (await res.json() as { value?: string }).value ?? ''
+      if (name === 'REVIEW_LLM_API_KEY') keySha = createHash('sha256').update(value).digest('hex').slice(0, 16)
       scoped[name] = name === 'REVIEW_LLM_API_KEY' ? 'present' : value
     }
     const route = decideRoute(scoped)
@@ -130,7 +133,7 @@ export async function runResolve(env: Record<string, string | undefined>, deps: 
 
     await write(childPipelineYaml({
       image, sourceProjectId: sourceId, mrIid, gitlabHost: host, route: route.route, deep,
-      ...(route.route === 'project' ? { baseUrl: route.baseUrl, api: route.api } : {}),
+      ...(route.route === 'project' ? { baseUrl: route.baseUrl, api: route.api, model: route.model, keySha } : {}),
     }))
     deps.log(`[review] resolved project ${sourceId} !${mrIid} (upstream pipeline ${upstreamId}), route ${route.route}${deep ? ', deep requested' : ''}`)
     return { exitCode: 0, childPath }

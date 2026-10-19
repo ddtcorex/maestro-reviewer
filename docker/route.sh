@@ -7,10 +7,11 @@
 #                  REVIEW_LLM_API_KEY overlays the bring-your-own
 #                  OpenAI-compatible route (REVIEW_LLM_BASE_URL/MODEL/API).
 #   project        written by the resolve job for a project with its own
-#                  provider: the key and model come from that project's
-#                  review/<id> scope, the base URL and API from the resolve job
-#                  (REVIEW_ROUTE_BASE_URL/API), never from an inherited value;
-#                  the REVIEW_MODEL_PROVIDER/REVIEW_MODEL pin is dropped.
+#                  provider: the key comes from that project's review/<id>
+#                  scope and must match REVIEW_ROUTE_KEY_SHA; the base URL,
+#                  API and model come from the resolve job
+#                  (REVIEW_ROUTE_BASE_URL/API/MODEL), never from an inherited
+#                  value; the REVIEW_MODEL_PROVIDER/REVIEW_MODEL pin is dropped.
 #   unconfigured   the project requires its own key and has none: return 3,
 #                  the caller exits without a review.
 route_fail() {
@@ -30,8 +31,15 @@ select_route() {
       ;;
     project)
       [ -n "${REVIEW_LLM_API_KEY:-}" ] || { route_fail "REVIEW_LLM_API_KEY is required for the project route"; return 1; }
-      [ -n "${REVIEW_LLM_MODEL:-}" ] || { route_fail "REVIEW_LLM_MODEL is required for the project route"; return 1; }
+      [ -n "${REVIEW_ROUTE_MODEL:-}" ] || { route_fail "REVIEW_ROUTE_MODEL is required for the project route"; return 1; }
+      [ -n "${REVIEW_ROUTE_KEY_SHA:-}" ] || { route_fail "REVIEW_ROUTE_KEY_SHA is required for the project route"; return 1; }
       [ -n "${REVIEW_ROUTE_BASE_URL:-}" ] || { route_fail "REVIEW_ROUTE_BASE_URL is required for the project route"; return 1; }
+      # The key must be the one resolve saw: if the project's scoped key was
+      # deleted since (or this is a late retry), GitLab now supplies the
+      # default key, which must never reach the project's endpoint.
+      key_sha=$(printf '%s' "$REVIEW_LLM_API_KEY" | sha256sum | cut -c1-16)
+      [ "$key_sha" = "$REVIEW_ROUTE_KEY_SHA" ] || { route_fail "the project key changed since resolve; rerun the whole reviewer pipeline"; return 1; }
+      REVIEW_LLM_MODEL="$REVIEW_ROUTE_MODEL"
       REVIEW_LLM_BASE_URL="$REVIEW_ROUTE_BASE_URL"
       REVIEW_LLM_API="${REVIEW_ROUTE_API:-openai-completions}"
       # A default-scope model pin must not choose the model a project pays for.

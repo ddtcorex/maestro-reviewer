@@ -22,7 +22,7 @@ describe('decideRoute', () => {
   })
   it('builds a project route from a preset', () => {
     expect(decideRoute({ ...key, REVIEW_LLM_MODEL: 'claude-x', REVIEW_LLM_PROVIDER: 'anthropic' }))
-      .toEqual({ route: 'project', baseUrl: 'https://api.anthropic.com/v1', api: 'openai-completions' })
+      .toEqual({ route: 'project', baseUrl: 'https://api.anthropic.com/v1', api: 'openai-completions', model: 'claude-x' })
   })
   it('ships exactly the spec presets', () => {
     expect(PROVIDER_PRESETS).toEqual({
@@ -35,12 +35,12 @@ describe('decideRoute', () => {
   })
   it('lets a scoped base URL win over the preset and keeps a valid API choice', () => {
     expect(decideRoute({ ...key, REVIEW_LLM_MODEL: 'm', REVIEW_LLM_PROVIDER: 'openai', REVIEW_LLM_BASE_URL: 'https://gw.example.com/v1', REVIEW_LLM_API: 'openai-responses' }))
-      .toEqual({ route: 'project', baseUrl: 'https://gw.example.com/v1', api: 'openai-responses' })
+      .toEqual({ route: 'project', baseUrl: 'https://gw.example.com/v1', api: 'openai-responses', model: 'm' })
   })
   it('needs a base URL for custom', () => {
     expect(decideRoute({ ...key, REVIEW_LLM_MODEL: 'm', REVIEW_LLM_PROVIDER: 'custom' })).toEqual({ route: 'invalid', missing: ['REVIEW_LLM_BASE_URL'] })
     expect(decideRoute({ ...key, REVIEW_LLM_MODEL: 'm', REVIEW_LLM_PROVIDER: 'custom', REVIEW_LLM_BASE_URL: 'https://x.example.com/v1' }))
-      .toEqual({ route: 'project', baseUrl: 'https://x.example.com/v1', api: 'openai-completions' })
+      .toEqual({ route: 'project', baseUrl: 'https://x.example.com/v1', api: 'openai-completions', model: 'm' })
   })
   it('names what a key-only route is missing, never falling back to the default', () => {
     expect(decideRoute({ ...key })).toEqual({ route: 'invalid', missing: ['REVIEW_LLM_MODEL', 'REVIEW_LLM_PROVIDER or REVIEW_LLM_BASE_URL'] })
@@ -48,6 +48,12 @@ describe('decideRoute', () => {
   it('rejects LLM settings scoped without a key', () => {
     expect(decideRoute({ REVIEW_LLM_MODEL: 'm' })).toEqual({ route: 'invalid', missing: ['REVIEW_LLM_API_KEY'] })
   })
+  it('rejects a base URL or model GitLab would expand or the settings file could not hold', () => {
+    expect(decideRoute({ ...key, REVIEW_LLM_MODEL: 'm', REVIEW_LLM_BASE_URL: 'https://x.example.com/$MAESTRO_GITLAB_TOKEN' })).toEqual({ route: 'invalid', missing: ['REVIEW_LLM_BASE_URL (unsafe value)'] })
+    expect(decideRoute({ ...key, REVIEW_LLM_MODEL: 'm', REVIEW_LLM_BASE_URL: 'ftp://x.example.com' })).toEqual({ route: 'invalid', missing: ['REVIEW_LLM_BASE_URL (unsafe value)'] })
+    expect(decideRoute({ ...key, REVIEW_LLM_MODEL: 'gpt $X', REVIEW_LLM_PROVIDER: 'openai' })).toEqual({ route: 'invalid', missing: ['REVIEW_LLM_MODEL (unsafe value)'] })
+  })
+
   it('is unconfigured when the project requires its own key and has none', () => {
     expect(decideRoute({ REVIEW_REQUIRE_PROJECT_KEY: '1' })).toEqual({ route: 'unconfigured' })
   })
@@ -73,8 +79,8 @@ describe('childPipelineYaml', () => {
   })
 
   it('carries the project route values and the deep request', () => {
-    const j = job(childPipelineYaml({ ...base, route: 'project', baseUrl: 'https://api.openai.com/v1', api: 'openai-completions', deep: true }))
-    expect(j.variables).toMatchObject({ REVIEW_ROUTE: 'project', REVIEW_ROUTE_BASE_URL: 'https://api.openai.com/v1', REVIEW_ROUTE_API: 'openai-completions', REVIEW_MODE: 'deep', REVIEW_DEEP_REQUESTED: '1' })
+    const j = job(childPipelineYaml({ ...base, route: 'project', baseUrl: 'https://api.openai.com/v1', api: 'openai-completions', model: 'gpt-x', keySha: '0123456789abcdef', deep: true }))
+    expect(j.variables).toMatchObject({ REVIEW_ROUTE: 'project', REVIEW_ROUTE_BASE_URL: 'https://api.openai.com/v1', REVIEW_ROUTE_API: 'openai-completions', REVIEW_ROUTE_MODEL: 'gpt-x', REVIEW_ROUTE_KEY_SHA: '0123456789abcdef', REVIEW_MODE: 'deep', REVIEW_DEEP_REQUESTED: '1' })
   })
 
   it('keeps reports as artifacts', () => {

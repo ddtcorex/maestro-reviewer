@@ -151,7 +151,9 @@ describe('runResolve', () => {
 
   it('routes to the project provider when the scope is complete', async () => {
     const r = await run({ scoped: { REVIEW_LLM_API_KEY: 'sk-client-SECRET', REVIEW_LLM_MODEL: 'gpt-x', REVIEW_LLM_PROVIDER: 'openai' } })
-    expect(r.child?.review.variables).toMatchObject({ REVIEW_ROUTE: 'project', REVIEW_ROUTE_BASE_URL: 'https://api.openai.com/v1', REVIEW_ROUTE_API: 'openai-completions' })
+    expect(r.child?.review.variables).toMatchObject({ REVIEW_ROUTE: 'project', REVIEW_ROUTE_BASE_URL: 'https://api.openai.com/v1', REVIEW_ROUTE_API: 'openai-completions', REVIEW_ROUTE_MODEL: 'gpt-x' })
+    const { createHash } = await import('node:crypto')
+    expect(r.child?.review.variables.REVIEW_ROUTE_KEY_SHA).toBe(createHash('sha256').update('sk-client-SECRET').digest('hex').slice(0, 16))
   })
 
   it('fails closed on an incomplete project scope, naming the missing variables', async () => {

@@ -23,10 +23,15 @@ export type ScopedLlm = Partial<Record<
   string
 >>
 
+// Values pinned into the child pipeline: GitLab expands `$` in job variables,
+// and route.sh writes them into the settings file, so only plain characters.
+const BASE_URL_RE = /^https?:\/\/[A-Za-z0-9.:/_+-]+$/
+const MODEL_RE = /^[A-Za-z0-9/_+.-]+$/
+
 export const SCOPED_LLM_NAMES = ['REVIEW_LLM_API_KEY', 'REVIEW_LLM_MODEL', 'REVIEW_LLM_PROVIDER', 'REVIEW_LLM_BASE_URL', 'REVIEW_LLM_API', 'REVIEW_REQUIRE_PROJECT_KEY'] as const
 
 export type Route =
-  | { route: 'project'; baseUrl: string; api: ReviewLlmApi }
+  | { route: 'project'; baseUrl: string; api: ReviewLlmApi; model: string }
   | { route: 'default' }
   | { route: 'unconfigured' }
   | { route: 'invalid'; missing: string[] }
@@ -56,9 +61,11 @@ export function decideRoute(scoped: ScopedLlm): Route {
   if (provider === 'custom' && scoped.REVIEW_LLM_BASE_URL === undefined) missing.push('REVIEW_LLM_BASE_URL')
   if (provider !== undefined && provider !== 'custom' && !(provider in PROVIDER_PRESETS)) missing.push(`REVIEW_LLM_PROVIDER (unknown: ${provider})`)
   if (scoped.REVIEW_LLM_API !== undefined && !APIS.includes(scoped.REVIEW_LLM_API)) missing.push(`REVIEW_LLM_API (unknown: ${scoped.REVIEW_LLM_API})`)
+  if (scoped.REVIEW_LLM_BASE_URL !== undefined && !BASE_URL_RE.test(scoped.REVIEW_LLM_BASE_URL)) missing.push('REVIEW_LLM_BASE_URL (unsafe value)')
+  if (scoped.REVIEW_LLM_MODEL !== undefined && !MODEL_RE.test(scoped.REVIEW_LLM_MODEL)) missing.push('REVIEW_LLM_MODEL (unsafe value)')
   if (missing.length > 0) return { route: 'invalid', missing }
   const baseUrl = scoped.REVIEW_LLM_BASE_URL ?? PROVIDER_PRESETS[provider as keyof typeof PROVIDER_PRESETS]
-  return { route: 'project', baseUrl, api: (scoped.REVIEW_LLM_API ?? 'openai-completions') as ReviewLlmApi }
+  return { route: 'project', baseUrl, api: (scoped.REVIEW_LLM_API ?? 'openai-completions') as ReviewLlmApi, model: scoped.REVIEW_LLM_MODEL as string }
 }
 
 export interface ChildOptions {
@@ -69,6 +76,9 @@ export interface ChildOptions {
   route: 'project' | 'default' | 'unconfigured'
   baseUrl?: string
   api?: string
+  /** Project route: the model, and a sha256 prefix of the key resolve saw (route.sh refuses any other key). */
+  model?: string
+  keySha?: string
   deep: boolean
 }
 
@@ -83,6 +93,8 @@ export function childPipelineYaml(o: ChildOptions): string {
   if (o.route === 'project') {
     variables.REVIEW_ROUTE_BASE_URL = o.baseUrl ?? ''
     variables.REVIEW_ROUTE_API = o.api ?? 'openai-completions'
+    variables.REVIEW_ROUTE_MODEL = o.model ?? ''
+    variables.REVIEW_ROUTE_KEY_SHA = o.keySha ?? ''
   }
   if (o.deep) {
     variables.REVIEW_MODE = 'deep'
