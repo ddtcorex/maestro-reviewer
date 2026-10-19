@@ -19,6 +19,9 @@ interface World {
   projectVars?: string[]
   protection?: Record<string, unknown> | null
   notes?: Array<{ author: { id: number }; body: string }>
+  notesPages?: Array<Array<{ author: { id: number }; body: string }>>
+  noteStatus?: number
+  scopedVars?: Array<{ key: string; scope: string }>
 }
 
 function gitlab(w: World) {
@@ -45,7 +48,10 @@ function gitlab(w: World) {
       if (w.protection === null) return json(404, { message: '404 Not found' })
       return json(200, w.protection ?? { name: 'main', allow_force_push: false, push_access_levels: [{ access_level: 40 }], merge_access_levels: [{ access_level: 40 }] })
     }
-    if (p === `/projects/${REVIEWER}/variables`) return tok === RESOLVE ? json(200, (w.projectVars ?? []).map(key => ({ key, environment_scope: '*' }))) : json(403, {})
+    if (p === `/projects/${REVIEWER}/variables`) {
+      if (tok !== RESOLVE) return json(403, {})
+      return json(200, [...(w.projectVars ?? []).map(key => ({ key, environment_scope: '*' })), ...(w.scopedVars ?? []).map(v => ({ key: v.key, environment_scope: v.scope }))])
+    }
     const v = /^\/projects\/900\/variables\/([A-Z_]+)$/.exec(p)
     if (v) {
       if (tok !== RESOLVE) return json(403, {})
@@ -58,7 +64,13 @@ function gitlab(w: World) {
     if (p === `/projects/${SOURCE}/merge_requests/${MR}`) return json(200, { iid: MR, labels: w.labels ?? [] })
     if (p === '/user') return json(200, { id: 5 })
     if (p === `/projects/${SOURCE}/merge_requests/${MR}/notes`) {
-      if ((init.method ?? 'GET') === 'POST') { posted.push({ url, body: JSON.parse(String(init.body)) }); return json(201, {}) }
+      if ((init.method ?? 'GET') === 'POST') { posted.push({ url, body: JSON.parse(String(init.body)) }); return json(w.noteStatus ?? 201, {}) }
+      if (w.notesPages) {
+        const page = Number(u.searchParams.get('page') ?? '1')
+        const res = json(200, w.notesPages[page - 1] ?? [])
+        if (page < w.notesPages.length) res.headers.set('x-next-page', String(page + 1))
+        return res
+      }
       return json(200, w.notes ?? [])
     }
     return json(404, { message: `unexpected ${p}` })
@@ -219,5 +231,41 @@ describe('runResolve', () => {
     expect(Object.keys(first.child ?? {})).toEqual(['skip'])
     const again = await run({ scoped: { REVIEW_REQUIRE_PROJECT_KEY: '1' }, notes: [{ author: { id: 5 }, body: `x ${UNCONFIGURED_MARKER}` }] })
     expect(again.posted).toHaveLength(0)
+  })
+
+  it('refuses a provider or mode variable at a wildcard scope other than *, which would reach every matching project', async () => {
+    for (const [key, scope] of [['REVIEW_LLM_API_KEY', 'review/*'], ['REVIEW_MODE', 'review/1*'], ['REVIEW_REQUIRE_PROJECT_KEY', '*/42'], ['REVIEW_ON_PUSH', 'review/*'], ['REVIEW_PROFILE', 'review/*']]) {
+      const r = await run({ scopedVars: [{ key, scope }] })
+      expect(r.exitCode).toBe(1)
+      expect(r.logs.join('\n')).toContain(key)
+      expect(r.logs.join('\n')).toContain(scope)
+      expect(r.child).toBeUndefined()
+    }
+  })
+
+  it('accepts those variables at exactly * or at an exact review scope, and ignores wildcards on unrelated names', async () => {
+    const r = await run({ scopedVars: [{ key: 'REVIEW_MODE', scope: '*' }, { key: 'REVIEW_LLM_MODEL', scope: 'review/7' }, { key: 'TELEGRAM_CHAT_ID', scope: 'review/*' }] })
+    expect(r.exitCode).toBe(0)
+  })
+
+  it('still writes the no-op child when posting the unconfigured note fails, and says so', async () => {
+    const r = await run({ scoped: { REVIEW_REQUIRE_PROJECT_KEY: '1' }, noteStatus: 500 })
+    expect(r.exitCode).toBe(0)
+    expect(Object.keys(r.child ?? {})).toEqual(['skip'])
+    expect(r.logs.join('\n')).toMatch(/could not post the unconfigured note \(500\)/)
+  })
+
+  it('finds an earlier unconfigured note beyond the first page of notes', async () => {
+    const other = Array.from({ length: 100 }, (_, i) => ({ author: { id: 8 }, body: `comment ${i}` }))
+    const r = await run({ scoped: { REVIEW_REQUIRE_PROJECT_KEY: '1' }, notesPages: [other, [{ author: { id: 5 }, body: `x ${UNCONFIGURED_MARKER}` }]] })
+    expect(r.posted).toHaveLength(0)
+  })
+
+  it('honours REVIEW_REQUIRE_PROJECT_KEY set for every project (scope *), unless a project scope says otherwise', async () => {
+    const all = await run({}, env({ REVIEW_REQUIRE_PROJECT_KEY: '1' }))
+    expect(Object.keys(all.child ?? {})).toEqual(['skip'])
+    expect(all.posted).toHaveLength(1)
+    const optedOut = await run({ scoped: { REVIEW_REQUIRE_PROJECT_KEY: '0' } }, env({ REVIEW_REQUIRE_PROJECT_KEY: '1' }))
+    expect(optedOut.child?.review.variables).toMatchObject({ REVIEW_ROUTE: 'default' })
   })
 })

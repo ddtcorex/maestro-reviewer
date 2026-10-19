@@ -20,6 +20,12 @@
   model holds characters GitLab would expand. The review job refuses a key
   other than the one `resolve` saw, so a deleted project key never lets the
   default key reach that project's endpoint.
+- `resolve` refuses provider, mode and require variables scoped with a
+  wildcard other than `*` (for example `review/*`), which would reach every
+  matching project. `REVIEW_REQUIRE_PROJECT_KEY` set at `*` now applies to
+  every project, a project's scoped `0` opting out; an unconfigured route
+  never reviews even with a job-mounted settings file. The unconfigured note
+  is found on any notes page, and a failed post is logged.
 - **Only the bot's own signals skip a CI review.** A completed marker pasted
   by someone else, or a human's eyes reaction, no longer suppresses it.
 

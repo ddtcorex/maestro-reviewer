@@ -99,6 +99,13 @@ describe('select_route', () => {
     expect(r.out).toBe(mounted)
   })
 
+  it('unconfigured returns 3 even with a job-mounted settings file', () => {
+    const mounted = 'providers: mine\n'
+    const r = route({ REVIEW_ROUTE: 'unconfigured' }, mounted)
+    expect(r.code).toBe(3)
+    expect(r.out).toBe(mounted)
+  })
+
   it('the entrypoint sources route.sh and exits 0 on an unconfigured route', () => {
     const sh = readFileSync('docker/entrypoint.sh', 'utf-8')
     expect(sh).toMatch(/\. \/route\.sh/)

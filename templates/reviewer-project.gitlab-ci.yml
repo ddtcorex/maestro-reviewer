@@ -80,7 +80,9 @@ review:
 # REVIEW_LLM_BASE_URL at the same scope, else resolve fails naming what is
 # missing. A preset fills the base URL; custom needs REVIEW_LLM_BASE_URL.
 # - REVIEW_REQUIRE_PROJECT_KEY: "1" never falls back to the default key; with
-#   no scoped key the MR gets one note and no review.
+#   no scoped key the MR gets one note and no review. Set at * it applies to
+#   every project; a scoped "0" opts one project out.
+# Wildcard scopes (review/*) are refused for all of these: use exact scopes.
 # - REVIEW_MODE: quick (default) | deep
 # - REVIEW_PROFILE: magento2 | laravel | symfony | wordpress | generic
 # - REVIEW_ON_PUSH: "1" re-reviews new pushes (default: first review only)

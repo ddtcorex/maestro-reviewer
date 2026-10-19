@@ -23,6 +23,13 @@ const CHILD_FILE = 'review-child.yml'
  * name (at any scope) would silently replace them.
  */
 export const PINNED_CHILD_NAMES = ['SOURCE_PROJECT_ID', 'MR_IID', 'GITLAB_HOST', 'REVIEW_ROUTE', 'REVIEW_ROUTE_BASE_URL', 'REVIEW_ROUTE_API', 'REVIEW_ROUTE_MODEL', 'REVIEW_ROUTE_KEY_SHA', 'REVIEW_DEEP_REQUESTED'] as const
+/**
+ * Variables whose value must belong to one project or to all of them. A
+ * wildcard scope such as `review/*` matches every review/<id> environment, so
+ * one project's key or mode would silently reach all the others.
+ */
+const PER_PROJECT_NAMES: readonly string[] = [...SCOPED_LLM_NAMES, 'REVIEW_MODE', 'REVIEW_PROFILE', 'REVIEW_ON_PUSH']
+const NOTE_PAGES = 20
 const MAINTAINER_HINT = 'REVIEW_RESOLVE_TOKEN must be a Maintainer token (read_api) on the reviewer project, stored masked with environment scope "resolve"'
 
 export interface ResolveDeps {
@@ -84,17 +91,24 @@ export async function runResolve(env: Record<string, string | undefined>, deps: 
     }
 
     const shadowing = new Set<string>()
+    const wildcards = new Set<string>()
     let page = '1'
     for (let n = 0; page && n < 20; n++) {
       const res = await get(resolveToken, `/projects/${reviewerId}/variables?per_page=100&page=${page}`)
       if (!res.ok) throw new ResolveError(`cannot list the reviewer project's variables (${res.status}): ${MAINTAINER_HINT}`)
-      for (const v of await res.json() as Array<{ key?: string }>) {
-        if (v.key !== undefined && (PINNED_CHILD_NAMES as readonly string[]).includes(v.key)) shadowing.add(v.key)
+      for (const v of await res.json() as Array<{ key?: string; environment_scope?: string }>) {
+        if (v.key === undefined) continue
+        if ((PINNED_CHILD_NAMES as readonly string[]).includes(v.key)) shadowing.add(v.key)
+        const scope = v.environment_scope ?? '*'
+        if (PER_PROJECT_NAMES.includes(v.key) && scope !== '*' && scope.includes('*')) wildcards.add(`${v.key} (scope ${scope})`)
       }
       page = res.headers.get('x-next-page') ?? ''
     }
     if (shadowing.size > 0) {
       throw new ResolveError(`project variable(s) ${[...shadowing].join(', ')} would override what the child pipeline pins; delete them from the reviewer project`)
+    }
+    if (wildcards.size > 0) {
+      throw new ResolveError(`variable(s) ${[...wildcards].join(', ')} use a wildcard environment scope, which reaches every matching project; scope them to exactly * or to one review/<source project id>`)
     }
 
     // 2. Who triggered this pipeline, asked of GitLab rather than of variables.
@@ -145,6 +159,9 @@ export async function runResolve(env: Record<string, string | undefined>, deps: 
       if (name === 'REVIEW_LLM_API_KEY') keySha = createHash('sha256').update(value).digest('hex').slice(0, 16)
       scoped[name] = name === 'REVIEW_LLM_API_KEY' ? 'present' : value
     }
+    // A default for every project lives at scope *, which the resolve
+    // environment receives too; a project scope still overrides it.
+    if (scoped.REVIEW_REQUIRE_PROJECT_KEY === undefined && env.REVIEW_REQUIRE_PROJECT_KEY) scoped.REVIEW_REQUIRE_PROJECT_KEY = env.REVIEW_REQUIRE_PROJECT_KEY
     const route = decideRoute(scoped)
     if (route.route === 'invalid') {
       throw new ResolveError(`incomplete provider settings for project ${sourceId} at scope ${scope}: missing ${route.missing.join(', ')}`)
@@ -172,9 +189,15 @@ async function postUnconfiguredOnce(deps: ResolveDeps, api: string, botToken: st
   const base = api.replace(/\/api\/v4$/, '')
   const botId = await fetchBotUserId(deps.fetcher, base, botToken)
   const notesUrl = `${api}/projects/${sourceId}/merge_requests/${mrIid}/notes`
-  const res = await deps.fetcher(`${notesUrl}?per_page=100&sort=desc&order_by=created_at`, { headers: gitlabAuthHeaders(botToken) })
-  const notes = res.ok ? await res.json() as Array<{ author?: { id?: number }; body?: string }> : []
-  if (notes.some(n => n.author?.id === botId && n.body?.includes(UNCONFIGURED_MARKER))) return
+  let page = '1'
+  for (let n = 0; page && n < NOTE_PAGES; n++) {
+    const res = await deps.fetcher(`${notesUrl}?per_page=100&sort=desc&order_by=created_at&page=${page}`, { headers: gitlabAuthHeaders(botToken) })
+    if (!res.ok) break
+    const notes = await res.json() as Array<{ author?: { id?: number }; body?: string }>
+    if (notes.some(n => n.author?.id === botId && n.body?.includes(UNCONFIGURED_MARKER))) return
+    page = res.headers.get('x-next-page') ?? ''
+  }
   const body = `AI review is not configured for this project: it requires its own provider key, and none is set. Ask a maintainer of the reviewer project to add one.\n\n${UNCONFIGURED_MARKER}`
-  await deps.fetcher(notesUrl, { method: 'POST', headers: { ...gitlabAuthHeaders(botToken), 'content-type': 'application/json' }, body: JSON.stringify({ body }) })
+  const posted = await deps.fetcher(notesUrl, { method: 'POST', headers: { ...gitlabAuthHeaders(botToken), 'content-type': 'application/json' }, body: JSON.stringify({ body }) })
+  if (!posted.ok) deps.log(`[review] warning: could not post the unconfigured note (${posted.status}); MAESTRO_GITLAB_TOKEN needs Developer on the source project`)
 }

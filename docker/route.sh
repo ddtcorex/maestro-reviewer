@@ -22,13 +22,15 @@ route_fail() {
 select_route() {
   settings="$1"
   generic="$2"
+  # Not reviewing is decided before anything else: a job-mounted settings
+  # file must not turn an unconfigured project into a review on another key.
+  if [ "${REVIEW_ROUTE:-}" = unconfigured ]; then
+    echo "[review] this project requires its own provider key and has none; not reviewing"
+    return 3
+  fi
   grep -q __CI_MANAGED__ "$settings" 2>/dev/null || return 0
   case "${REVIEW_ROUTE:-}" in
     ''|default) ;;
-    unconfigured)
-      echo "[review] this project requires its own provider key and has none; not reviewing"
-      return 3
-      ;;
     project)
       [ -n "${REVIEW_LLM_API_KEY:-}" ] || { route_fail "REVIEW_LLM_API_KEY is required for the project route"; return 1; }
       [ -n "${REVIEW_ROUTE_MODEL:-}" ] || { route_fail "REVIEW_ROUTE_MODEL is required for the project route"; return 1; }

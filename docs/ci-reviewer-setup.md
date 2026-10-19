@@ -92,6 +92,13 @@ project outside the list gets a no-op child pipeline and no note.
 variables, including other clients' keys. Its `resolve` scope is what keeps it
 out of the review job, where an LLM agent reads untrusted MR content: GitLab
 only injects a variable into jobs whose environment matches its scope.
+**Confidentiality.** Every member who can trigger this project (Developer
+and above) can also read every review job log and every review artifact
+(`review-report.json`, `review-report.md`, kept one week) of every source
+project, other clients included. Keep its membership to people trusted with
+the code of every reviewed project; source projects with outside
+contributors get a reviewer project of their own.
+
 `CI_JOB_TOKEN` cannot replace `MAESTRO_GITLAB_TOKEN`: proven on GitLab 18.11,
 reads work (`GET` = 200) but posting the review comment fails
 (`POST /notes` = 401) even when the source project allowlists the reviewer.
@@ -146,7 +153,7 @@ project only; scope `*` holds the defaults. A scoped value wins over `*`.
 | `REVIEW_LLM_MODEL` | model id, required with a key |
 | `REVIEW_LLM_BASE_URL` | required for `custom`, an override of the preset otherwise |
 | `REVIEW_LLM_API` | `openai-completions` (default) or `openai-responses` |
-| `REVIEW_REQUIRE_PROJECT_KEY` | `1`: never fall back to the default key |
+| `REVIEW_REQUIRE_PROJECT_KEY` | `1`: never fall back to the default key; set at `*` it applies to every project, and a project's scoped `0` opts that project out |
 | `REVIEW_MODE` | `quick` (default) or `deep` |
 | `REVIEW_PROFILE` | `magento2`, `laravel`, `symfony`, `wordpress`, `generic` |
 | `REVIEW_ON_PUSH` | `1`: re-review new pushes (default: first review only) |
@@ -176,11 +183,13 @@ model with characters GitLab would expand (only `http(s)://` plus
 review job refuses any other key, so a key deleted or changed in between can
 never let the default key reach the project's endpoint. On a project route
 the default-scope `REVIEW_MODEL_PROVIDER`/`REVIEW_MODEL` pin is ignored.
-Wildcard scopes such as `review/*` are not supported: use exact
-`review/<id>` scopes.
+Wildcard scopes such as `review/*` are not supported: one would hand a
+project's key or mode to every matching project, so `resolve` refuses to run
+while any variable of the table above has a scope containing `*` other than
+exactly `*`. Use exact `review/<id>` scopes.
 
-**Require switch.** With `REVIEW_REQUIRE_PROJECT_KEY=1` at the project's
-scope and no scoped key, the MR gets one note ("AI review is not configured
+**Require switch.** With `REVIEW_REQUIRE_PROJECT_KEY=1` (at the project's
+scope, or at `*` for every project) and no scoped key, the MR gets one note ("AI review is not configured
 for this project", marked `<!-- maestro-review-unconfigured -->`, posted once)
 and no model is called. Use it for a client who pays for their own reviews,
 so a missing key never silently bills the default key.
