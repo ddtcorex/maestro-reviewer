@@ -9,7 +9,7 @@ describe('parseCiEnvConfig', () => {
     })
     expect(cfg).toEqual({
       gitlabBaseUrl: 'https://gitlab.example.com', gitlabToken: 'glpat-xxx',
-      sourceProjectId: 123, mrIid: 456, mode: 'quick', dryRun: false, rereviewOnPush: false,
+      sourceProjectId: 123, mrIid: 456, mode: 'quick', dryRun: false, rereviewOnPush: false, deepRequested: false,
     })
   })
 

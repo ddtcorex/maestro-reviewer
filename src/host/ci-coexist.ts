@@ -97,3 +97,54 @@ export async function latestCompletedReview(
   }
   return undefined
 }
+
+/**
+ * Whether the bot already posted a deep review for this head SHA (metadata
+ * mode deep, or a pre-metadata `flow=ci-deep` marker). Read failures answer
+ * false: a missing signal never blocks a requested review.
+ */
+export async function hasCompletedDeepReview(
+  fetcher: typeof fetch,
+  opts: { baseUrl: string; token: string; projectId: number; mrIid: number; botUserId: number; sha: string },
+): Promise<boolean> {
+  const headers = gitlabAuthHeaders(opts.token)
+  const sha = opts.sha.toLowerCase()
+  try {
+    let page = '1'
+    for (let n = 0; page && n < MAX_NOTE_PAGES; n++) {
+      const res = await fetcher(
+        `${opts.baseUrl}/api/v4/projects/${opts.projectId}/merge_requests/${opts.mrIid}/notes?sort=desc&order_by=created_at&per_page=100&page=${page}`,
+        { headers },
+      )
+      if (!res.ok) return false
+      const notes = await res.json() as Array<{ system?: boolean; author?: { id?: number }; body?: string }>
+      for (const note of notes) {
+        if (note.system === true || note.author?.id !== opts.botUserId || typeof note.body !== 'string') continue
+        const meta = parseReviewMeta(note.body)
+        if (meta !== undefined) {
+          if (meta.mode === 'deep' && meta.headSha.toLowerCase() === sha) return true
+          continue
+        }
+        const marker = parseReviewMarker(note.body)
+        if (marker?.status === 'completed' && marker.flow === 'ci-deep' && marker.sha.toLowerCase() === sha) return true
+      }
+      page = res.headers.get('x-next-page') ?? ''
+    }
+  } catch {
+    return false
+  }
+  return false
+}
+
+/** Removes the deep-review label from the MR (the request was met). */
+export async function removeDeepLabel(
+  fetcher: typeof fetch,
+  opts: { baseUrl: string; token: string; projectId: number; mrIid: number },
+): Promise<void> {
+  const res = await fetcher(`${opts.baseUrl}/api/v4/projects/${opts.projectId}/merge_requests/${opts.mrIid}`, {
+    method: 'PUT',
+    headers: { ...gitlabAuthHeaders(opts.token), 'content-type': 'application/json' },
+    body: JSON.stringify({ remove_labels: 'maestro-review::deep' }),
+  })
+  if (!res.ok) throw new Error(`GitLab ${res.status} removing the deep label`)
+}

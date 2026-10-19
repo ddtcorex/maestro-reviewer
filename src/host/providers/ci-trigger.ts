@@ -5,7 +5,7 @@ import type { ReviewRequest, ReviewResult } from '../events.js'
 import { lastCompletedReview } from '../review-history.js'
 import type { ReviewSkillProfile } from '../skills-tool.js'
 import { gitlabAuthHeaders } from '../gitlab-auth.js'
-import { fetchBotUserId, hasCompletedReviewForSha, hasRunningEyes, latestCompletedReview } from '../ci-coexist.js'
+import { fetchBotUserId, hasCompletedDeepReview, hasCompletedReviewForSha, hasRunningEyes, latestCompletedReview, removeDeepLabel } from '../ci-coexist.js'
 
 export const name = 'maestro-review-ci-trigger'
 export const inject = ['reviewRunner'] as const
@@ -22,6 +22,8 @@ export interface CiEnvConfig {
   reviewProfile?: ReviewSkillProfile
   /** Mirror of Settings UI autoRereviewOnPush (default off): re-review new pushes. */
   rereviewOnPush: boolean
+  /** The MR carries the deep label (written by the resolve job): one deep review per head SHA. */
+  deepRequested: boolean
 }
 
 export const CiEnvConfig: z<CiEnvConfig> = z.object({
@@ -33,6 +35,7 @@ export const CiEnvConfig: z<CiEnvConfig> = z.object({
   dryRun: z.boolean().default(false),
   reviewProfile: z.union([z.const('magento2'), z.const('laravel'), z.const('symfony'), z.const('wordpress'), z.const('generic')]),
   rereviewOnPush: z.boolean().default(false),
+  deepRequested: z.boolean().default(false),
 })
 
 /**
@@ -56,6 +59,7 @@ export function parseCiEnvConfig(env: Record<string, string | undefined>): CiEnv
     dryRun: env.REVIEW_DRY_RUN === '1',
     reviewProfile: env.REVIEW_PROFILE as ReviewSkillProfile | undefined,
     rereviewOnPush: env.REVIEW_ON_PUSH === '1',
+    deepRequested: env.REVIEW_DEEP_REQUESTED === '1',
   })
 }
 
@@ -106,39 +110,54 @@ export async function runCiTrigger(
     console.error(`[review] review state unreadable from GitLab (${err instanceof Error ? err.message : String(err)}), falling back to the runner cache`)
     prior = await history.lastCompletedReview(config.sourceProjectId, config.mrIid)
   }
+  // The reviewer-ci profile's own projectMappings is always [], so the
+  // orchestrator's mapping lookup on projectPath never matches regardless
+  // of its exact value — but the real path feeds the comment header and
+  // View-MR link, so prefer it over the synthetic project/<id> fallback.
+  const runReview = () => ctx.reviewRunner({
+    projectPath,
+    projectId: config.sourceProjectId,
+    mrIid: config.mrIid,
+    sourceBranch,
+    headSha,
+    ...(prior?.headSha !== undefined ? { priorHeadSha: prior.headSha } : {}),
+    trigger: 'mention',
+    mode: config.mode,
+    scope: { kind: 'mr' },
+    reviewProfile: config.reviewProfile,
+  } satisfies ReviewRequest)
+  const coFetcher = deps.fetcher ?? fetch
   let result: ReviewResult
-  if (prior?.headSha === headSha) {
-    result = { ok: true, summary: `already reviewed at ${headSha}, skipping`, failures: [], durationMs: 0 }
-  } else if (prior !== undefined && !config.rereviewOnPush) {
-    result = { ok: true, summary: `new commits since ${prior.headSha} but REVIEW_ON_PUSH is not set, skipping`, failures: [], durationMs: 0 }
-  } else {
-    // Coexistence (CI yields to webhook): the CI history store is invisible to
-    // the webhook flow and vice versa, so check the MR itself for a completed
-    // review marker of this SHA or an in-flight eyes marker before booting.
-    const coFetcher = deps.fetcher ?? fetch
-    if (await hasCompletedReviewForSha(coFetcher, config.gitlabBaseUrl, config.gitlabToken, config.sourceProjectId, config.mrIid, headSha, botUserId)) {
-      result = { ok: true, summary: `webhook already reviewed ${headSha} — skipping`, failures: [], durationMs: 0 }
+  if (config.deepRequested) {
+    // A deep label is an explicit request: it bypasses the quick push-gate and
+    // runs once per head SHA. The label is removed once the request is met.
+    let met = false
+    if (botUserId !== undefined && await hasCompletedDeepReview(coFetcher, { baseUrl: config.gitlabBaseUrl, token: config.gitlabToken, projectId: config.sourceProjectId, mrIid: config.mrIid, botUserId, sha: headSha })) {
+      result = { ok: true, summary: `deep review already completed at ${headSha}, skipping`, failures: [], durationMs: 0 }
+      met = true
     } else if (await hasRunningEyes(coFetcher, config.gitlabBaseUrl, config.gitlabToken, config.sourceProjectId, config.mrIid, botUserId)) {
       result = { ok: true, summary: 'another review is running — skipping', failures: [], durationMs: 0 }
     } else {
-    // The reviewer-ci profile's own projectMappings is always [], so the
-    // orchestrator's mapping lookup on projectPath never matches regardless
-    // of its exact value — but the real path feeds the comment header and
-    // View-MR link, so prefer it over the synthetic project/<id> fallback.
-    const request: ReviewRequest = {
-      projectPath,
-      projectId: config.sourceProjectId,
-      mrIid: config.mrIid,
-      sourceBranch,
-      headSha,
-      ...(prior?.headSha !== undefined ? { priorHeadSha: prior.headSha } : {}),
-      trigger: 'mention',
-      mode: config.mode,
-      scope: { kind: 'mr' },
-      reviewProfile: config.reviewProfile,
+      result = await runReview()
+      met = result.ok
     }
-    result = await ctx.reviewRunner(request)
+    if (met) {
+      await removeDeepLabel(coFetcher, { baseUrl: config.gitlabBaseUrl, token: config.gitlabToken, projectId: config.sourceProjectId, mrIid: config.mrIid })
+        .catch((err: unknown) => console.warn(`[review] could not remove the deep label: ${err instanceof Error ? err.message : String(err)}`))
     }
+  } else if (prior?.headSha === headSha) {
+    result = { ok: true, summary: `already reviewed at ${headSha}, skipping`, failures: [], durationMs: 0 }
+  } else if (prior !== undefined && !config.rereviewOnPush) {
+    result = { ok: true, summary: `new commits since ${prior.headSha} but REVIEW_ON_PUSH is not set, skipping`, failures: [], durationMs: 0 }
+  } else if (await hasCompletedReviewForSha(coFetcher, config.gitlabBaseUrl, config.gitlabToken, config.sourceProjectId, config.mrIid, headSha, botUserId)) {
+    // Coexistence (CI yields to webhook): the CI history store is invisible to
+    // the webhook flow and vice versa, so check the MR itself for a completed
+    // review marker of this SHA or an in-flight eyes marker before booting.
+    result = { ok: true, summary: `webhook already reviewed ${headSha} — skipping`, failures: [], durationMs: 0 }
+  } else if (await hasRunningEyes(coFetcher, config.gitlabBaseUrl, config.gitlabToken, config.sourceProjectId, config.mrIid, botUserId)) {
+    result = { ok: true, summary: 'another review is running — skipping', failures: [], durationMs: 0 }
+  } else {
+    result = await runReview()
   }
   const { writeFile } = deps.writeFile !== undefined ? { writeFile: deps.writeFile } : await import('node:fs/promises')
   // entrypoint.sh cds into deepseek-harness before execing dsh, so a bare relative
