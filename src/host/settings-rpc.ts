@@ -138,7 +138,7 @@ function validateSavePayload(payload: unknown): { ok: true; patch: Partial<Maest
   return { ok: true, patch }
 }
 
-export const MAESTRO_RPC_CHANNEL = '/dsh-maestro-review'
+export const MAESTRO_RPC_CHANNEL = '/maestro-reviewer'
 /**
  * The three endpoints review still serves. The tunnel, proxy and PIN endpoints
  * moved to dsh-maestro-remote, which already provides the `maestroTunnel`

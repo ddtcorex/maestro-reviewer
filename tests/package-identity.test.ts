@@ -74,7 +74,6 @@ describe('package identity after the maestro-reviewer rename', () => {
       /'dsh-maestro-review', '(reviews|runtime)\.json'/,
       /\/app\/dsh-maestro-review/, // image history symlink
       /Renamed from `@ddtcorex\/dsh-maestro-review`/,
-      /\/dsh-maestro-review(?![\w/-])/, // RPC channel, renamed by the next commit
     ]
     const files = execFileSync('git', ['ls-files'], { cwd: REPO_ROOT, encoding: 'utf-8' }).split('\n').filter(Boolean)
     const offenders: string[] = []

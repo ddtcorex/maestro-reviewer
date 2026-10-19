@@ -15,7 +15,7 @@ import { REVIEW_CSS } from './review/styles.js'
 import { registerSettingsNavIcon, SETTINGS_NAV_MARKER } from './settings-nav-icon.js'
 
 /** This package's own channel; the endpoints it serves. */
-export const REVIEW_CHANNEL = '/dsh-maestro-review'
+export const REVIEW_CHANNEL = '/maestro-reviewer'
 
 export type RpcCall = (endpoint: string, payload?: unknown) => Promise<any>
 

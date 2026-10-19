@@ -9,14 +9,14 @@ const read = (rel: string) => readFileSync(join(REPO_ROOT, rel), 'utf-8')
 describe('review RPC channel ownership', () => {
   // Regression: mounting the package root (the `maestro-review-host` row added so
   // the skill provider actually runs) made apply() execute in a real boot for the
-  // first time. apply() also registered a legacy stub on '/dsh-maestro-review',
+  // first time. apply() also registered a legacy stub on the review channel,
   // colliding with the real handler in settings-rpc.ts:
-  //   maestro-review-settings-rpc: Error: webserver: duplicate prefix route "/dsh-maestro-review"
+  //   maestro-review-settings-rpc: Error: webserver: duplicate prefix route "<review channel>"
   // The Settings card failed on a host that mounted both rows because of it.
   // Exactly one module may claim the channel, and it must be the one that
   // implements the endpoints.
 
-  const channel = '/dsh-maestro-review'
+  const channel = '/maestro-reviewer'
 
   it('registers the channel exactly once across src/', () => {
     const hosts = ['src/host/index.ts', 'src/host/settings-rpc.ts']
@@ -39,6 +39,10 @@ describe('review RPC channel ownership', () => {
     // is not part of the API and is silently ignored at runtime.
     expect(settings).toContain('rpc.handle(MAESTRO_RPC_CHANNEL, handler)')
     expect(settings).not.toContain('authority')
+  })
+
+  it('dials the same channel from the client bundle', () => {
+    expect(read('src/client/index.tsx')).toContain(`export const REVIEW_CHANNEL = '${channel}'`)
   })
 
   it('still serves the skill provider from apply()', () => {
