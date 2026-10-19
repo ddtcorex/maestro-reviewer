@@ -22,7 +22,7 @@ function gitlab(notes: unknown[]) {
 async function gate(env: Record<string, string>, notes: unknown[], ok = true) {
   const { parseCiEnvConfig, runCiTrigger } = await import('../src/host/providers/ci-trigger.js')
   const cfg = parseCiEnvConfig({ GITLAB_HOST: 'h', MAESTRO_GITLAB_TOKEN: 'tok', SOURCE_PROJECT_ID: '1', MR_IID: '2', ...env })
-  const ctx = { reviewRunner: vi.fn(async () => ({ ok, summary: 'done', failures: [], durationMs: 5 })) }
+  const ctx = { reviewEngine: { run: vi.fn(async () => ({ ok, summary: 'done', failures: [], durationMs: 5 })) } }
   const g = gitlab(notes)
   const result = await runCiTrigger(ctx as never, cfg, { fetcher: g.fetcher, writeFile: (async () => {}) as never, history: { lastCompletedReview: async () => undefined } })
   const labelPuts = g.calls.filter(c => c.method === 'PUT' && c.path.endsWith('/merge_requests/2'))
@@ -34,18 +34,18 @@ const DEEP = { REVIEW_MODE: 'deep', REVIEW_DEEP_REQUESTED: '1' }
 describe('deep review on request, once per head SHA', () => {
   it('runs deep on a SHA that only has a quick review', async () => {
     const { ctx } = await gate(DEEP, [review('cafe01', 'quick')])
-    expect(ctx.reviewRunner).toHaveBeenCalledTimes(1)
-    expect((ctx.reviewRunner.mock.calls[0] as unknown[])[0]).toMatchObject({ mode: 'deep', headSha: 'cafe01' })
+    expect(ctx.reviewEngine.run).toHaveBeenCalledTimes(1)
+    expect((ctx.reviewEngine.run.mock.calls[0] as unknown[])[0]).toMatchObject({ mode: 'deep', headSha: 'cafe01' })
   })
 
   it('runs deep on a new head even without REVIEW_ON_PUSH (the label is the request)', async () => {
     const { ctx } = await gate(DEEP, [review('abc123', 'quick')])
-    expect(ctx.reviewRunner).toHaveBeenCalledTimes(1)
+    expect(ctx.reviewEngine.run).toHaveBeenCalledTimes(1)
   })
 
   it('skips when the bot already posted a deep review for this SHA, and clears the stale label', async () => {
     const { result, ctx, labelPuts } = await gate(DEEP, [review('cafe01', 'deep')])
-    expect(ctx.reviewRunner).not.toHaveBeenCalled()
+    expect(ctx.reviewEngine.run).not.toHaveBeenCalled()
     expect(result.summary).toMatch(/deep review already completed at cafe01/)
     expect(labelPuts).toHaveLength(1)
   })
@@ -53,7 +53,7 @@ describe('deep review on request, once per head SHA', () => {
   it('does not count a deep marker without metadata', async () => {
     const markerOnly = { id: 1, system: false, author: { id: BOT }, body: reviewMarker('cafe01', 'ci-deep'), created_at: '2026-10-19T00:00:00Z' }
     const { ctx } = await gate(DEEP, [markerOnly])
-    expect(ctx.reviewRunner).toHaveBeenCalledTimes(1)
+    expect(ctx.reviewEngine.run).toHaveBeenCalledTimes(1)
   })
 
   it('removes the label once after a successful deep review', async () => {
@@ -69,7 +69,7 @@ describe('deep review on request, once per head SHA', () => {
 
   it('without a request, a quick review at the head SHA still skips as before', async () => {
     const { ctx, labelPuts } = await gate({}, [review('cafe01', 'quick')])
-    expect(ctx.reviewRunner).not.toHaveBeenCalled()
+    expect(ctx.reviewEngine.run).not.toHaveBeenCalled()
     expect(labelPuts).toHaveLength(0)
   })
 })

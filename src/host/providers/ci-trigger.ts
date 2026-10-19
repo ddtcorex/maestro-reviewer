@@ -4,17 +4,30 @@ import { join } from 'node:path'
 import type { ReviewRequest, ReviewResult } from '../events.js'
 import { lastCompletedReview } from '../review-history.js'
 import type { ReviewSkillProfile } from '../skills-tool.js'
+import type { ModelSelection } from '@deepseek-ai/dsh-agent'
+import type {} from '@deepseek-ai/dsh-agent-default-model'
+import type { CodeAccess, EngineRunOptions } from '../engine.js'
+import type {} from '../engine-row.js'
 import { gitlabAuthHeaders } from '../gitlab-auth.js'
 import { fetchBotUserId, hasCompletedDeepReview, hasCompletedReviewForSha, hasRunningEyes, latestCompletedReview, removeDeepLabel } from '../ci-coexist.js'
 
 export const name = 'maestro-review-ci-trigger'
-export const inject = ['reviewRunner'] as const
+export const inject = ['reviewEngine', 'agentDefaultModel'] as const
+
+const CI_AGENT_TIMEOUT_MS = 1_200_000
 
 const REVIEW_PROFILES = ['magento2', 'laravel', 'symfony', 'wordpress', 'generic'] as const
 
 export interface CiEnvConfig {
   gitlabBaseUrl: string
+  /** Bare host the source is cloned from (GITLAB_HOST). */
+  gitlabHost: string
   gitlabToken: string
+  /** The token's username, which marks the bot's own notes, threads and awards. */
+  botUsername: string
+  /** Pinned review model (REVIEW_MODEL_PROVIDER / REVIEW_MODEL); absent = the host default. */
+  reviewModel?: { provider: string; model: string }
+  agentTimeoutMs: number
   sourceProjectId: number
   mrIid: number
   mode: 'quick' | 'deep'
@@ -28,7 +41,11 @@ export interface CiEnvConfig {
 
 export const CiEnvConfig: z<CiEnvConfig> = z.object({
   gitlabBaseUrl: z.string().required(),
+  gitlabHost: z.string().required(),
   gitlabToken: z.string().role('secret').required(),
+  botUsername: z.string().required(),
+  reviewModel: z.union([z.object({ provider: z.string(), model: z.string() }), z.const(undefined)]),
+  agentTimeoutMs: z.natural().default(CI_AGENT_TIMEOUT_MS),
   sourceProjectId: z.number().required(),
   mrIid: z.number().required(),
   mode: z.union([z.const('quick'), z.const('deep')]).default('quick'),
@@ -52,7 +69,14 @@ export function parseCiEnvConfig(env: Record<string, string | undefined>): CiEnv
   }
   return CiEnvConfig({
     gitlabBaseUrl: `https://${env.GITLAB_HOST}`,
+    gitlabHost: env.GITLAB_HOST.trim(),
     gitlabToken: env.MAESTRO_GITLAB_TOKEN,
+    // A personal or project token posts as its own username, not "maestro-bot".
+    botUsername: env.REVIEW_BOT_USERNAME || 'maestro-bot',
+    agentTimeoutMs: CI_AGENT_TIMEOUT_MS,
+    // Optional as a pair: a model without a provider fails the review with a
+    // provider error instead of silently calling the wrong model.
+    ...(env.REVIEW_MODEL ? { reviewModel: { provider: env.REVIEW_MODEL_PROVIDER as string, model: env.REVIEW_MODEL } } : {}),
     sourceProjectId: Number(env.SOURCE_PROJECT_ID),
     mrIid: Number(env.MR_IID),
     // A deep request from the resolve job wins over REVIEW_MODE: project variables
@@ -83,6 +107,22 @@ export async function fetchMrDetail(config: CiEnvConfig, fetcher: typeof fetch =
   const full = body.references?.full
   const projectPath = typeof full === 'string' && full.includes('!') ? full.slice(0, full.indexOf('!')) : `project/${config.sourceProjectId}`
   return { sourceBranch: body.source_branch, headSha: body.sha, projectPath }
+}
+
+/**
+ * How CI reaches the code: quick with no or the generic profile reads the
+ * diff only (no clone cost); a framework profile and every deep review clone
+ * the source at the head SHA. Deep never audits a runtime here (no environment).
+ */
+export function ciAccess(config: CiEnvConfig): CodeAccess {
+  const checkout = config.mode === 'deep' || (config.reviewProfile !== undefined && config.reviewProfile !== 'generic')
+  return checkout ? { kind: 'clone', host: config.gitlabHost } : { kind: 'diff' }
+}
+
+/** The pinned model, else the host default (no Settings UI in CI). */
+export function ciModel(ctx: Context, config: CiEnvConfig): ModelSelection {
+  if (config.reviewModel !== undefined) return { provider: config.reviewModel.provider, model: config.reviewModel.model }
+  return ctx.agentDefaultModel?.currentSelection() ?? { provider: 'fallback', model: 'fallback' }
 }
 
 export async function runCiTrigger(
@@ -116,7 +156,14 @@ export async function runCiTrigger(
   // orchestrator's mapping lookup on projectPath never matches regardless
   // of its exact value — but the real path feeds the comment header and
   // View-MR link, so prefer it over the synthetic project/<id> fallback.
-  const runReview = () => ctx.reviewRunner({
+  const options: EngineRunOptions = {
+    gitlab: { baseUrl: config.gitlabBaseUrl, token: config.gitlabToken, botUsername: config.botUsername },
+    access: ciAccess(config),
+    reviewProfile: config.reviewProfile,
+    model: ciModel(ctx, config),
+    agentTimeoutMs: config.agentTimeoutMs,
+  }
+  const runReview = () => ctx.reviewEngine.run({
     projectPath,
     projectId: config.sourceProjectId,
     mrIid: config.mrIid,
@@ -127,7 +174,7 @@ export async function runCiTrigger(
     mode: config.mode,
     scope: { kind: 'mr' },
     reviewProfile: config.reviewProfile,
-  } satisfies ReviewRequest)
+  } satisfies ReviewRequest, options)
   const coFetcher = deps.fetcher ?? fetch
   let result: ReviewResult
   if (config.deepRequested) {

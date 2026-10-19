@@ -679,27 +679,6 @@ function commentMarker(payload: ReviewRequest): { sha: string; flow: ReviewFlow 
   return { sha: payload.headSha, flow: resolveFlow(payload.mode) }
 }
 
-/** CI-deep decision: deep mode + CI env + head SHA (spec §3). Mapping is checked by the caller. */
-export function shouldCiDeepReview(payload: ReviewRequest): boolean {
-  return payload.mode === 'deep'
-    && payload.headSha !== undefined
-    && process.env.SOURCE_PROJECT_ID !== undefined
-    && process.env.MR_IID !== undefined
-}
-
-/** CI quick-with-profile decision: quick mode + non-generic profile + CI env
- *  + head SHA. Quick + generic/unset stays diff-only (no clone cost); a real
- *  profile opts into the clone branch reviewer-only (no auditor — quick never
- *  audits, see shouldAudit in runReviewAndAudit). Mapping is checked by the caller. */
-export function shouldCiQuickProfileReview(payload: ReviewRequest): boolean {
-  return payload.mode === 'quick'
-    && payload.reviewProfile !== undefined
-    && payload.reviewProfile !== 'generic'
-    && payload.headSha !== undefined
-    && process.env.SOURCE_PROJECT_ID !== undefined
-    && process.env.MR_IID !== undefined
-}
-
 /** Auditor degrade for CI (no runtime env): an auditor throw becomes reviewer-only, never a failed review. */
 export function withAuditorDegrade(
   runAuditor: (worktreePath: string, payload: ReviewRequest) => Promise<string>,
@@ -1173,12 +1152,6 @@ export function apply(ctx: Context, config: Config): void {
         })
       }
       const mapping = effective.projectMappings.find(m => m.projectPath === payload.projectPath)
-      // CI-deep (spec §3): unmapped deep review with CI env + head SHA skips
-      // both the decline and the diff-only fallback and runs the clone access.
-      const ciDeep = mapping === undefined && payload.mode === 'deep' && shouldCiDeepReview(payload)
-      // CI quick-with-profile: unmapped quick + non-generic profile + CI env
-      // also clones, reviewer-only (quick never audits).
-      const ciQuickProfile = mapping === undefined && shouldCiQuickProfileReview(payload)
       // Unmapped reviewer assignments remain no-ops. Only an explicit mention
       // may opt into the intentionally limited, diff-only fallback below.
       if (mapping === undefined && payload.trigger !== 'mention') {
@@ -1246,7 +1219,7 @@ export function apply(ctx: Context, config: Config): void {
           )
         })
       }
-      if (mapping === undefined && !ciDeep && !ciQuickProfile && payload.mode === 'deep') {
+      if (mapping === undefined && payload.mode === 'deep') {
         return await declineUnmappedDeep(payload, gitlab, notifyTelegram, t0)
       }
       let access: CodeAccess
@@ -1261,9 +1234,6 @@ export function apply(ctx: Context, config: Config): void {
           auditor: 'runtime',
         }
         reviewProfile = mapping.reviewProfile
-      } else if (ciDeep || ciQuickProfile) {
-        access = { kind: 'clone', host: process.env.GITLAB_HOST?.trim() || new URL(gitlab.baseUrl).hostname }
-        reviewProfile = payload.reviewProfile
       } else {
         access = { kind: 'diff' }
       }

@@ -74,17 +74,6 @@ describe('CI deep review', () => {
   function setCiEnv() { for (const [k, v] of Object.entries(CI_ENV)) process.env[k] = v }
   function clearCiEnv() { for (const k of Object.keys(CI_ENV)) delete process.env[k] }
 
-  it('shouldCiDeepReview is true only for deep + CI env + headSha', async () => {
-    const { shouldCiDeepReview } = await import('../src/host/orchestrator.js')
-    setCiEnv()
-    try {
-      expect(shouldCiDeepReview({ mode: 'deep', headSha: 'abc' } as any)).toBe(true)
-      expect(shouldCiDeepReview({ mode: 'quick', headSha: 'abc' } as any)).toBe(false)
-      expect(shouldCiDeepReview({ mode: 'deep' } as any)).toBe(false)
-    } finally { clearCiEnv() }
-    expect(shouldCiDeepReview({ mode: 'deep', headSha: 'abc' } as any)).toBe(false)
-  })
-
   it('withAuditorDegrade returns reviewer-only note when the auditor throws', async () => {
     const { withAuditorDegrade } = await import('../src/host/orchestrator.js')
     const wrapped = withAuditorDegrade(async () => { throw new Error('govard: binary not found') })
@@ -96,54 +85,6 @@ describe('CI deep review', () => {
     const wrapped = withAuditorDegrade(async () => 'audit says hi')
     await expect(wrapped('/tmp/x', {} as any)).resolves.toBe('audit says hi')
   })
-
-  it('runReview clones and enters the mapped machinery instead of declining', async () => {
-    const { apply } = await import('../src/host/orchestrator.js')
-    const { cloneSourceRepo } = await import('../src/host/ci-clone.js')
-    setCiEnv()
-    try {
-      let runReview: ((payload: any) => Promise<any>) | undefined
-      apply({ on: () => {}, provide: (name: string, fn: any) => { if (name === 'reviewRunner') runReview = fn } } as any,
-        { projectMappings: [], gitlabBaseUrl: 'https://gitlab.example.com', botUsername: 'b', agentTimeoutMs: 1000, gitlabToken: 't' })
-      const result = await runReview!({
-        projectPath: 'group/proj', projectId: 1, mrIid: 2, sourceBranch: 'feat/x', headSha: 'abc123',
-        trigger: 'mention', mode: 'deep', scope: { kind: 'mr' },
-      })
-      expect(cloneSourceRepo).toHaveBeenCalledWith(expect.objectContaining({ projectId: 1, headSha: 'abc123', token: 't' }))
-      const text = `${result.summary ?? ''} ${result.failures.join(' ')}`
-      expect(text).not.toMatch(/declined/)
-    } finally { clearCiEnv() }
-  }, 30000)
-
-  it('shouldCiQuickProfileReview is true only for quick + non-generic profile + CI env + headSha', async () => {
-    const { shouldCiQuickProfileReview } = await import('../src/host/orchestrator.js')
-    setCiEnv()
-    try {
-      expect(shouldCiQuickProfileReview({ mode: 'quick', reviewProfile: 'magento2', headSha: 'abc' } as any)).toBe(true)
-      expect(shouldCiQuickProfileReview({ mode: 'quick', headSha: 'abc' } as any)).toBe(false)
-      expect(shouldCiQuickProfileReview({ mode: 'quick', reviewProfile: 'generic', headSha: 'abc' } as any)).toBe(false)
-      expect(shouldCiQuickProfileReview({ mode: 'deep', reviewProfile: 'magento2', headSha: 'abc' } as any)).toBe(false)
-      expect(shouldCiQuickProfileReview({ mode: 'quick', reviewProfile: 'magento2' } as any)).toBe(false)
-    } finally { clearCiEnv() }
-    expect(shouldCiQuickProfileReview({ mode: 'quick', reviewProfile: 'magento2', headSha: 'abc' } as any)).toBe(false)
-  })
-
-  it('runReview clones for quick + profile instead of diff-only', async () => {
-    const { apply } = await import('../src/host/orchestrator.js')
-    const { cloneSourceRepo } = await import('../src/host/ci-clone.js')
-    setCiEnv()
-    try {
-      vi.mocked(cloneSourceRepo).mockClear()
-      let runReview: ((payload: any) => Promise<any>) | undefined
-      apply({ on: () => {}, provide: (name: string, fn: any) => { if (name === 'reviewRunner') runReview = fn } } as any,
-        { projectMappings: [], gitlabBaseUrl: 'https://gitlab.example.com', botUsername: 'b', agentTimeoutMs: 1000, gitlabToken: 't' })
-      await runReview!({
-        projectPath: 'group/proj', projectId: 1, mrIid: 2, sourceBranch: 'feat/x', headSha: 'abc123',
-        trigger: 'mention', mode: 'quick', reviewProfile: 'magento2', scope: { kind: 'mr' },
-      }).catch(() => {})
-      expect(cloneSourceRepo).toHaveBeenCalledWith(expect.objectContaining({ projectId: 1, headSha: 'abc123', token: 't' }))
-    } finally { clearCiEnv() }
-  }, 30000)
 
   it('runReview stays diff-only for quick + generic profile (no clone)', async () => {
     const { apply } = await import('../src/host/orchestrator.js')
