@@ -20,12 +20,15 @@ review:
   # Every parameter comes from env (SOURCE_PROJECT_ID, MR_IID, GITLAB_HOST, REVIEW_MODE) — no CLI args.
   script:
     - /entrypoint.sh
-  # History cache — the push-gate (skip already-reviewed head SHAs) and incremental
-  # context read $DSH_HOME/dsh-maestro-review/reviews.json, which is ephemeral in a
-  # fresh container. entrypoint.sh symlinks it at this cached path (one store, many
-  # MRs — entries are keyed per MR inside). Cache miss fails open toward reviewing.
+  # Review state lives on GitLab: the push-gate and the incremental base read the
+  # newest review comment (its hidden metadata) through the API. The history cache
+  # below is only a fallback for when GitLab cannot be read; it is keyed per MR so
+  # concurrent reviews of different MRs never overwrite each other, and the
+  # resource group runs one review per MR at a time. entrypoint.sh symlinks the
+  # store at this cached path. Cache miss fails open toward reviewing.
+  resource_group: review-$SOURCE_PROJECT_ID-$MR_IID
   cache:
-    key: maestro-review-history
+    key: maestro-review-$SOURCE_PROJECT_ID-$MR_IID
     paths:
       - .maestro-history/
   artifacts:

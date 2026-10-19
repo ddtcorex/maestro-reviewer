@@ -30,6 +30,12 @@ export interface ReviewRequest extends MrOpenedPayload {
    * webhook producer never sets it — webhook comments stay marker-free.
    */
   headSha?: string
+  /**
+   * CI-only: head SHA of the newest completed review, read from GitLab by
+   * ci-trigger. The orchestrator's incremental block prefers it over the
+   * local history store, which is runner-local in CI.
+   */
+  priorHeadSha?: string
   /** Short (8-char) head-sha hint for `push` triggers, taken from the webhook
    * body — feeds the in-flight key so two concurrent pushes stop deduping
    * each other. Absent when the body carries no sha. */

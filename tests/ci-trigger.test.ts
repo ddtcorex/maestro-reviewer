@@ -142,8 +142,9 @@ describe('runCiTrigger coexistence yield', () => {
     const { parseCiEnvConfig, runCiTrigger } = await import('../src/host/providers/ci-trigger.js')
     const cfg = parseCiEnvConfig({ GITLAB_HOST: 'h', MAESTRO_GITLAB_TOKEN: 'tok', SOURCE_PROJECT_ID: '1', MR_IID: '2' })
     const fetcher = vi.fn(async (url: string) => {
-      if (String(url).includes('/notes')) return new Response(JSON.stringify(notesBodies.map((body, i) => ({ id: i, body }))), { status: 200 })
-      if (String(url).includes('/award_emoji')) return new Response(JSON.stringify(awards.map((a, i) => ({ id: i, ...a }))), { status: 200 })
+      if (String(url).endsWith('/api/v4/user')) return new Response(JSON.stringify({ id: 42 }), { status: 200 })
+      if (String(url).includes('/notes')) return new Response(JSON.stringify(notesBodies.map((body, i) => ({ id: i, author: { id: 42 }, body }))), { status: 200 })
+      if (String(url).includes('/award_emoji')) return new Response(JSON.stringify(awards.map((a, i) => ({ id: i, user: { id: 42 }, ...a }))), { status: 200 })
       return new Response(JSON.stringify({ source_branch: 'feat/x', sha }), { status: 200 })
     })
     const fakeCtx = { reviewRunner: vi.fn(async () => ({ ok: true, summary: 'done', failures: [], durationMs: 5 })) }
