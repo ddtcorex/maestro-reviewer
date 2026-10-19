@@ -97,7 +97,7 @@ describe('review engine', () => {
     expect(history.recordReviewStart).toHaveBeenCalledTimes(1)
     expect(history.recordReviewFinish).toHaveBeenCalledTimes(1)
     expect(notify).toHaveBeenCalledTimes(1)
-    expect(notify).toHaveBeenCalledWith('failed', 'boom')
+    expect(notify).toHaveBeenCalledWith('failed', 'boom', expect.any(Number))
   })
 
   it('passes the explicit model to the agent runners', async () => {
@@ -115,5 +115,20 @@ describe('toModelSelection', () => {
     const { toModelSelection } = await import('../src/host/engine.js')
     expect(toModelSelection({ provider: 'p', model: 'm' })).toEqual({ provider: 'p', model: 'm' })
     expect(toModelSelection({ provider: 'p', model: 'm', reasoningEffort: 'high' })).toEqual({ provider: 'p', model: 'm', reasoningEffort: 'high' })
+  })
+})
+
+describe('notify duration', () => {
+  it('reports the review duration measured from the signals start, after the history and compare calls', async () => {
+    const history = await import('../src/host/review-history.js')
+    vi.mocked(history.recordReviewStart).mockImplementationOnce(async () => { await new Promise(r => setTimeout(r, 120)) })
+    const notify = vi.fn()
+    const { agents } = fakeAgents()
+    const engine = await engineWith(agents)
+    await engine.run(payload(), { gitlab, access: { kind: 'diff' }, model, agentTimeoutMs: 1000, notify })
+    const [status, , durationMs] = notify.mock.calls[0] as [string, string, number]
+    expect(status).toBe('completed')
+    expect(typeof durationMs).toBe('number')
+    expect(durationMs).toBeLessThan(100)
   })
 })

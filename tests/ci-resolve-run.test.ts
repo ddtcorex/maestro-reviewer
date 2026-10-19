@@ -21,6 +21,7 @@ interface World {
   notes?: Array<{ author: { id: number }; body: string }>
   notesPages?: Array<Array<{ author: { id: number }; body: string }>>
   noteStatus?: number
+  notesListStatus?: number
   scopedVars?: Array<{ key: string; scope: string }>
 }
 
@@ -65,6 +66,7 @@ function gitlab(w: World) {
     if (p === '/user') return json(200, { id: 5 })
     if (p === `/projects/${SOURCE}/merge_requests/${MR}/notes`) {
       if ((init.method ?? 'GET') === 'POST') { posted.push({ url, body: JSON.parse(String(init.body)) }); return json(w.noteStatus ?? 201, {}) }
+      if (w.notesListStatus) return json(w.notesListStatus, {})
       if (w.notesPages) {
         const page = Number(u.searchParams.get('page') ?? '1')
         const res = json(200, w.notesPages[page - 1] ?? [])
@@ -267,5 +269,13 @@ describe('runResolve', () => {
     expect(all.posted).toHaveLength(1)
     const optedOut = await run({ scoped: { REVIEW_REQUIRE_PROJECT_KEY: '0' } }, env({ REVIEW_REQUIRE_PROJECT_KEY: '1' }))
     expect(optedOut.child?.review.variables).toMatchObject({ REVIEW_ROUTE: 'default' })
+  })
+
+  it('does not post the unconfigured note when the notes cannot be listed, so a retry cannot post it twice', async () => {
+    const r = await run({ scoped: { REVIEW_REQUIRE_PROJECT_KEY: '1' }, notesListStatus: 500 })
+    expect(r.exitCode).toBe(0)
+    expect(Object.keys(r.child ?? {})).toEqual(['skip'])
+    expect(r.posted).toHaveLength(0)
+    expect(r.logs.join('\n')).toMatch(/could not list the MR notes \(500\)/)
   })
 })

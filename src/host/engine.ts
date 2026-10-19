@@ -80,8 +80,12 @@ export interface EngineRunOptions {
   agentTimeoutMs: number
   /** The forge of this MR; defaults to GitLab at `gitlab`. */
   forge?: ReviewForge
-  /** Final status of a run that did review (not of a deduped one). */
-  notify?(status: 'completed' | 'failed', summary?: string): void
+  /**
+   * Final status of a run, with the review duration measured from the MR
+   * signals start. Called once per run, except for a deduped worktree run;
+   * a deduped diff run is recorded and notified as completed.
+   */
+  notify?(status: 'completed' | 'failed', summary?: string, durationMs?: number): void
 }
 
 /**
@@ -303,7 +307,8 @@ export function createReviewEngine(ctx: Context, agents: EngineAgents = createEn
     const { gitlab, access } = opts
     const forge = opts.forge ?? gitlabForge(gitlab, payload)
     const agentRun: AgentRunConfig = { gitlab, forge, model: opts.model, agentTimeoutMs: opts.agentTimeoutMs }
-    const notify = (status: 'completed' | 'failed', summary?: string) => opts.notify?.(status, summary)
+    let reviewStart = Date.now()
+    const notify = (status: 'completed' | 'failed', summary?: string) => opts.notify?.(status, summary, Date.now() - reviewStart)
     try {
       const historyId = `${payload.projectId}-${payload.mrIid}-${Date.now()}`
       const currentHeadSha = await forge.mrHeadSha().catch(() => undefined)
@@ -333,6 +338,7 @@ export function createReviewEngine(ctx: Context, agents: EngineAgents = createEn
       // Award-emoji acknowledgements only make sense on the MR itself; inline
       // discussion reviews answer in-thread instead.
       const signals = payload.scope.kind === 'mr' ? forge.signals() : undefined
+      reviewStart = Date.now()
       await signals?.start()
       const postComment = (body: string) => forge.postNote(body)
       const replyToDiscussion = (discussionId: string, body: string) => forge.replyToDiscussion(discussionId, body)

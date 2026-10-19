@@ -192,7 +192,11 @@ async function postUnconfiguredOnce(deps: ResolveDeps, api: string, botToken: st
   let page = '1'
   for (let n = 0; page && n < NOTE_PAGES; n++) {
     const res = await deps.fetcher(`${notesUrl}?per_page=100&sort=desc&order_by=created_at&page=${page}`, { headers: gitlabAuthHeaders(botToken) })
-    if (!res.ok) break
+    if (!res.ok) {
+      // Unknown whether the note exists: posting now could duplicate it on every retry.
+      deps.log(`[review] warning: could not list the MR notes (${res.status}); not posting the unconfigured note`)
+      return
+    }
     const notes = await res.json() as Array<{ author?: { id?: number }; body?: string }>
     if (notes.some(n => n.author?.id === botId && n.body?.includes(UNCONFIGURED_MARKER))) return
     page = res.headers.get('x-next-page') ?? ''
