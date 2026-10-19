@@ -1563,12 +1563,15 @@ export function apply(ctx: Context, config: Config): void {
           // No govard/vendor linking (ciEnsureWorktree is plain fetch + worktree).
           const ciHost = process.env.GITLAB_HOST?.trim() || new URL(resolved.gitlabBaseUrl).hostname
           const cloneDir = join('/tmp', `maestro-ci-src-${payload.projectId}-${payload.mrIid}`)
-          await cloneSourceRepo({ fetcher: fetch, run: defaultRun, host: ciHost, projectId: payload.projectId, sourceBranch: payload.sourceBranch, headSha: payload.headSha as string, token: resolved.gitlabToken, dir: cloneDir })
+          // D3: make the MR merge base reachable from the head in the shallow clone.
+          const baseSha = await fetchMrBaseSha(resolved.gitlabBaseUrl, resolved.gitlabToken, payload.projectId, payload.mrIid)
+          await cloneSourceRepo({ fetcher: fetch, run: defaultRun, host: ciHost, projectId: payload.projectId, sourceBranch: payload.sourceBranch, headSha: payload.headSha as string, token: resolved.gitlabToken, dir: cloneDir, ...(baseSha ? { baseSha } : {}) })
           try {
             const ciEnsureWorktree = async (repoPath: string, branch: string, pid: number, iid: number, suffix?: string): Promise<string> => {
               assertSafeBranchName(branch)
               const wt = join('/tmp', `maestro-mr-${pid}-${iid}${suffix === undefined ? '' : `-${suffix}`}`)
-              await defaultRun('git', ['fetch', '--depth', '50', 'origin', branch], repoPath)
+              // No re-fetch: the clone already holds the head, and `fetch --depth` on a
+              // shallow repo would cut back the history the base check just deepened.
               await defaultRun('git', ['worktree', 'remove', '--force', wt], repoPath).catch(() => {})
               await defaultRun('git', ['worktree', 'add', '--detach', '--', wt, payload.headSha as string], repoPath)
               return wt

@@ -46,3 +46,59 @@ describe('ci-clone', () => {
     expect(redactCloneUrl('https://h/g.git')).toBe('https://h/g.git')
   })
 })
+
+describe('ci-clone merge base (D3)', () => {
+  const lines = (run: ReturnType<typeof vi.fn>) => run.mock.calls.map((c) => (c[1] as string[]).join(' '))
+
+  it('checks the base is an ancestor of the head and stops when it already is', async () => {
+    const { run, base } = ctx({ httpUrl: 'https://git.example.com/g/p.git' })
+    await cloneSourceRepo({ ...base, baseSha: 'b4se00' })
+    expect(lines(run).slice(3)).toEqual(['merge-base --is-ancestor b4se00 abc123'])
+  })
+
+  it('deepens the head history until the base becomes reachable', async () => {
+    let checks = 0
+    const { run, base } = ctx({
+      httpUrl: 'https://git.example.com/g/p.git',
+      run: async (_cmd, args) => { if (args[0] === 'merge-base' && checks++ < 2) throw new Error('exit 1') },
+    })
+    await cloneSourceRepo({ ...base, baseSha: 'b4se00' })
+    expect(lines(run).slice(3)).toEqual([
+      'merge-base --is-ancestor b4se00 abc123',
+      'fetch --deepen=200 origin abc123',
+      'merge-base --is-ancestor b4se00 abc123',
+      'fetch --deepen=200 origin abc123',
+      'merge-base --is-ancestor b4se00 abc123',
+    ])
+  })
+
+  it('falls back to fetching the base object alone after the deepen budget', async () => {
+    const { run, base } = ctx({
+      httpUrl: 'https://git.example.com/g/p.git',
+      run: async (_cmd, args) => { if (args[0] === 'merge-base') throw new Error('exit 1') },
+    })
+    await cloneSourceRepo({ ...base, baseSha: 'b4se00' })
+    const l = lines(run)
+    expect(l.filter(x => x.startsWith('fetch --deepen=200')).length).toBe(10)
+    expect(l.at(-1)).toBe('fetch --depth 1 origin b4se00')
+  })
+
+  it('redacts the token when the base fallback fetch fails', async () => {
+    const { base } = ctx({
+      httpUrl: 'https://git.example.com/g/p.git',
+      run: async (_cmd, args) => {
+        if (args[0] === 'merge-base') throw new Error('exit 1')
+        if (args.join(' ') === 'fetch --depth 1 origin b4se00') throw new Error('fetch https://oauth2:SEKRET@git.example.com/g/p.git failed')
+      },
+    })
+    const err = await cloneSourceRepo({ ...base, baseSha: 'b4se00' }).catch((e: Error) => e)
+    expect(String(err)).toMatch('oauth2:***@')
+    expect(String(err)).not.toMatch('SEKRET')
+  })
+
+  it('does nothing extra without a base', async () => {
+    const { run, base } = ctx({ httpUrl: 'https://git.example.com/g/p.git' })
+    await cloneSourceRepo(base)
+    expect(lines(run)).toHaveLength(3)
+  })
+})
