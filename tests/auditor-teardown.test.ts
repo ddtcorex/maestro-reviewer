@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { runReviewAndAudit, teardownGovardEnvironment, GOVARD_TEARDOWN_TIMEOUT_MS } from '../src/host/orchestrator.js'
+import { runReviewAndAudit } from '../src/host/orchestrator.js'
 import type { ReviewRequest } from '../src/host/events.js'
 
 function payload(mode: 'quick' | 'deep', mrIid: number): ReviewRequest {
@@ -63,23 +63,6 @@ describe('runReviewAndAudit environment teardown', () => {
     }) as never)
     expect(calls).toEqual(['remove:/tmp/maestro-mr-7-1'])
     expect(body).toContain('audit')
-    warn.mockRestore()
-  })
-})
-
-describe('teardownGovardEnvironment', () => {
-  it('runs govard env down -v in the worktree with a bounded timeout', async () => {
-    const run = vi.fn(async () => ({ stdout: '', stderr: '' }))
-    await teardownGovardEnvironment('/tmp/wt', run)
-    expect(run).toHaveBeenCalledWith('govard', ['env', 'down', '-v'], { cwd: '/tmp/wt', timeout: GOVARD_TEARDOWN_TIMEOUT_MS })
-    expect(GOVARD_TEARDOWN_TIMEOUT_MS).toBeGreaterThan(0)
-    expect(GOVARD_TEARDOWN_TIMEOUT_MS).toBeLessThanOrEqual(300_000)
-  })
-
-  it('never throws and logs a warning when the command fails', async () => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    await expect(teardownGovardEnvironment('/tmp/wt', async () => { throw new Error('boom') })).resolves.toBeUndefined()
-    expect(warn).toHaveBeenCalled()
     warn.mockRestore()
   })
 })

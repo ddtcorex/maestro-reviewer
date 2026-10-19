@@ -1,11 +1,9 @@
-import { execFileSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import { parse } from 'yaml'
 import { historyPath } from '../src/host/review-history.js'
-import { runtimeStatePath } from '../src/host/config-store.js'
 import { REVIEW_SOURCE_KIND } from '../src/host/source.js'
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
@@ -49,9 +47,8 @@ describe('package identity after the maestro-reviewer rename', () => {
     const names = docs.flatMap(d => moduleNames(d))
     expect(names.length).toBeGreaterThan(0)
     for (const n of names) expect(n, n).toMatch(/^@ddtcorex\/maestro-reviewer(\/|$)/)
-    expect(rowIds(docs[0])).toEqual(expect.arrayContaining([
-      'maestro-review-host', 'maestro-review-webhook', 'maestro-review-orchestrator', 'maestro-review-settings-rpc',
-    ]))
+    // The DSH host rows (webhook, host orchestrator, settings RPC) ship in @ddtcorex/dsh-maestro-review.
+    expect(rowIds(docs[0])).toEqual(['maestro-review-host', 'maestro-review-engine'])
   })
 
   it('installs the new name in the reviewer-ci profile', () => {
@@ -64,32 +61,7 @@ describe('package identity after the maestro-reviewer rename', () => {
   it('keeps the persisted legacy contracts', () => {
     expect(REVIEW_SOURCE_KIND).toBe('plugin:@ddtcorex/dsh-maestro-review')
     expect(historyPath('/h')).toBe(join('/h', 'dsh-maestro-review', 'reviews.json'))
-    expect(runtimeStatePath('/h')).toBe(join('/h', 'dsh-maestro-review', 'runtime.json'))
     expect(read('docker/entrypoint.sh')).toContain('/app/dsh-maestro-review')
     expect(read('src/host/engine.ts')).toContain("'dsh-maestro-reviewer'")
-  })
-
-  it('mentions the old name only for legacy contracts', () => {
-    // `dsh-maestro-reviewer` / `dsh-maestro-auditor` are preset ids, not the old package name.
-    const OLD = /dsh-maestro-review(?!er)/
-    const ALLOWED_FILES = [/^CHANGELOG\.md$/, /^tests\/package-identity\.test\.ts$/]
-    const ALLOWED_LINES = [
-      /plugin:@ddtcorex\/dsh-maestro-review/, // persisted message source kind
-      /dsh-maestro-review\/(reviews|runtime)\.json/, // on-disk data dir
-      /'dsh-maestro-review', '(reviews|runtime)\.json'/,
-      /\/app\/dsh-maestro-review/, // image history symlink
-      /Renamed from `@ddtcorex\/dsh-maestro-review`/,
-    ]
-    const files = execFileSync('git', ['ls-files'], { cwd: REPO_ROOT, encoding: 'utf-8' }).split('\n').filter(Boolean)
-    const offenders: string[] = []
-    for (const f of files) {
-      if (ALLOWED_FILES.some(r => r.test(f))) continue
-      let text: string
-      try { text = read(f) } catch { continue }
-      text.split('\n').forEach((line, i) => {
-        if (OLD.test(line) && !ALLOWED_LINES.some(r => r.test(line))) offenders.push(`${f}:${i + 1}`)
-      })
-    }
-    expect(offenders).toEqual([])
   })
 })

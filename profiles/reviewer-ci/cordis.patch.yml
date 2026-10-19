@@ -2,36 +2,16 @@
 #
 # `dsh-base` (see dsh.profile.bundles in package.json) already self-composes its
 # own ~80-row cordis.patch.yml (it ships a dsh.bundle.patch field). So does
-# @ddtcorex/maestro-reviewer itself, self-composing 5 rows: maestro-review-host,
-# maestro-review-engine, maestro-review-webhook, maestro-review-orchestrator,
-# maestro-review-settings-rpc
-# (verified 2026-09-03: using `insert:` for a row id the bundle already provides throws
-# "duplicate loader entry id" at boot). This file disables three of those rows (webhook,
-# settings-rpc, orchestrator; bare `- id: X` entries, no
-# `insert:` wrapper — the same pattern deepseek-harness's own headless bundle uses to
-# override `system-prompt`/`tools`) instead of re-inserting them.
-
-# maestro-review-webhook needs `webServer`, which this profile never provides (no dsh
-# web/web-app bundle) — disable it explicitly rather than leaving it waiting forever
-# on a service that will never arrive.
-- id: maestro-review-webhook
-  disabled: true
-
-# maestro-review-settings-rpc serves the Settings UI over the web `connection`
-# (via `maestroTunnel`) — meaningless in a CI container where neither service
-# exists. Verified 2026-09-04: leaving it enabled fails boot with
-# "1 entry did not activate .../settings-rpc.js: pending (waiting for
-# services: connection, maestroTunnel)".
-- id: maestro-review-settings-rpc
-  disabled: true
-
-# The host orchestrator resolves user settings and project mappings, which
-# CI has none of: the CI trigger calls the engine (maestro-review-engine, from
-# the bundle) directly with its configuration read from the job environment
-# (GITLAB_HOST, MAESTRO_GITLAB_TOKEN, REVIEW_BOT_USERNAME, REVIEW_MODEL_PROVIDER
-# and REVIEW_MODEL; see src/host/providers/ci-trigger.ts).
-- id: maestro-review-orchestrator
-  disabled: true
+# @ddtcorex/maestro-reviewer itself, with exactly two rows: maestro-review-host
+# (skills) and maestro-review-engine (the reviewEngine service). Neither needs a
+# web server or connection, so this profile overrides none of them; the DSH host
+# rows (webhook, host orchestrator, settings RPC) live in a separate plugin this
+# image never installs. Using `insert:` for a row id a bundle already provides
+# throws "duplicate loader entry id" at boot (verified 2026-09-03).
+#
+# The CI trigger calls the engine with its configuration read from the job
+# environment (GITLAB_HOST, MAESTRO_GITLAB_TOKEN, REVIEW_BOT_USERNAME,
+# REVIEW_MODEL_PROVIDER and REVIEW_MODEL; see src/host/providers/ci-trigger.ts).
 
 # New rows this profile needs that dsh-base/maestro-reviewer don't already provide.
 - insert:

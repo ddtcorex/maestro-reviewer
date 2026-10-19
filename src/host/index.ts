@@ -27,11 +27,4 @@ export function apply(ctx: Context): void {
   } catch (e: any) {
     try { (ctx as any).logger?.warn?.(`[review] skill provider effect failed: ${e?.message ?? String(e)}`) } catch {}
   }
-
-  // No RPC registration here on purpose. The channel belongs to settings-rpc.ts
-  // (row `maestro-review-settings-rpc`), which implements the real endpoints. A
-  // stub in this file used to claim the same channel; that stayed invisible only
-  // because apply() was never mounted. Once the `maestro-review-host` row made
-  // apply() run, both registrations collided and the Settings card died with:
-  //   webserver: duplicate prefix route "/maestro-reviewer" (then named after the package)
 }

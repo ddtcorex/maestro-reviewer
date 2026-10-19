@@ -12,7 +12,8 @@ describe('reviewer-ci rows', () => {
   it('the CI trigger runs through the engine, with no host orchestrator, webhook or settings row', () => {
     expect(profile).toMatch(/- id: maestro-review-ci-trigger\n\s+name: '@ddtcorex\/maestro-reviewer\/lib\/providers\/ci-trigger\.js'/)
     for (const id of ['maestro-review-orchestrator', 'maestro-review-webhook', 'maestro-review-settings-rpc']) {
-      expect(profile).toMatch(new RegExp(`- id: ${id}\\n\\s+disabled: true`))
+      expect(profile).not.toMatch(new RegExp(`- id: ${id}\\b`))
+      expect(bundle).not.toMatch(new RegExp(`- id: ${id}\\b`))
     }
   })
 
