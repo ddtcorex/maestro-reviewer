@@ -2,7 +2,7 @@
 #
 # `dsh-base` (see dsh.profile.bundles in package.json) already self-composes its
 # own ~80-row cordis.patch.yml (it ships a dsh.bundle.patch field). So does
-# @ddtcorex/dsh-maestro-review itself, self-composing 4 rows: maestro-review-host,
+# @ddtcorex/maestro-reviewer itself, self-composing 4 rows: maestro-review-host,
 # maestro-review-webhook, maestro-review-orchestrator, maestro-review-settings-rpc
 # (verified 2026-09-03: using `insert:` for a row id the bundle already provides throws
 # "duplicate loader entry id" at boot). This file overrides three of those rows (webhook,
@@ -58,7 +58,7 @@
     # error instead of silently calling the wrong model.
     reviewModel: !!js "process.env.REVIEW_MODEL ? { provider: process.env.REVIEW_MODEL_PROVIDER, model: process.env.REVIEW_MODEL } : undefined"
 
-# New rows this profile needs that dsh-base/dsh-maestro-review don't already provide.
+# New rows this profile needs that dsh-base/maestro-reviewer don't already provide.
 - insert:
     # The agent-preset registry is the 0.1.7 provider: it collects preset
     # definitions from loader rows, and this bundle now ships the reviewer and
@@ -75,4 +75,4 @@
         default: standard
 
     - id: maestro-review-ci-trigger
-      name: '@ddtcorex/dsh-maestro-review/lib/providers/ci-trigger.js'
+      name: '@ddtcorex/maestro-reviewer/lib/providers/ci-trigger.js'

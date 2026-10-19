@@ -5,13 +5,13 @@
     "profile": {
       "bundles": [
         "@deepseek-ai/dsh-base",
-        "@ddtcorex/dsh-maestro-review",
+        "@ddtcorex/maestro-reviewer",
         "@ddtcorex/maestro-skills"
       ]
     }
   },
   "dependencies": {
-    "@ddtcorex/dsh-maestro-review": "0.12.1",
+    "@ddtcorex/maestro-reviewer": "0.13.0",
     "@ddtcorex/maestro-skills": "^2.13.0",
     "@deepseek-ai/dsh": "0.2.0-rc.2",
     "@deepseek-ai/dsh-agent-preset-registry": "0.2.0-rc.2"
