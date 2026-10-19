@@ -40,6 +40,16 @@ describe('docker', () => {
     expect(df).toMatch(/apt-get install[^&]*\bgit\b/)
   })
 
+  it('ships the resolve job command: resolve.sh runs the compiled resolve CLI', () => {
+    const df = readFileSync('docker/Dockerfile', 'utf-8')
+    expect(df).toMatch(/COPY docker\/resolve\.sh \/resolve\.sh/)
+    expect(df).toMatch(/chmod \+x[^\n]*\/resolve\.sh/)
+    const sh = readFileSync('docker/resolve.sh', 'utf-8')
+    expect(sh).toMatch(/^#!\/bin\/sh/)
+    expect(sh).toMatch(/exec node \/app\/profiles\/reviewer-ci\/node_modules\/@ddtcorex\/maestro-reviewer\/lib\/ci-resolve-cli\.js/)
+    expect(readFileSync('src/host/ci-resolve-cli.ts', 'utf-8')).toMatch(/runResolve\(process\.env/)
+  })
+
   it('entrypoint.sh validates required env then execs dsh --profile reviewer-ci with no task text', () => {
     const sh = readFileSync('docker/entrypoint.sh', 'utf-8')
     expect(sh).toMatch(/MAESTRO_GITLAB_TOKEN/)
