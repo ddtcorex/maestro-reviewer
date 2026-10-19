@@ -1,30 +1,30 @@
 # @ddtcorex/maestro-reviewer
 
-> Renamed from `@ddtcorex/dsh-maestro-review` in 0.13.0. Profile owners: replace the
-> dependency with `@ddtcorex/maestro-reviewer`. Cordis row ids, the data directory
-> and settings keys are unchanged, so existing profile patches keep applying.
+The Maestro merge-request review engine and its GitLab CI flow: reviewer and
+auditor agents, comment and finding posting, review history and signals, the
+`resolve` job, the reviewer Docker image and the CI templates. It needs no DSH
+web host, no settings store and no local checkout.
 
-Automated merge-request review for the [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness):
-a GitLab merge-request pipeline, an orchestrator that spins up reviewer/auditor
-child agents on fresh worktrees, webhook intake for GitLab events, and a settings/tunnel
-client UI injected into the DSH Web slots.
-
-Part of the Maestro Harness suite (`dsh-maestro-*`). Cordis patch rows:
-`maestro-review-host` (package root, bundled skills), `maestro-review-webhook` (intake),
-`maestro-review-orchestrator` (pipeline), `maestro-review-settings-rpc` (settings UI),
-all served by this npm package.
+The DSH host side (GitLab webhook intake, project mappings with local
+worktrees, the Maestro Review Settings section, Telegram digests) is the
+separate plugin [`@ddtcorex/dsh-maestro-review`](https://github.com/ddtcorex/dsh-maestro-review),
+which runs this engine.
 
 ## What it provides
 
-- **GitLab pipeline**: webhook and CI intake, MR diff/thread tools and finding posting for GitLab.
-- **Orchestrator** — reviewer + auditor agent runs against a disposable worktree of the MR,
-  model selection overridable globally (`reviewModel`) and per project mapping.
-- **Webhook intake** — receives GitLab MR events, enqueues reviews (dedup + retention).
-- **Review findings/history/signals**: findings written through the `report_review_findings`
-  tool by tool-only review subagents (never free text); history + signals tracked per MR.
-- **Review tools** (workspace search, Magento/Hyva scans, query-log stats, GitLab diff tools) mounted into review runs.
-- **Client half** — settings section rendered into DSH Web slots; notification copy stays
-  here, delivery goes through the optional `maestroNotifier` service.
+- **Review engine** (`src/host/engine.ts`, Cordis row `maestro-review-engine`,
+  service `reviewEngine`): one review run from an explicit configuration
+  (GitLab URL, token and bot username, model, agent timeout, profile) and a
+  code access mode: `diff` (the GitLab diff only), `clone` (the source cloned
+  at the head SHA) or `workspace` (a worktree the caller prepares).
+- **Forge boundary** (`src/host/forge/`): the engine reaches GitLab only through
+  `ReviewForge`, implemented in `forge/gitlab/`.
+- **Findings, history and signals**: findings come only through the
+  `report_review_findings` tool of tool-only review agents; history and the
+  running and final MR markers are tracked per MR.
+- **Review tools** (workspace search, Magento and Hyva scans, query-log stats,
+  GitLab diff tools) mounted into review runs, and the bundled
+  `dsh-native-tools` skill (row `maestro-review-host`).
 
 ## CI reviewer (no local checkout)
 
@@ -44,7 +44,7 @@ through a small bridge job, with no DSH host and no project mapping.
   framework); **deep** runs once per head SHA on the `maestro-review::deep`
   label, cloning the MR head with a static-only audit.
 
-Full setup, per-case trigger workflows (quick/deep × CI/webhook), model
+Full setup, per-case trigger workflows (quick and deep, CI and webhook), model
 selection, and troubleshooting: [`docs/ci-reviewer-setup.md`](docs/ci-reviewer-setup.md).
 Templates live in `templates/`, the image in `docker/`.
 
@@ -72,6 +72,26 @@ pnpm build         # tsc -> lib/, plus the browser bundle lib/client.js
 ```
 
 See AGENTS.md for conventions (host/client split, secrets handling, live-validation rules).
+
+## Use from a DSH profile
+
+```sh
+dsh plugin --profile web add @ddtcorex/maestro-reviewer @ddtcorex/dsh-maestro-review
+```
+
+The engine alone provides the skill and the `reviewEngine` service; the
+webhook and Settings need `@ddtcorex/dsh-maestro-review`.
+
+## Development
+
+```sh
+pnpm install
+pnpm verify        # tsc --noEmit
+pnpm build         # tsc -> lib/
+pnpm test          # vitest run (engine-exports.test.ts reads lib/, so build first)
+```
+
+See AGENTS.md for conventions (trust model, forge boundary, secrets handling, live-validation rules).
 
 ## Release
 

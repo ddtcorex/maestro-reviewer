@@ -55,6 +55,26 @@
   deepened until the base is an ancestor of the head; if it still is not, the
   review continues with a warning.
 
+### Changed (split)
+
+- **maestro-reviewer is now the review engine plus the CI flow.** The DSH
+  host features (GitLab webhook intake, the host orchestrator with project
+  mappings, worktrees and the govard environment, the settings RPC, the
+  Maestro Review Settings section and Telegram digests) moved to the
+  `@ddtcorex/dsh-maestro-review` plugin, which runs this engine. The bundle
+  ships `maestro-review-host` and the new `maestro-review-engine` row (the
+  `reviewEngine` service) only, with no client bundle and no
+  `@deepseek-ai/dsh-client-connection` peer.
+- The CI trigger calls the engine with an explicit code access (`diff` or
+  `clone`) and reads `REVIEW_BOT_USERNAME`, `REVIEW_MODEL_PROVIDER` and
+  `REVIEW_MODEL` itself; the engine no longer detects CI from the
+  environment, and the reviewer-ci profile overrides no rows.
+- Engine forge calls go through `ReviewForge` (`src/host/forge/`), with GitLab
+  in `forge/gitlab/`; `gitlab-client`, `gitlab-auth` and `review-signals`
+  moved there.
+- The `lib/` paths the host plugin imports are pinned by
+  `tests/engine-exports.test.ts`.
+
 ### Changed (breaking, no compatibility path)
 
 - New reviewer and source templates: `resolve` then a child pipeline; the

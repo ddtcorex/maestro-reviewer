@@ -4,8 +4,8 @@ Run Maestro MR reviews from GitLab CI with zero project-local setup: one
 **shared reviewer project** holds all secrets and the reviewer image, while
 each source project only adds a small bridge job. Each source project can
 bring its own AI provider and key, configured on the reviewer project. The
-same orchestrator (`runReview()`) serves both the webhook flow (mapped
-projects on a live DSH host) and the CI flow, see
+same review engine (`reviewEngine`) serves both the CI flow and the webhook
+flow of a live DSH host running the `@ddtcorex/dsh-maestro-review` plugin, see
 [Coexistence](#7-coexistence-ci-yields-to-webhook).
 
 Templates: `templates/reviewer-project.gitlab-ci.yml` (copy into the reviewer
@@ -225,7 +225,8 @@ environment exists in the container). A project can default to deep with
 
 ### Case C: quick review via webhook mention (mapped projects)
 
-On a live DSH host with the project mapped (Settings > Maestro Review): comment
+On a live DSH host with the `@ddtcorex/dsh-maestro-review` plugin and the
+project mapped (Settings > Maestro Review): comment
 `@<bot-username>` on the MR. Routes `trigger=mention, mode=quick`. Unmapped
 projects get the diff-only fallback comment instead.
 
@@ -366,6 +367,9 @@ works by design; build and test it on a separate reviewer project.
   before capturing the report dir; keep that line if you fork `entrypoint.sh`.
 
 ## 10. Host observability (webhook flow)
+
+The webhook flow runs in `@ddtcorex/dsh-maestro-review`; its host log lines
+keep the `maestro-orchestrator:` prefix.
 
 - **Dry-run the CI contract** without model calls: `REVIEW_DRY_RUN=1`
   validates the review job's variables and exits before booting agents.
