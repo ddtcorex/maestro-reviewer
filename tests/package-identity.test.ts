@@ -53,7 +53,12 @@ describe('package identity after the maestro-reviewer rename', () => {
 
   it('installs the new name in the reviewer-ci profile', () => {
     const profile = JSON.parse(read('profiles/reviewer-ci/package.json')) as { dependencies: Record<string, string>, dsh: { profile: { bundles: string[] } } }
-    expect(profile.dependencies['@ddtcorex/maestro-reviewer']).toBe(pkg.version)
+    // The release commit bumps the package first; the pin follows in its own
+    // PR once the version is on npm (AGENTS.md release checklist, step 3).
+    const pin = profile.dependencies['@ddtcorex/maestro-reviewer']
+    expect(pin).toMatch(/^\d+\.\d+\.\d+$/)
+    const num = (v: string) => v.split('.').map(Number).reduce((a, n) => a * 1000 + n, 0)
+    expect(num(pin)).toBeLessThanOrEqual(num((pkg as unknown as { version: string }).version))
     expect(profile.dependencies).not.toHaveProperty('@ddtcorex/dsh-maestro-review')
     expect(profile.dsh.profile.bundles).toContain('@ddtcorex/maestro-reviewer')
   })
