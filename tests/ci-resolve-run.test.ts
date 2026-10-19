@@ -17,6 +17,7 @@ interface World {
   scoped?: Record<string, string>
   scopedStatus?: number
   projectVars?: string[]
+  protection?: Record<string, unknown> | null
   notes?: Array<{ author: { id: number }; body: string }>
 }
 
@@ -38,6 +39,11 @@ function gitlab(w: World) {
       if (tok !== RESOLVE) return json(401, {})
       if (w.settingStatus) return json(w.settingStatus, {})
       return json(200, w.setting === null ? { id: REVIEWER } : { id: REVIEWER, ci_pipeline_variables_minimum_override_role: w.setting ?? 'no_one_allowed' })
+    }
+    if (p === `/projects/${REVIEWER}/protected_branches/main`) {
+      if (tok !== RESOLVE) return json(403, {})
+      if (w.protection === null) return json(404, { message: '404 Not found' })
+      return json(200, w.protection ?? { name: 'main', allow_force_push: false, push_access_levels: [{ access_level: 40 }], merge_access_levels: [{ access_level: 40 }] })
     }
     if (p === `/projects/${REVIEWER}/variables`) return tok === RESOLVE ? json(200, (w.projectVars ?? []).map(key => ({ key, environment_scope: '*' }))) : json(403, {})
     const v = /^\/projects\/900\/variables\/([A-Z_]+)$/.exec(p)
@@ -61,7 +67,7 @@ function gitlab(w: World) {
 }
 
 const env = (o: Record<string, string | undefined> = {}) => ({
-  CI_PROJECT_ID: String(REVIEWER), CI_PROJECT_PATH: 'ci/reviewer', CI_PIPELINE_ID: '77', CI_PIPELINE_SOURCE: 'pipeline',
+  CI_PROJECT_ID: String(REVIEWER), CI_PROJECT_PATH: 'ci/reviewer', CI_COMMIT_REF_NAME: 'main', CI_PIPELINE_ID: '77', CI_PIPELINE_SOURCE: 'pipeline',
   CI_SERVER_HOST: 'git.example.com', CI_SERVER_URL: 'https://git.example.com', CI_PROJECT_DIR: '/builds/ci/reviewer',
   REVIEWER_IMAGE: 'ddtcorex/maestro-reviewer:0.14.0', REVIEW_RESOLVE_TOKEN: RESOLVE, MAESTRO_GITLAB_TOKEN: BOT, ...o,
 })
@@ -142,6 +148,23 @@ describe('runResolve', () => {
       expect(r.exitCode).toBe(1)
       expect(r.logs.join('\n')).toContain(name)
     }
+  })
+
+  it('refuses to run unless the pipeline branch only lets Maintainers change it', async () => {
+    const lv = (n: number) => [{ access_level: n }]
+    for (const protection of [
+      null,
+      { allow_force_push: false, push_access_levels: lv(40), merge_access_levels: lv(30) },
+      { allow_force_push: false, push_access_levels: lv(30), merge_access_levels: lv(40) },
+      { allow_force_push: true, push_access_levels: lv(40), merge_access_levels: lv(40) },
+      { allow_force_push: false, push_access_levels: [{ access_level: 40 }, { user_id: 9, access_level: null }], merge_access_levels: lv(40) },
+    ]) {
+      const r = await run({ protection })
+      expect(r.exitCode).toBe(1)
+      expect(r.logs.join('\n')).toMatch(/protect/)
+      expect(r.child).toBeUndefined()
+    }
+    expect((await run({ protection: { allow_force_push: false, push_access_levels: lv(0), merge_access_levels: lv(40) } })).exitCode).toBe(0)
   })
 
   it('asks for deep when the MR carries the label', async () => {

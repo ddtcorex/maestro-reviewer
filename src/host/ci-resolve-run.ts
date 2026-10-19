@@ -65,6 +65,20 @@ export async function runResolve(env: Record<string, string | undefined>, deps: 
       throw new ResolveError(`pipeline variables are not restricted on the reviewer project (minimum override role "${setting}"); set it to no_one_allowed (Settings > CI/CD > Variables) before any review can run`)
     }
 
+    // The pipeline file and the protected variables are only as safe as the
+    // branch they run from: anyone who can push or merge there can read every key.
+    const pipelineRef = need('CI_COMMIT_REF_NAME')
+    const protRes = await get(resolveToken, `/projects/${reviewerId}/protected_branches/${encodeURIComponent(pipelineRef)}`)
+    if (protRes.status === 404) throw new ResolveError(`branch ${pipelineRef} of the reviewer project is not protected; protect it with push and merge for Maintainers only`)
+    if (!protRes.ok) throw new ResolveError(`cannot read the protection of branch ${pipelineRef} (${protRes.status}): ${MAINTAINER_HINT}`)
+    type Level = { access_level?: number | null; user_id?: number | null; group_id?: number | null; deploy_key_id?: number | null }
+    const prot = await protRes.json() as { allow_force_push?: boolean; push_access_levels?: Level[]; merge_access_levels?: Level[] }
+    const maintainersOnly = (levels: Level[] | undefined) => (levels ?? []).every(l =>
+      l.user_id == null && l.group_id == null && l.deploy_key_id == null && typeof l.access_level === 'number' && (l.access_level === 0 || l.access_level >= 40))
+    if (prot.allow_force_push === true || !maintainersOnly(prot.push_access_levels) || !maintainersOnly(prot.merge_access_levels)) {
+      throw new ResolveError(`branch ${pipelineRef} of the reviewer project must be protected for Maintainers only (push and merge), with force push off and no per-user or per-group grants`)
+    }
+
     const shadowing = new Set<string>()
     let page = '1'
     for (let n = 0; page && n < 20; n++) {
