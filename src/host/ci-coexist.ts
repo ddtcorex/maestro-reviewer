@@ -1,5 +1,5 @@
 import { gitlabAuthHeaders } from './gitlab-auth.js'
-import { parseReviewMarker } from './review-marker.js'
+import { parseReviewMarker, parseReviewMeta, type ReviewMeta } from './review-marker.js'
 
 /**
  * Coexistence checks (spec §4): the CI flow yields to a completed review of
@@ -42,4 +42,45 @@ export async function hasRunningEyes(
   } catch {
     return false
   }
+}
+
+const MAX_NOTE_PAGES = 20
+
+/**
+ * The newest completed review on the MR, read from GitLab (spec §4.1): the
+ * first note, newest first, authored by the token's own user that carries
+ * valid review metadata, or (for comments from before the metadata) a
+ * completed marker. Notes by anyone else are ignored, so a pasted block can
+ * never suppress a review. Throws when GitLab cannot be read so the caller
+ * can fall back; returns undefined when the MR simply has no bot review.
+ */
+export async function latestCompletedReview(
+  fetcher: typeof fetch,
+  opts: { baseUrl: string; token: string; projectId: number; mrIid: number },
+): Promise<ReviewMeta | undefined> {
+  const headers = gitlabAuthHeaders(opts.token)
+  const me = await fetcher(`${opts.baseUrl}/api/v4/user`, { headers })
+  const user = me.ok ? await me.json() as { id?: unknown } : undefined
+  if (typeof user?.id !== 'number') throw new Error(`cannot resolve the bot user (GET /user -> ${me.status})`)
+  const botId = user.id
+  let page = '1'
+  for (let n = 0; page && n < MAX_NOTE_PAGES; n++) {
+    const res = await fetcher(
+      `${opts.baseUrl}/api/v4/projects/${opts.projectId}/merge_requests/${opts.mrIid}/notes?sort=desc&order_by=created_at&per_page=100&page=${page}`,
+      { headers },
+    )
+    if (!res.ok) throw new Error(`GitLab notes API error ${res.status}`)
+    const notes = await res.json() as Array<{ system?: boolean; author?: { id?: number }; body?: string; created_at?: string }>
+    for (const note of notes) {
+      if (note.system === true || note.author?.id !== botId || typeof note.body !== 'string') continue
+      const meta = parseReviewMeta(note.body)
+      if (meta !== undefined) return meta
+      const marker = parseReviewMarker(note.body)
+      if (marker?.status === 'completed') {
+        return { v: 1, headSha: marker.sha, mode: marker.flow === 'ci-deep' ? 'deep' : 'quick', models: [], findings: [], at: note.created_at ?? '' }
+      }
+    }
+    page = res.headers.get('x-next-page') ?? ''
+  }
+  return undefined
 }

@@ -5,7 +5,7 @@ import type { ReviewRequest, ReviewResult } from '../events.js'
 import { lastCompletedReview } from '../review-history.js'
 import type { ReviewSkillProfile } from '../skills-tool.js'
 import { gitlabAuthHeaders } from '../gitlab-auth.js'
-import { hasCompletedReviewForSha, hasRunningEyes } from '../ci-coexist.js'
+import { hasCompletedReviewForSha, hasRunningEyes, latestCompletedReview } from '../ci-coexist.js'
 
 export const name = 'maestro-review-ci-trigger'
 export const inject = ['reviewRunner'] as const
@@ -93,8 +93,17 @@ export async function runCiTrigger(
   // on every MR pipeline, so skip when this exact head SHA already completed — and
   // skip new pushes too unless REVIEW_ON_PUSH=1. A re-run then gets the H6 incremental
   // block from history for free. Cache miss (no history) fails open toward running.
+  // State comes from GitLab (spec §4.1): the newest bot review comment. The runner
+  // cache is per runner and races across concurrent jobs, so it is only a fallback
+  // when GitLab cannot be read.
   const history = deps.history ?? { lastCompletedReview }
-  const prior = await history.lastCompletedReview(config.sourceProjectId, config.mrIid)
+  let prior: { headSha?: string } | undefined
+  try {
+    prior = await latestCompletedReview(deps.fetcher ?? fetch, { baseUrl: config.gitlabBaseUrl, token: config.gitlabToken, projectId: config.sourceProjectId, mrIid: config.mrIid })
+  } catch (err) {
+    console.error(`[review] review state unreadable from GitLab (${err instanceof Error ? err.message : String(err)}), falling back to the runner cache`)
+    prior = await history.lastCompletedReview(config.sourceProjectId, config.mrIid)
+  }
   let result: ReviewResult
   if (prior?.headSha === headSha) {
     result = { ok: true, summary: `already reviewed at ${headSha}, skipping`, failures: [], durationMs: 0 }
@@ -120,6 +129,7 @@ export async function runCiTrigger(
       mrIid: config.mrIid,
       sourceBranch,
       headSha,
+      ...(prior?.headSha !== undefined ? { priorHeadSha: prior.headSha } : {}),
       trigger: 'mention',
       mode: config.mode,
       scope: { kind: 'mr' },

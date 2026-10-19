@@ -1424,10 +1424,11 @@ export function apply(ctx: Context, config: Config): void {
       // H6 incremental context: what changed since the last completed review on this MR.
       let incrementalBlock: string | undefined
       try {
-        const prior = await lastCompletedReview(payload.projectId, payload.mrIid)
-        if (prior?.headSha !== undefined && currentHeadSha !== undefined && prior.headSha !== currentHeadSha) {
-          const compare = await fetchCompare(resolved.gitlabBaseUrl, gitlabToken, payload.projectId, prior.headSha, currentHeadSha)
-          incrementalBlock = buildIncrementalBlock(compare, prior.headSha, currentHeadSha)
+        // CI hands over the prior head it read from GitLab; the history store is runner-local there.
+        const priorHeadSha = payload.priorHeadSha ?? (await lastCompletedReview(payload.projectId, payload.mrIid))?.headSha
+        if (priorHeadSha !== undefined && currentHeadSha !== undefined && priorHeadSha !== currentHeadSha) {
+          const compare = await fetchCompare(resolved.gitlabBaseUrl, gitlabToken, payload.projectId, priorHeadSha, currentHeadSha)
+          incrementalBlock = buildIncrementalBlock(compare, priorHeadSha, currentHeadSha)
         }
       } catch {
         // Optional optimization only — never fail the review for it.
