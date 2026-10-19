@@ -1,302 +1,338 @@
-# CI Reviewer — Setup & Per-Case Guide
+# CI Reviewer: Setup and Per-Case Guide
 
 Run Maestro MR reviews from GitLab CI with zero project-local setup: one
 **shared reviewer project** holds all secrets and the reviewer image, while
-each source project only adds a small bridge job. The same orchestrator
-(`runReview()`) serves both the webhook flow (mapped projects on a live DSH
-host) and the CI flow — see [Coexistence](#6-coexistence-ci-yields-to-webhook).
+each source project only adds a small bridge job. Each source project can
+bring its own AI provider and key, configured on the reviewer project. The
+same orchestrator (`runReview()`) serves both the webhook flow (mapped
+projects on a live DSH host) and the CI flow, see
+[Coexistence](#7-coexistence-ci-yields-to-webhook).
 
 Templates: `templates/reviewer-project.gitlab-ci.yml` (copy into the reviewer
 project), `templates/source-project.gitlab-ci.yml` (copy into each source
-project). Image: `docker/Dockerfile` → published to Docker Hub as
+project). Image: `docker/Dockerfile`, published to Docker Hub as
 `ddtcorex/maestro-reviewer:<version>` (the template pins an exact version,
-e.g. `0.13.0` — see [troubleshooting](#7-troubleshooting) for why `:latest`
-is deliberately not used).
+see [troubleshooting](#9-troubleshooting) for why `:latest` is deliberately
+not used).
 
 ---
 
+## 0. Trust model
+
+A trigger can override **every** variable of the downstream pipeline:
+project CI variables, predefined ones such as `CI_JOB_TOKEN` and
+`CI_SERVER_HOST`, and the job image when it is declared through a variable.
+If source bridges could pass variables, anyone able to start a reviewer
+pipeline could run their own image with the reviewer's secrets, or send the
+token or an LLM key to a server of their choice. No check inside the job can
+detect this, because the attacker controls the whole environment.
+
+So the reviewer project **forbids pipeline variables**, and the reviewer
+learns everything it needs from GitLab itself:
+
+```mermaid
+flowchart LR
+  A["Source MR pipeline\nbridge, no variables"] --> B["Reviewer pipeline\nresolve job"]
+  B -- "GraphQL: who triggered me?\nupstream project + MR" --> G[(GitLab)]
+  B -- "review-child.yml\nliterals only" --> C["Child pipeline\nreview job\nenvironment review/ID"]
+  C --> D["MR comment"]
+
+  classDef focal fill:#eb6c36,stroke:#2d3142,color:#fff
+  class C focal
+```
+
+- `resolve` refuses to run unless the setting is `no_one_allowed`.
+- It reads the upstream pipeline through GraphQL (`pipeline.upstream`), the
+  MR from the upstream ref (`refs/merge-requests/<iid>/head`), the MR labels,
+  and the source project's scoped provider settings.
+- It writes `review-child.yml`, where the source project id, MR iid, GitLab
+  host and provider route are **literal values**, and the review job carries
+  `environment: review/<source project id>`, which is what makes per-project
+  variables reach it.
+- The review job runs `/entrypoint.sh` as before.
+
+All of this was proven on GitLab CE 18.11.12 with eight probes; the
+maintainers' local rig reruns them after every GitLab version change.
+
 ## 1. One-time setup: the reviewer project
 
-1. Create a **private** GitLab project (e.g. `my-group/ci/reviewer_ci`) to hold
-   secrets. Set **Settings → CI/CD → General pipelines → Custom CI config path**
-   to the file holding the reviewer template (e.g. `maestro-reviewer.yml`).
-2. Copy `templates/reviewer-project.gitlab-ci.yml` into that path.
-3. Set CI/CD variables (**Protected + Masked**) on the reviewer project:
-   - `MAESTRO_GITLAB_TOKEN` (**required**) — a user PAT, Group or Project
-     Access Token with **`api`** scope. Proved on GitLab 18.11 that
-     `CI_JOB_TOKEN` is **not** enough: reads work (`GET` = 200) but posting
-     the review comment fails (`POST /notes` = 401) even when the source
-     project allowlists the reviewer. The run would "complete" without ever
-     posting. Prefer a bot/group token where the instance allows creating
-     one (a human PAT needs yearly rotation).
-   - `DEEPSEEK_API_KEY` (**required** unless using the route below) — the
-     sole baked default, serves `deepseek-official` straight from
-     `api.deepseek.com`. **Or** set `REVIEW_LLM_API_KEY` + `REVIEW_LLM_BASE_URL`
-     + `REVIEW_LLM_MODEL` instead to point the reviewer at any
-     OpenAI-compatible endpoint (self-hosted, Azure OpenAI, OpenRouter, a
-     private gateway, ...) — see [section 5](#5-model-selection).
-   - `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` (optional) — review digest.
-4. The reviewer job needs **no source checkout** (`GIT_STRATEGY: none`); it
-   boots `dsh --profile reviewer-ci` inside the image.
+1. Create a **private** GitLab project (for example `my-group/ci/reviewer`).
+   Optionally set **Settings > CI/CD > General pipelines > Custom CI config
+   path** to the file holding the reviewer template.
+2. **Forbid pipeline variables:** **Settings > CI/CD > Variables > Minimum
+   role to use pipeline variables = No one allowed** (API field
+   `ci_pipeline_variables_minimum_override_role: no_one_allowed`).
+3. Copy `templates/reviewer-project.gitlab-ci.yml` and pin `REVIEWER_IMAGE`.
+4. Set the CI/CD variables (all **Protected + Masked** where GitLab allows):
 
-### Bot identity (recommended)
+| Variable | Environment scope | What |
+|---|---|---|
+| `MAESTRO_GITLAB_TOKEN` | `*` | bot token, `api` scope: Developer on every source project, at least Reporter on this project (see [Bot identity](#bot-identity)) |
+| `REVIEW_RESOLVE_TOKEN` | `resolve` | project access token **of this project**, Maintainer, `read_api` |
+| `REVIEW_BOT_USERNAME` | `*` | the bot's username (recognition label for its own markers) |
+| `DEEPSEEK_API_KEY`, or the `REVIEW_LLM_*` triple | `*` | the default provider, see [section 6](#6-model-selection) |
+| `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` | `*` | optional review digest |
+
+`REVIEW_RESOLVE_TOKEN` can read the setting and every project's scoped
+variables, including other clients' keys. Its `resolve` scope is what keeps it
+out of the review job, where an LLM agent reads untrusted MR content: GitLab
+only injects a variable into jobs whose environment matches its scope.
+`CI_JOB_TOKEN` cannot replace `MAESTRO_GITLAB_TOKEN`: proven on GitLab 18.11,
+reads work (`GET` = 200) but posting the review comment fails
+(`POST /notes` = 401) even when the source project allowlists the reviewer.
+
+### Bot identity
 
 Comment authorship follows the token owner: every note the reviewer posts is
 attributed to whoever owns `MAESTRO_GITLAB_TOKEN`, while
-`REVIEW_BOT_USERNAME` is only the recognition label the reviewer uses to
-clear its own 👀 markers and dedupe its own threads — it grants no
-permission. Pair them deliberately:
+`REVIEW_BOT_USERNAME` is only the label the reviewer uses to clear its own
+award markers and dedupe its own threads; it grants no permission.
 
 1. Create a **Project Access Token** on the reviewer project (`api` scope,
-   Developer role, a descriptive name such as `maestro-reviewer`). GitLab
-   auto-creates a bot user for it (`project_<id>_bot_<random>`, visible in
-   the project's members). A project token lives at most 1 year — record the
-   expiry and rotate before it lapses, otherwise jobs "complete" without ever
-   posting (`POST /notes` = 401). A personal access token also works but
-   attributes every review to you and dies with your access — prefer the bot.
-2. Set `MAESTRO_GITLAB_TOKEN` to that token's secret (shown once at
-   creation) and `REVIEW_BOT_USERNAME` to the bot username, as a matching
-   pair.
-3. Invite the bot user into **each source project** (Developer role), or once
-   at the shared group level. Without membership the reviewer job fails when
-   posting (`POST /notes` = 401/403) — the token is scoped to the reviewer
-   project until the bot is invited elsewhere.
+   Developer role, a name such as `maestro-reviewer`). GitLab creates a bot
+   user for it (`project_<id>_bot_<random>`). A project token lives at most 1
+   year: record the expiry and rotate before it lapses, otherwise jobs
+   "complete" without ever posting (`POST /notes` = 401).
+2. Set `MAESTRO_GITLAB_TOKEN` to its secret and `REVIEW_BOT_USERNAME` to the
+   bot username, as a pair.
+3. Invite the bot user into **each source project** (Developer), or once at
+   the shared group level.
 
-Note the separate bridge permission: the downstream `trigger:` runs as the
-user who fired the source pipeline, so every developer opening MRs also
-needs Developer+ access on the reviewer project — otherwise the bridge fails
-with `downstream_bridge_project_not_found` and no reviewer pipeline exists
-at all (proven live: author without membership, MR pipeline green via
-`allow_failure`, zero review comments).
+The bridge runs as the user who fired the source pipeline, so every developer
+opening MRs also needs Developer access on the reviewer project, otherwise
+the bridge fails with `downstream_bridge_project_not_found`. With pipeline
+variables forbidden that access only lets them start a reviewer pipeline; it
+no longer lets them change what it runs.
 
 ## 2. Per-source setup: the bridge job
 
-1. Copy `templates/source-project.gitlab-ci.yml` into the source project
-   (or merge its `maestro:trigger-review` job into the existing config).
-2. The bridge holds **no secrets and no image** — it only forwards
-   `SOURCE_PROJECT_ID`, `MR_IID`, `GITLAB_HOST` plus optional overrides.
-3. The GitLab user (or trigger token) firing the source pipeline needs
-   **Developer+ access on the reviewer project**, otherwise the downstream
-   bridge fails. If the reviewer project's default branch is not `main`,
-   set the bridge's `branch:` to match.
+1. Copy the `maestro:trigger-review` job of
+   `templates/source-project.gitlab-ci.yml` into the source project and set
+   `trigger.project` to the reviewer project path (and `branch` to its
+   default branch if that is not `main`).
+2. The bridge holds **no secrets, passes no variables and forwards none**
+   (`inherit: variables: false`, `forward: yaml_variables: false`). A bridge
+   that passes any variable is rejected by GitLab
+   (`downstream_pipeline_creation_failed`).
+3. Everything that used to be a bridge variable (mode, profile, re-review on
+   push) is now a reviewer-project variable scoped to this project, see the
+   next section.
 
-## 3. Trigger cases
+## 3. Per-project settings
 
-### Case A — Quick review, automatic (default)
+Variables on the **reviewer project** with environment scope
+`review/<source project id>` (for example `review/123`) apply to that source
+project only; scope `*` holds the defaults. A scoped value wins over `*`.
+
+| Variable | Meaning |
+|---|---|
+| `REVIEW_LLM_PROVIDER` | `openai`, `anthropic`, `gemini`, `openrouter`, `deepseek` or `custom` |
+| `REVIEW_LLM_API_KEY` | the project's own provider key (masked) |
+| `REVIEW_LLM_MODEL` | model id, required with a key |
+| `REVIEW_LLM_BASE_URL` | required for `custom`, an override of the preset otherwise |
+| `REVIEW_LLM_API` | `openai-completions` (default) or `openai-responses` |
+| `REVIEW_REQUIRE_PROJECT_KEY` | `1`: never fall back to the default key |
+| `REVIEW_MODE` | `quick` (default) or `deep` |
+| `REVIEW_PROFILE` | `magento2`, `laravel`, `symfony`, `wordpress`, `generic` |
+| `REVIEW_ON_PUSH` | `1`: re-review new pushes (default: first review only) |
+
+Presets, all OpenAI-compatible endpoints:
+
+| `REVIEW_LLM_PROVIDER` | Base URL |
+|---|---|
+| `openai` | `https://api.openai.com/v1` |
+| `anthropic` | `https://api.anthropic.com/v1` |
+| `gemini` | `https://generativelanguage.googleapis.com/v1beta/openai` |
+| `openrouter` | `https://openrouter.ai/api/v1` |
+| `deepseek` | `https://api.deepseek.com` |
+| `custom` | none, set `REVIEW_LLM_BASE_URL` |
+
+There is no default model per preset: model names change too often.
+
+**A project route is all or nothing.** GitLab merges variables one by one,
+so a project that scoped only a key and a model would inherit the default
+base URL and send its key to the default provider. `resolve` therefore
+requires, at the project's own scope, `REVIEW_LLM_MODEL` and either
+`REVIEW_LLM_PROVIDER` or `REVIEW_LLM_BASE_URL` whenever `REVIEW_LLM_API_KEY`
+is scoped, and rejects LLM settings scoped without a key. It fails the
+reviewer pipeline naming what is missing. On a project route the
+default-scope `REVIEW_MODEL_PROVIDER`/`REVIEW_MODEL` pin is ignored.
+
+**Require switch.** With `REVIEW_REQUIRE_PROJECT_KEY=1` at the project's
+scope and no scoped key, the MR gets one note ("AI review is not configured
+for this project", marked `<!-- maestro-review-unconfigured -->`, posted once)
+and no model is called. Use it for a client who pays for their own reviews,
+so a missing key never silently bills the default key.
+
+## 4. Trigger cases
+
+### Case A: quick review, automatic (default)
 
 The bridge fires on every MR pipeline (`merge_request_event`). The reviewer
-runs `quick` — diff-only by default (unmapped never applies here since the CI
-profile has no mappings). With `REVIEW_PROFILE` set to a non-generic profile
-(e.g. `magento2`), quick instead clones the source at the head SHA and runs
-the profile's reviewer on the checkout, reviewer-only (no auditor — same
-static, no-runtime constraint as Case B's auditor, just without the audit
-section). The comment header then carries the profile
-(`` `quick` · `magento2` ``). `REVIEW_PROFILE: "generic"` (or unset) keeps the
-cheap diff-only path. Posts `## 🤖 Maestro Review`. Artifacts
-`review-report.json` / `review-report.md` are always uploaded (even on
-skip/failure).
+runs `quick`: diff-only for the `generic` profile; with a framework profile
+(for example `magento2`) it clones the source at the head SHA and runs the
+profile's reviewer on the checkout, reviewer-only. The comment header carries
+the profile. Artifacts `review-report.json` and `review-report.md` are always
+uploaded by the review job (even on skip or failure).
 
-No per-MR action needed. Same head SHA never reviews twice
-([push-gate](#4-push-gate--re-review)).
+### Case B: deep review, on demand
 
-### Case B — Deep review, on demand
+Add the MR label **`maestro-review::deep`**, then retry the bridge job or
+push. `resolve` turns the label into a deep request:
 
-Deep needs a checkout, which the CI job creates itself: it clones the source
-project at the MR head SHA with `MAESTRO_GITLAB_TOKEN` (oauth2), then reuses
-the mapped machinery **reviewer-only** — there is no govard runtime in the
-container, so the auditor runs a **static-only** audit (no environment,
-no test suite, no Environment & Test Suite section).
+- Deep runs **once per head SHA**: it runs even when that SHA already has a
+  quick review, and skips only when the bot already posted a deep review for
+  it.
+- After the deep review is posted the bot removes the label, so every deep
+  run (the costly one) is an explicit request. A failed run keeps the label,
+  so a retry works.
 
-Two ways to trigger:
+Deep clones the source at the MR head SHA with `MAESTRO_GITLAB_TOKEN`
+(oauth2) and runs reviewer plus a **static-only** auditor (no runtime
+environment exists in the container). A project can default to deep with
+`REVIEW_MODE=deep` at its scope.
 
-1. **Manual downstream run** (recommended for one-offs): GitLab UI →
-   reviewer project → **Run pipeline** on its default branch with variables
-   `SOURCE_PROJECT_ID`, `MR_IID`, `GITLAB_HOST`, `REVIEW_MODE=deep`
-   (plus optional `REVIEW_PROFILE`, `REVIEW_ON_PUSH=1`).
-   Do **not** create the pipeline via API: an API-created pipeline has
-   `source=api`, which matches none of the job rules and yields an empty
-   pipeline. The UI run has `source=web`, which matches the manual rule.
-2. **Per-MR bridge override**: set `REVIEW_MODE: "deep"` in the source
-   project's bridge variables — every MR pipeline of that project then
-   reviews deep.
+### Case C: quick review via webhook mention (mapped projects)
 
-### Case C — Quick review via webhook mention (mapped projects)
+On a live DSH host with the project mapped (Settings > Maestro Review): comment
+`@<bot-username>` on the MR. Routes `trigger=mention, mode=quick`. Unmapped
+projects get the diff-only fallback comment instead.
 
-On a live DSH host with the project mapped (Settings -> Maestro Review): comment
-`@<bot-username>` on the MR. Routes `trigger=mention, mode=quick`.
-Unmapped projects get the diff-only fallback comment instead.
-
-### Case D — Deep review via webhook (mapped projects only)
+### Case D: deep review via webhook (mapped projects only)
 
 Comment `@<bot-username>` plus the `/maestro deep` slash command or the
-phrase "deep review" (a bare "deep" never triggers — too loose). Runs
-reviewer + auditor with the full environment + test-suite workflow.
-Unmapped projects get the **Not started** decline comment **via webhook**
-(deep requires a local checkout; the CI flow in Case B is the alternative —
-it skips the decline and clones instead). The decline is recorded as
-`completed` in history, not failed.
+phrase "deep review" (a bare "deep" never triggers). Runs reviewer plus
+auditor with the full environment and test-suite workflow. Unmapped projects
+get the **Not started** decline comment via webhook (deep needs a local
+checkout; Case B is the CI alternative). The decline is recorded as
+`completed` in history.
 
-### Case E — Re-reviewing pushes
+### Case E: re-reviewing pushes
 
-- **CI**: set `REVIEW_ON_PUSH: "1"` (bridge variable or manual run).
-  Unset = only the first review runs; new pushes are skipped. Same-SHA
-  reruns always skip regardless.
-- **Webhook**: Settings -> Maestro Review -> `autoRereviewOnPush` (same semantics),
-  plus the webhook push-gate: a push only re-reviews an MR that already has a
-  completed review in host history (otherwise every newly opened MR would be
-  reviewed twice). Review-on-assign defaults **on**; re-review-on-push
-  defaults **off**; both support per-project override of the global value.
+- **CI**: `REVIEW_ON_PUSH=1` at the project's scope (or `*`). Unset means
+  only the first review runs and new pushes are skipped; the same head SHA
+  always skips.
+- **Webhook**: Settings > Maestro Review > `autoRereviewOnPush` (same
+  semantics), plus the webhook push-gate: a push only re-reviews an MR that
+  already has a completed review in host history. Review-on-assign defaults
+  **on**; re-review-on-push defaults **off**; both support per-project
+  override of the global value.
 
-## 4. Push-gate & re-review
+## 5. Push-gate and re-review
 
-The bridge fires on **every** MR pipeline, so the reviewer gates on the head
-SHA before booting any agent:
+The bridge fires on **every** MR pipeline, so the review job gates on the
+head SHA before booting any agent:
 
 | Situation | Result |
 |---|---|
-| Same head SHA already completed | `already reviewed at <sha>, skipping` |
+| Same head SHA already reviewed | `already reviewed at <sha>, skipping` |
 | New commits, `REVIEW_ON_PUSH` unset | `new commits since <sha> but REVIEW_ON_PUSH is not set, skipping` |
-| New commits, `REVIEW_ON_PUSH=1` | runs (quick gets the incremental-changes block from history) |
-| Head SHA already has a completed **CI-posted** review comment | `webhook already reviewed <sha> — skipping` (see [§6](#6-coexistence-ci-yields-to-webhook): only marker-carrying comments are visible to this check) |
-| 👀 running-marker present | `another review is running — skipping` |
+| New commits, `REVIEW_ON_PUSH=1` | runs (quick gets the incremental-changes block) |
+| Head SHA has a completed bot review marker | `webhook already reviewed <sha>, skipping` |
+| The bot's eyes award is on the MR | `another review is running, skipping` |
+| Deep requested, bot deep review exists for the SHA | `deep review already completed at <sha>, skipping` (label removed) |
 
-The gate reads its state from GitLab: the newest review comment posted by
-the token's own user on the MR, through the hidden metadata block next to
-the review marker (comments from before 0.14 are read through the marker).
-Notes by anyone else are ignored. The runner cache
-(`maestro-review-$SOURCE_PROJECT_ID-$MR_IID`, `.maestro-history/`) is only a
-fallback for when GitLab cannot be read; a `resource_group` of the same shape
-runs one review per MR at a time. When neither has an answer the job fails
-open toward reviewing. Report files are written for skips too.
+The gate reads its state from GitLab: the newest review comment **posted by
+the token's own user**, through the hidden metadata block next to the review
+marker. Comments without that block (posted before 0.14) do not count, so
+each MR open during the upgrade is reviewed once more. Notes and awards by
+anyone else are ignored, so a pasted marker or a human's eyes reaction cannot
+suppress a review. The runner cache (`.maestro-history/`, keyed per MR) is
+only a fallback for when GitLab cannot be read, and a per-MR `resource_group`
+runs one review per MR at a time.
 
-```mermaid
-flowchart TB
-  A["MR pipeline"] --> B["maestro:trigger-review"]
-  B --> C["Reviewer job: head SHA\ncompleted before?"]
-  C -- yes --> D["skip: already reviewed"]
-  C -- no --> E["REVIEW_ON_PUSH=1\nor first review?"]
-  E -- no --> F["skip: new commits,\nflag unset"]
-  E -- yes --> G["Marker for SHA\nin MR notes?"]
-  G -- yes --> H["skip: already reviewed"]
-  G -- no --> I["Eyes running\nmarker?"]
-  I -- yes --> J["skip: another review running"]
-  I -- no --> K["Run review + post comment"]
+## 6. Model selection
 
-  classDef focal fill:#eb6c36,stroke:#2d3142,color:#fff
-  classDef muted fill:#f5f5f5,stroke:#8a94a6,color:#8a94a6
-  class K focal
-  class D,F,H,J muted
-```
+No settings mount required; everything is variable driven.
 
-## 5. Model selection
+| Route | When | Uses |
+|---|---|---|
+| project | the project has a scoped `REVIEW_LLM_API_KEY` | its key and model, the preset or scoped base URL ([section 3](#3-per-project-settings)) |
+| default, bring your own | `REVIEW_LLM_API_KEY` at `*` | `REVIEW_LLM_BASE_URL`, `REVIEW_LLM_MODEL` (both required), optional `REVIEW_LLM_API` |
+| default, baked | nothing above | deepseek-official from `api.deepseek.com`, `DEEPSEEK_API_KEY` |
 
-No settings mount required — everything is env-driven:
+- `REVIEW_MODEL_PROVIDER` + `REVIEW_MODEL` (set both or neither) pin a model
+  on the default route; a project route ignores them.
+- Base URLs and model ids are charset-checked before they reach the settings
+  file; anything else fails closed.
 
-| Keys set | Route |
-|---|---|
-| `REVIEW_LLM_API_KEY` set | **bring-your-own OpenAI-compatible endpoint** (overlays the default) |
-| Nothing above set | deepseek (sole baked default; `deepseek-official` straight from `api.deepseek.com` — needs `DEEPSEEK_API_KEY` at call time) |
+## 7. Coexistence: CI yields to webhook
 
-- **Bring-your-own OpenAI-compatible endpoint** (self-hosted, Azure OpenAI,
-  OpenRouter, a private gateway, ...) — set:
-  - `REVIEW_LLM_API_KEY` (**required** to select this route, Protected +
-    Masked) — the endpoint's API key; never touches the shell, resolved by
-    `dsh` at call time.
-  - `REVIEW_LLM_BASE_URL` (**required** once `REVIEW_LLM_API_KEY` is set; the
-    job fails closed otherwise) — e.g. `https://my-gateway.example.com/v1`.
-  - `REVIEW_LLM_MODEL` (**required** once `REVIEW_LLM_API_KEY` is set; the
-    job fails closed otherwise) — the model id as the endpoint expects it.
-  - `REVIEW_LLM_API` (optional, default `openai-completions`) — the wire
-    protocol: `openai-completions` or `openai-responses`. Any other value
-    fails closed (only OpenAI-compatible protocols are supported).
-- `REVIEW_MODEL_PROVIDER` + `REVIEW_MODEL` (pair — set both or neither;
-  ID without provider fails closed, provider without ID is ignored). This is
-  a separate, higher-priority per-project override on top of whichever route
-  above is selected — leave unset to just use the route's default model.
-- `REVIEW_PROFILE`: `magento2 | laravel | symfony | wordpress | generic`
-  (unset = legacy diff-only generic review; the reviewer fails closed if it
-  cannot load the full skill set).
-
-## 6. Coexistence: CI yields to webhook
-
-CI-posted comments end with an invisible marker:
+CI-posted comments end with an invisible marker and the metadata block:
 
 ```html
 <!-- maestro-review sha=<headSHA> flow=<ci-quick|ci-deep> status=completed -->
+<!-- maestro-review-meta:v1 <base64url> -->
 ```
 
-Before booting, **every CI run** (quick and deep) lists the MR notes and
-skips when a completed marker for the same head SHA exists. The
-webhook/mapped path posts **marker-free** comments, so this check can only
-see CI-posted reviews — it never yields to a webhook review, and a webhook
-review never yields to CI. Consequences:
+Before booting, every CI review skips when a completed bot marker for the
+same head SHA exists, or when the bot's eyes award shows a review in flight.
+The webhook path posts **marker-free** comments, so this check only sees
+CI-posted reviews: webhook and CI on the same head SHA both post. Pick one
+flow per MR: mapped projects normally use the webhook, CI deep on demand.
+The CI flow only sees a webhook review in flight when both flows use the same
+GitLab user.
 
-- Webhook + CI on the same head SHA **double-post** (each flow completes
-  independently). Avoid it by picking one flow per MR: mapped projects
-  normally use the webhook; use CI deep only on demand.
-- Same-flow repeats are still deduped (CI same-SHA skip above; webhook
-  in-flight key per trigger + push SHA).
-- Known residual race: the webhook posts after CI's check
-  but before CI's post (rare, manual triggers) — both comments stay visible,
-  nothing crashes.
+## 8. Upgrading from 0.13
 
-```mermaid
-sequenceDiagram
-  participant S as Source pipeline
-  participant R as Reviewer job (CI)
-  participant M as MR notes
-  participant W as Webhook host
-  S->>R: trigger (SOURCE_SHA, MR_IID)
-  R->>M: list notes: marker for head SHA?
-  alt marker found (earlier CI review)
-    R-->>S: skip — already reviewed
-  else no marker
-    R->>M: eyes? (webhook running)
-    alt eyes present
-      R-->>S: skip — another review running
-    else clear
-      R->>M: post review + marker
-    end
-  end
-  Note over W,M: Webhook reviews post marker-free:<br/>CI never sees them, W never checks
-  W->>M: post review (no marker)
-```
+0.14 has no compatibility path. In one maintenance window:
 
-## 7. Troubleshooting
+1. Move each source project's bridge variables (`REVIEW_MODE`,
+   `REVIEW_PROFILE`, `REVIEW_ON_PUSH`) to reviewer variables scoped
+   `review/<id>`.
+2. Set the reviewer project's pipeline variables to **No one allowed**.
+3. Create `REVIEW_RESOLVE_TOKEN` (scope `resolve`), and give the bot user at
+   least Reporter on the reviewer project.
+4. Replace the reviewer project's pipeline file and every source bridge with
+   the new templates. Until a bridge is replaced, GitLab rejects it.
+5. Add client keys at their scopes, verify one real MR, and verify that a
+   bridge passing a variable is rejected.
+6. Rotate `MAESTRO_GITLAB_TOKEN` and the default LLM key: before step 2 any
+   member able to trigger the reviewer project could read them.
 
-- **Run "completes" but no comment appears** — `MAESTRO_GITLAB_TOKEN` is a
-  job token or lacks `api` scope (see section 1). The orchestrator logs
+Testing a new image by passing `REVIEWER_IMAGE` through a trigger no longer
+works by design; build and test it on a separate reviewer project.
+
+## 9. Troubleshooting
+
+- **`resolve failed: pipeline variables are not restricted`**: set **Minimum
+  role to use pipeline variables** to **No one allowed** on the reviewer
+  project.
+- **`missing REVIEW_RESOLVE_TOKEN` / `cannot read the reviewer project's
+  pipeline-variables setting`**: the token is missing, not Maintainer, lacks
+  `read_api`, or is not scoped to `resolve`.
+- **`its upstream is not visible`**: `MAESTRO_GITLAB_TOKEN`'s user needs at
+  least Reporter on the reviewer project and on the source project.
+- **`incomplete provider settings for project <id>`**: the project's scope is
+  partial; the message names the missing variables
+  ([section 3](#3-per-project-settings)).
+- **Bridge fails with `downstream_pipeline_creation_failed`**: the bridge
+  passes or forwards variables; replace it with the current source template.
+- **Bridge fails instantly otherwise**: `branch:` does not match the reviewer
+  project's default branch, or the pipeline user lacks access.
+- **Run "completes" but no comment appears**: `MAESTRO_GITLAB_TOKEN` lacks
+  `api` scope or Developer on the source project; the orchestrator logs
   `posting review comment failed` with the status.
-- **`another review is running — skipping` with no active review** — a stale
-  👀 (e.g. a cancelled pipeline never ran its cleanup, or the posting token's
-  user differs from the configured bot username so cleanup misses it).
-  Inspect `award_emoji` on the MR, `DELETE` the stale `eyes`, retry the job.
-- **Downstream pipeline is empty (API trigger)** — expected: create it from
-  the UI (`source=web`), see Case B.
-- **Bridge fails instantly** — `branch:` in the bridge doesn't match the
-  reviewer project's default branch, or the pipeline user lacks access.
-- **Job uses an old image** — the template pins an exact version tag (e.g.
-  `:0.13.0`) rather than `:latest`, deliberately: a moving tag would let a
-  fresh push change every deployment's behavior with no changelog to trace
-  it against. Bump `REVIEWER_IMAGE` in the reviewer project's own copy of
-  the template to pick up a new release.
-- **Reports/artifacts missing** — the entrypoint must `cd $CI_PROJECT_DIR`
-  before capturing the report dir (GitLab keeps the image `WORKDIR`); if you
-  fork `entrypoint.sh`, keep that line.
+- **`another review is running, skipping` with no active review**: a stale
+  bot eyes award (a cancelled pipeline never ran its cleanup). Delete it from
+  the MR's `award_emoji` and retry.
+- **Job uses an old image**: the template pins an exact version tag on
+  purpose; a moving tag would change every deployment with no changelog to
+  trace. Bump `REVIEWER_IMAGE` in the reviewer project's copy.
+- **Reports or artifacts missing**: the entrypoint must `cd $CI_PROJECT_DIR`
+  before capturing the report dir; keep that line if you fork `entrypoint.sh`.
 
-## 8. Host observability (webhook flow)
+## 10. Host observability (webhook flow)
 
-- **Dry-run the CI contract** without spending model calls:
-  `REVIEW_DRY_RUN=1` validates env vars and exits before booting agents.
-- **Tailing the host log** — every drop/dedup leaves one structured line:
+- **Dry-run the CI contract** without model calls: `REVIEW_DRY_RUN=1`
+  validates the review job's variables and exits before booting agents.
+- **Tailing the host log**: every drop or dedup leaves one structured line:
   `drop unmapped|assign-gate-off|push-gate-off|push-no-completed-history|missing-token`,
-  `deduped duplicate in-flight review key=… trigger=…`,
-  intake `drop invalid-identity`. Gated-off auto-triggers are fully silent
-  otherwise (no history, no signals, no comment); generic GitLab noise
-  (closes, label edits) stays silent with no reason at all.
-- **In-flight key**: `projectId:mrIid:mode:scope:trigger[:pushSha8]` —
-  quick+deep and distinct push SHAs never suppress each other; a duplicate
-  records `Duplicate in-flight review deduped` as completed.
-- **History** (`~/.dsh/dsh-maestro-review/reviews.json`, cap 100):
-  `running` entries older than 2h auto-fail (host restart/crash);
-  prune never drops `running`; `reviewSessionRetentionDays=0` disables prune.
+  `deduped duplicate in-flight review key=… trigger=…`, intake
+  `drop invalid-identity`. Generic GitLab noise (closes, label edits) stays
+  silent.
+- **In-flight key**: `projectId:mrIid:mode:scope:trigger[:pushSha8]`: quick
+  and deep and distinct push SHAs never suppress each other.
+- **History** (`~/.dsh/dsh-maestro-review/reviews.json`, cap 100): `running`
+  entries older than 2h auto-fail; prune never drops `running`;
+  `reviewSessionRetentionDays=0` disables prune.

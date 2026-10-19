@@ -29,11 +29,20 @@ all served by this npm package.
 ## CI reviewer (no local checkout)
 
 The same pipeline also runs headless from GitLab CI: a shared reviewer
-project (holds secrets + image) serves any number of source projects through
-a small bridge job — no DSH host, no project mapping needed. Quick runs
-diff-only (or on a real checkout when `REVIEW_PROFILE` is set — reviewer-only,
-no auditor); on-demand deep clones the MR head and reviews reviewer-only with
-a static-only audit (no govard runtime in the container).
+project (holds secrets and the image) serves any number of source projects
+through a small bridge job, with no DSH host and no project mapping.
+
+- **Trusted trigger.** The reviewer project forbids pipeline variables, and a
+  `resolve` job asks GitLab which MR triggered it, so a source project can
+  never change what the reviewer runs or where its secrets go.
+- **Per-project providers.** Each source project can bring its own AI provider
+  and key (`openai`, `anthropic`, `gemini`, `openrouter`, `deepseek` presets or
+  any OpenAI-compatible endpoint), set as reviewer variables scoped
+  `review/<project id>`; a require switch guarantees a paying project never
+  falls back to the default key.
+- **Quick** runs diff-only (or on a checkout when `REVIEW_PROFILE` names a
+  framework); **deep** runs once per head SHA on the `maestro-review::deep`
+  label, cloning the MR head with a static-only audit.
 
 Full setup, per-case trigger workflows (quick/deep × CI/webhook), model
 selection, and troubleshooting: [`docs/ci-reviewer-setup.md`](docs/ci-reviewer-setup.md).

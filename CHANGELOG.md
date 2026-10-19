@@ -2,36 +2,65 @@
 
 ## [Unreleased]
 
-### Fixed
+### Security
 
-- **Diffs over 20 files are paginated** (D1): the reviewer reads every page
-  up to 3000 files and says so in the comment when it had to stop.
-- **CI review state comes from GitLab, not the runner cache** (D2): the
-  push-gate and the incremental base read the newest bot review comment, so a
-  lost or shared runner cache no longer re-reviews or skips the wrong MR. The
-  cache is a fallback only, keyed per MR, with a per-MR `resource_group`.
-- **The merge base is reachable in CI clones** (D3): a 50-commit clone is
-  deepened until the base is an ancestor of the head; if it still is not, the
-  review continues with a warning.
+- **Source projects can no longer change what the CI reviewer runs.** A
+  trigger overrides every variable of the downstream pipeline, the job image
+  included, so any member able to start a reviewer pipeline could run their
+  own image with the reviewer's secrets or redirect its token and LLM key.
+  The reviewer project must now forbid pipeline variables, bridges pass none,
+  and a new `resolve` job learns the MR from GitLab (GraphQL upstream).
 - **Only the bot's own signals skip a CI review.** A completed marker pasted
   by someone else, or a human's eyes reaction, no longer suppresses it.
 
 ### Added
 
+- **Per-project AI providers** through reviewer variables scoped
+  `review/<source project id>`: presets `openai`, `anthropic`, `gemini`,
+  `openrouter`, `deepseek` and `custom`, an all-or-nothing project route, and
+  `REVIEW_REQUIRE_PROJECT_KEY` so a paying project never falls back to the
+  default key (it gets a one-time "not configured" note instead).
+- **Deep review on request:** the `maestro-review::deep` MR label runs one
+  deep review per head SHA, and the bot removes the label once it is posted.
+- `REVIEW_RESOLVE_TOKEN`, a Maintainer token scoped to the `resolve`
+  environment so the review job never receives it.
 - Review comments carry a hidden, versioned metadata block (head SHA, mode,
   models, and findings as code, fingerprint and severity, never body text).
 - Findings accept an optional stable `code` (for example `SEC-XSS-ESCAPE`).
 
-### Upgrade notes
+### Fixed
 
-- **Fewer re-reviews by default.** Runners without a shared cache used to
-  miss the push-gate history and re-review every push. The state now comes
-  from GitLab, so after the first CI review of an MR (including comments
-  posted by 0.13) later pushes are skipped unless `REVIEW_ON_PUSH=1`. Set it
-  on the reviewer project to keep re-reviewing every push.
-- The CI flow no longer yields to an in-flight webhook review that runs under
-  a different GitLab user than `MAESTRO_GITLAB_TOKEN`; use one bot identity
-  for both flows to keep that coexistence.
+- **Diffs over 20 files are paginated** (D1): the reviewer reads every page
+  up to 3000 files and says so in the comment when it had to stop.
+- **CI review state comes from GitLab, not the runner cache** (D2): the
+  push-gate and the incremental base read the newest bot review comment. The
+  cache is a fallback only, keyed per MR, with a per-MR `resource_group`.
+- **The merge base is reachable in CI clones** (D3): a 50-commit clone is
+  deepened until the base is an ancestor of the head; if it still is not, the
+  review continues with a warning.
+
+### Changed (breaking, no compatibility path)
+
+- New reviewer and source templates: `resolve` then a child pipeline; the
+  bridge passes and forwards no variable. Bridge variables (`REVIEW_MODE`,
+  `REVIEW_PROFILE`, `REVIEW_ON_PUSH`, `SOURCE_PROJECT_ID`, `MR_IID`,
+  `GITLAB_HOST`) are gone; per-project settings are scoped reviewer variables.
+- Manual and trigger-token reviewer runs are gone (they cannot name an MR
+  without variables); deep on demand uses the label.
+- Comments without the metadata block (0.13 and older) no longer count for
+  the push-gate, so each open MR is reviewed once more after the upgrade.
+- After the first CI review of an MR, later pushes are skipped unless
+  `REVIEW_ON_PUSH=1`: the state comes from GitLab, where runners without a
+  shared cache used to re-review every push.
+- `REVIEW_MODEL_PROVIDER`/`REVIEW_MODEL` pin the default route only.
+- The CI flow only sees a webhook review in flight when both flows use the
+  same GitLab user.
+
+### Upgrade
+
+Follow [Upgrading from 0.13](docs/ci-reviewer-setup.md#8-upgrading-from-013)
+in one maintenance window, then rotate `MAESTRO_GITLAB_TOKEN` and the default
+LLM key.
 
 ## [0.13.0] - 2026-10-19
 
