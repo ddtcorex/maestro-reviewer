@@ -83,7 +83,8 @@ describe('ci-clone merge base (D3)', () => {
     expect(l.at(-1)).toBe('fetch --depth 1 origin b4se00')
   })
 
-  it('redacts the token when the base fallback fetch fails', async () => {
+  it('keeps the clone and warns, redacted, when the base fallback fetch fails', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const { base } = ctx({
       httpUrl: 'https://git.example.com/g/p.git',
       run: async (_cmd, args) => {
@@ -91,9 +92,12 @@ describe('ci-clone merge base (D3)', () => {
         if (args.join(' ') === 'fetch --depth 1 origin b4se00') throw new Error('fetch https://oauth2:SEKRET@git.example.com/g/p.git failed')
       },
     })
-    const err = await cloneSourceRepo({ ...base, baseSha: 'b4se00' }).catch((e: Error) => e)
-    expect(String(err)).toMatch('oauth2:***@')
-    expect(String(err)).not.toMatch('SEKRET')
+    await expect(cloneSourceRepo({ ...base, baseSha: 'b4se00' })).resolves.toBe('/tmp/x')
+    const logged = warn.mock.calls.map(c => c.join(' ')).join('\n')
+    expect(logged).toMatch(/b4se00/)
+    expect(logged).toMatch('oauth2:***@')
+    expect(logged).not.toMatch('SEKRET')
+    warn.mockRestore()
   })
 
   it('does nothing extra without a base', async () => {

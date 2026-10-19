@@ -63,7 +63,9 @@ const DEEPEN_ROUNDS = 10
  * D3: a 50-commit shallow clone may not contain the merge base of a long-lived
  * branch, and any `base...head` diff then fails. Deepen the head history until
  * the base is an ancestor (bounded), else fetch the base object alone so a
- * two-dot diff still works.
+ * two-dot diff still works. Nothing in the CI flow strictly needs the base,
+ * so a failed last resort only warns: losing the base must never cost the
+ * whole review.
  */
 async function ensureBaseReachable(run: RunFn, dir: string, baseSha: string, headSha: string): Promise<void> {
   const reachable = async () => run('git', ['merge-base', '--is-ancestor', baseSha, headSha], dir).then(() => true, () => false)
@@ -72,5 +74,8 @@ async function ensureBaseReachable(run: RunFn, dir: string, baseSha: string, hea
     await run('git', ['fetch', `--deepen=${DEEPEN_STEP}`, 'origin', headSha], dir).catch(() => {})
     if (await reachable()) return
   }
-  await run('git', ['fetch', '--depth', '1', 'origin', baseSha], dir)
+  await run('git', ['fetch', '--depth', '1', 'origin', baseSha], dir).catch((err: unknown) => {
+    const message = err instanceof Error ? err.message : String(err)
+    console.warn(`[review] merge base ${baseSha} is not reachable from ${headSha}, continuing without it: ${redactCloneUrl(message)}`)
+  })
 }
