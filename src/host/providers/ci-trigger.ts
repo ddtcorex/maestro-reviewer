@@ -5,7 +5,7 @@ import type { ReviewRequest, ReviewResult } from '../events.js'
 import { lastCompletedReview } from '../review-history.js'
 import type { ReviewSkillProfile } from '../skills-tool.js'
 import { gitlabAuthHeaders } from '../gitlab-auth.js'
-import { hasCompletedReviewForSha, hasRunningEyes, latestCompletedReview } from '../ci-coexist.js'
+import { fetchBotUserId, hasCompletedReviewForSha, hasRunningEyes, latestCompletedReview } from '../ci-coexist.js'
 
 export const name = 'maestro-review-ci-trigger'
 export const inject = ['reviewRunner'] as const
@@ -98,8 +98,10 @@ export async function runCiTrigger(
   // when GitLab cannot be read.
   const history = deps.history ?? { lastCompletedReview }
   let prior: { headSha?: string } | undefined
+  let botUserId: number | undefined
   try {
-    prior = await latestCompletedReview(deps.fetcher ?? fetch, { baseUrl: config.gitlabBaseUrl, token: config.gitlabToken, projectId: config.sourceProjectId, mrIid: config.mrIid })
+    botUserId = await fetchBotUserId(deps.fetcher ?? fetch, config.gitlabBaseUrl, config.gitlabToken)
+    prior = await latestCompletedReview(deps.fetcher ?? fetch, { baseUrl: config.gitlabBaseUrl, token: config.gitlabToken, projectId: config.sourceProjectId, mrIid: config.mrIid, botUserId })
   } catch (err) {
     console.error(`[review] review state unreadable from GitLab (${err instanceof Error ? err.message : String(err)}), falling back to the runner cache`)
     prior = await history.lastCompletedReview(config.sourceProjectId, config.mrIid)
@@ -114,9 +116,9 @@ export async function runCiTrigger(
     // the webhook flow and vice versa, so check the MR itself for a completed
     // review marker of this SHA or an in-flight eyes marker before booting.
     const coFetcher = deps.fetcher ?? fetch
-    if (await hasCompletedReviewForSha(coFetcher, config.gitlabBaseUrl, config.gitlabToken, config.sourceProjectId, config.mrIid, headSha)) {
+    if (await hasCompletedReviewForSha(coFetcher, config.gitlabBaseUrl, config.gitlabToken, config.sourceProjectId, config.mrIid, headSha, botUserId)) {
       result = { ok: true, summary: `webhook already reviewed ${headSha} — skipping`, failures: [], durationMs: 0 }
-    } else if (await hasRunningEyes(coFetcher, config.gitlabBaseUrl, config.gitlabToken, config.sourceProjectId, config.mrIid)) {
+    } else if (await hasRunningEyes(coFetcher, config.gitlabBaseUrl, config.gitlabToken, config.sourceProjectId, config.mrIid, botUserId)) {
       result = { ok: true, summary: 'another review is running — skipping', failures: [], durationMs: 0 }
     } else {
     // The reviewer-ci profile's own projectMappings is always [], so the

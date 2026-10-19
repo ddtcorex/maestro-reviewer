@@ -8,7 +8,7 @@ const note = (id: number, authorId: number, body: string) => ({ id, system: fals
 const reviewBody = (sha: string) => `## Review\n\n${reviewMarker(sha, 'ci-quick')}\n${encodeReviewMeta(meta(sha))}`
 
 /** GitLab double: /user, paginated MR notes (newest first), MR detail. */
-function gitlab(pages: Array<Array<ReturnType<typeof note>>>, opts: { userStatus?: number; mrSha?: string } = {}) {
+function gitlab(pages: Array<Array<ReturnType<typeof note>>>, opts: { userStatus?: number; mrSha?: string; awards?: Array<{ name: string; user: { id: number } }> } = {}) {
   const calls: string[] = []
   const fetcher = vi.fn(async (url: string) => {
     const u = new URL(url)
@@ -16,6 +16,7 @@ function gitlab(pages: Array<Array<ReturnType<typeof note>>>, opts: { userStatus
     if (u.pathname.endsWith('/user')) {
       return opts.userStatus && opts.userStatus !== 200 ? new Response('no', { status: opts.userStatus }) : new Response(JSON.stringify({ id: BOT, username: 'bot' }), { status: 200 })
     }
+    if (u.pathname.endsWith('/award_emoji')) return new Response(JSON.stringify(opts.awards ?? []), { status: 200 })
     if (u.pathname.endsWith('/notes')) {
       const page = Number(u.searchParams.get('page') ?? '1')
       const next = page < pages.length ? String(page + 1) : ''
@@ -60,7 +61,7 @@ describe('latestCompletedReview', () => {
 
 describe('runCiTrigger push-gate from GitLab state', () => {
   const fakeWriteFile = (async () => {}) as unknown as typeof import('node:fs/promises').writeFile
-  async function gate(env: Record<string, string>, pages: Array<Array<ReturnType<typeof note>>>, g: { userStatus?: number; mrSha?: string } = {}, cache?: { headSha?: string }) {
+  async function gate(env: Record<string, string>, pages: Array<Array<ReturnType<typeof note>>>, g: Parameters<typeof gitlab>[1] = {}, cache?: { headSha?: string }) {
     const { parseCiEnvConfig, runCiTrigger } = await import('../src/host/providers/ci-trigger.js')
     const cfg = parseCiEnvConfig({ GITLAB_HOST: 'h', MAESTRO_GITLAB_TOKEN: 'tok', SOURCE_PROJECT_ID: '1', MR_IID: '2', ...env })
     const ctx = { reviewRunner: vi.fn(async () => ({ ok: true, summary: 'done', failures: [], durationMs: 5 })) }
@@ -96,5 +97,28 @@ describe('runCiTrigger push-gate from GitLab state', () => {
   it('fails open toward reviewing when both GitLab and the cache are empty', async () => {
     const { ctx } = await gate({}, [[]], { userStatus: 500, mrSha: 'cafe01' }, undefined)
     expect(ctx.reviewRunner).toHaveBeenCalledTimes(1)
+  })
+
+  it('skips a new head without REVIEW_ON_PUSH once GitLab shows a bot review (the 0.14 default)', async () => {
+    const { result, ctx } = await gate({}, [[note(1, BOT, reviewBody('abc123'))]], { mrSha: 'cafe01' })
+    expect(result.summary).toMatch(/REVIEW_ON_PUSH is not set/)
+    expect(ctx.reviewRunner).not.toHaveBeenCalled()
+  })
+
+  it('reviews when only a human pasted a completed marker for the head SHA', async () => {
+    const spoof = `<!-- maestro-review sha=cafe01 flow=ci-quick status=completed -->`
+    const { ctx } = await gate({}, [[note(1, 7, spoof)]], { mrSha: 'cafe01' })
+    expect(ctx.reviewRunner).toHaveBeenCalledTimes(1)
+  })
+
+  it('reviews when a human reacted with eyes', async () => {
+    const { ctx } = await gate({}, [[note(1, 7, 'lgtm')]], { mrSha: 'cafe01', awards: [{ name: 'eyes', user: { id: 7 } }] })
+    expect(ctx.reviewRunner).toHaveBeenCalledTimes(1)
+  })
+
+  it('yields to the bot user\'s own eyes marker', async () => {
+    const { result, ctx } = await gate({}, [[]], { mrSha: 'cafe01', awards: [{ name: 'eyes', user: { id: BOT } }] })
+    expect(result.summary).toMatch(/another review is running/)
+    expect(ctx.reviewRunner).not.toHaveBeenCalled()
   })
 })
