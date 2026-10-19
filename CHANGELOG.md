@@ -1,6 +1,10 @@
 # Changelog
 
-## [Unreleased]
+## [0.14.0] - 2026-10-20
+
+Trusted CI trigger, per-project AI providers, and the split into the review
+engine plus CI (this package) and the `@ddtcorex/dsh-maestro-review` DSH host
+plugin (#168).
 
 ### Security
 
