@@ -390,6 +390,10 @@ export interface ReviewOutcome {
   models?: string[]
 }
 
+export function reviewerSummary(postedNew: number, postedReplies: number, diffTruncated: boolean): string {
+  return `${postedNew} new inline comment(s), ${postedReplies} thread(s) updated.${diffTruncated ? ` Diff truncated at ${GitlabClient.MAX_DIFF_FILES} files: files beyond the cap were not reviewed.` : ''}`
+}
+
 function metaFor(payload: ReviewRequest, outcome: Pick<ReviewOutcome, 'findings' | 'models'>): ReviewMeta | undefined {
   if (payload.headSha === undefined) return undefined
   return buildReviewMeta({ headSha: payload.headSha, mode: payload.mode, models: outcome.models ?? [], findings: outcome.findings ?? [] })
@@ -1188,6 +1192,7 @@ export function apply(ctx: Context, config: Config): void {
     let lastHandle: AgentHandle | undefined
     const runOnce = async (agentOptions: ModelSelection): Promise<ReviewOutcome> => {
       let capturedFindings: ReviewFinding[] = []
+      let diffTruncated = false
       let handle: AgentHandle | undefined
       try {
         handle = await ctx.agents.create({
@@ -1204,6 +1209,7 @@ export function apply(ctx: Context, config: Config): void {
               mrIid: payload.mrIid,
               token: effective.gitlabToken,
               botUsername: effective.botUsername,
+              onDiffTruncated: () => { diffTruncated = true },
             })
             await agentCtx.plugin(ReviewFindingsTool, { onReport: (findings) => { capturedFindings = findings } })
             // Diff-only runs have no worktree; nothing to search there.
@@ -1279,7 +1285,7 @@ export function apply(ctx: Context, config: Config): void {
             failures.push(`${locator}: ${err instanceof Error ? err.message : String(err)}`)
           }
         }
-        return { summary: `${postedNew} new inline comment(s), ${postedReplies} thread(s) updated.`, failures, severityCounts: countFindingSeverities(capturedFindings), findings: capturedFindings, models: [primaryOptions.model] }
+        return { summary: reviewerSummary(postedNew, postedReplies, diffTruncated), failures, severityCounts: countFindingSeverities(capturedFindings), findings: capturedFindings, models: [primaryOptions.model] }
       } finally {
         await handle.dispose()
       }

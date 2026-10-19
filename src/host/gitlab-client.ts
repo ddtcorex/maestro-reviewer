@@ -14,6 +14,8 @@ export interface Config {
   mrIid: number
   token: string
   botUsername: string
+  /** Called once when the MR diff exceeds MAX_DIFF_FILES and was cut. */
+  onDiffTruncated?: () => void
 }
 
 export const Config: z<Config> = z.object({
@@ -22,7 +24,40 @@ export const Config: z<Config> = z.object({
   mrIid: z.number().required(),
   token: z.string().role('secret').required(),
   botUsername: z.string().required(),
+  onDiffTruncated: z.function(),
 })
+
+/** Hard cap on diff files fetched for one review. */
+export const MAX_DIFF_FILES = 3000
+
+/**
+ * All MR diffs. `GET .../diffs` is paginated (default 20 per page), so a
+ * single call reviewed only the first page of a larger MR without notice.
+ * Follows `x-next-page`; stops on an empty page for servers that send no
+ * pagination headers; cuts at MAX_DIFF_FILES and says so.
+ */
+export async function fetchAllDiffs(
+  fetcher: typeof fetch, apiBase: string, headers: Record<string, string>,
+): Promise<{ diffs: GitlabDiff[]; truncated: boolean }> {
+  const diffs: GitlabDiff[] = []
+  let page = 1
+  for (;;) {
+    const response = await fetcher(`${apiBase}/diffs?per_page=100&page=${page}`, { headers })
+    if (!response.ok) throw new Error(`GitLab API error ${response.status}: ${await response.text()}`)
+    const batch = (await response.json()) as GitlabDiff[]
+    if (batch.length === 0) break
+    diffs.push(...batch)
+    if (diffs.length >= MAX_DIFF_FILES) return { diffs: diffs.slice(0, MAX_DIFF_FILES), truncated: true }
+    const next = response.headers.get('x-next-page')
+    if (next !== null && next.trim() === '') break
+    page = next !== null ? Number(next) : page + 1
+  }
+  return { diffs, truncated: false }
+}
+
+export function diffToolText(value: { path: string; bytes: number; files: unknown[] }, truncated: boolean): string {
+  return `diff written to ${value.path} (${value.bytes} bytes, ${value.files.length} files)${truncated ? `; truncated at ${MAX_DIFF_FILES} files, larger MRs are not fully reviewed` : ''}`
+}
 
 export interface GitlabDiff {
   old_path: string
@@ -145,13 +180,13 @@ export function apply(ctx: Context, config: Config): void {
   let cachedDiffRefs: GitlabDiffRefs | undefined
   let cachedDiffs: GitlabDiff[] | undefined
 
+  let diffsTruncated = false
   async function getDiffs(): Promise<GitlabDiff[]> {
     if (cachedDiffs !== undefined) return cachedDiffs
-    const response = await fetch(`${apiBase}/diffs`, { headers })
-    if (!response.ok) {
-      throw new Error(`GitLab API error ${response.status}: ${await response.text()}`)
-    }
-    cachedDiffs = (await response.json()) as GitlabDiff[]
+    const all = await fetchAllDiffs(fetch, apiBase, headers)
+    cachedDiffs = all.diffs
+    diffsTruncated = all.truncated
+    if (all.truncated) config.onDiffTruncated?.()
     return cachedDiffs
   }
 
@@ -171,7 +206,7 @@ export function apply(ctx: Context, config: Config): void {
     parameters: {},
     output: {
       schema: { type: 'object', additionalProperties: false, properties: { path: { type: 'string', required: true }, bytes: { type: 'number', required: true }, files: { type: 'array', items: { type: 'object', additionalProperties: false, properties: { path: { type: 'string', required: true }, bytes: { type: 'number', required: true } } } } } },
-      render: (_args, value) => [{ type: 'text', text: `diff written to ${value.path} (${value.bytes} bytes, ${value.files.length} files)` }],
+      render: (_args, value) => [{ type: 'text', text: diffToolText(value, diffsTruncated) }],
     },
     async execute(_args, exec) {
       const diffs = await getDiffs()
