@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.13.0] - 2026-10-19
+
+### Changed
+
+- **Renamed to `@ddtcorex/maestro-reviewer`** (#164), matching the Docker image
+  `ddtcorex/maestro-reviewer`. The GitHub repository is now
+  `ddtcorex/maestro-reviewer`; the old URL redirects. Cordis module paths are
+  `@ddtcorex/maestro-reviewer/lib/...`.
+- **Settings RPC channel is `/maestro-reviewer`.** Host and client ship in one
+  bundle, so no alias is kept.
+
+### Migration
+
+- Replace the profile dependency `@ddtcorex/dsh-maestro-review` with
+  `@ddtcorex/maestro-reviewer`, and update any profile patch entry that names a
+  module path (`@ddtcorex/dsh-maestro-review/lib/...`).
+- Unchanged: Cordis row ids (`maestro-review-*`), preset ids, settings keys, the
+  `dsh-maestro-review/` data directory (`reviews.json`, `runtime.json`) and the
+  message source kind, so history and rehydrated sessions carry over.
+- The old npm name is deprecated, not unpublished; pinned CI images keep working.
+
 ## [0.12.1] - 2026-10-17
 
 ### Fixed
