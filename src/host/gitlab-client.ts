@@ -24,7 +24,7 @@ export const Config: z<Config> = z.object({
   botUsername: z.string().required(),
 })
 
-interface GitlabDiff {
+export interface GitlabDiff {
   old_path: string
   new_path: string
   diff: string

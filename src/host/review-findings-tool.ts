@@ -16,6 +16,19 @@ export interface ReviewFinding {
   severity?: FindingSeverity
   /** Optional area tag, e.g. security, correctness, perf, style. */
   category?: string
+  /** Optional short stable id such as SEC-XSS-ESCAPE; malformed values are dropped, not rejected. */
+  code?: string
+}
+
+export const FINDING_CODE_RE = /^[A-Z][A-Z0-9-]{2,40}$/
+
+/** Drops a malformed `code` so one bad field never loses the finding itself. */
+export function normalizeFindings(findings: ReviewFinding[]): ReviewFinding[] {
+  return findings.map((f) => {
+    if (f.code === undefined || FINDING_CODE_RE.test(f.code)) return f
+    const { code: _dropped, ...rest } = f
+    return rest
+  })
 }
 
 export interface Config {
@@ -42,6 +55,7 @@ export function apply(ctx: Context, config: Config): void {
             discussionId: { type: 'string' },
             severity: { type: 'string', enum: ['blocking', 'major', 'minor', 'nit'] },
             category: { type: 'string' },
+            code: { type: 'string', description: 'Optional short stable id for the kind of issue, uppercase with dashes, e.g. SEC-XSS-ESCAPE or PERF-N-PLUS-ONE. Reuse the same code for the same kind of issue.' },
           },
         },
       },
@@ -51,7 +65,7 @@ export function apply(ctx: Context, config: Config): void {
       render: (_args, value) => [{ type: 'text', text: `Recorded ${value.received} finding(s).` }],
     },
     async execute(args) {
-      const findings = args.findings as ReviewFinding[]
+      const findings = normalizeFindings(args.findings as ReviewFinding[])
       config.onReport(findings)
       return { received: findings.length }
     },
