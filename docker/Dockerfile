@@ -39,14 +39,14 @@ COPY profiles/reviewer-ci ./profiles/reviewer-ci
 # --config.minimumReleaseAge=0: every dep here is an exact pin verified in
 # the frozen lockfile, so the 24h supply-chain age gate only blocks fresh
 # releases of our own packages (verified 2026-09-04: it rejected
-# dsh-maestro-review@0.5.1 published hours earlier despite
+# the review package 0.5.1 published hours earlier despite
 # minimumReleaseAgeExclude entries).
 RUN pnpm --dir profiles/reviewer-ci --config.minimumReleaseAge=0 install --frozen-lockfile
 # dsh now resolves from the profile's own node_modules/.bin, not a global install.
 ENV PATH="/app/profiles/reviewer-ci/node_modules/.bin:${PATH}"
 
 # Reviewer/auditor agent presets now arrive as bundle patch rows shipped by
-# @ddtcorex/dsh-maestro-review itself (presets/maestro-{reviewer,auditor}.patch.yml,
+# @ddtcorex/maestro-reviewer itself (presets/maestro-{reviewer,auditor}.patch.yml,
 # listed in its `dsh.bundle.patch`), which the profile composes like any other
 # bundle layer — the orchestrator mounts 'dsh-maestro-reviewer'/'dsh-maestro-auditor'
 # from the agent-preset registry. No .agent-presets COPY: DSH 0.1.7 declares
@@ -65,7 +65,7 @@ COPY docker/ci-settings.generic-openai.yaml /app/settings.generic-openai.yaml
 COPY docker/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
-LABEL org.opencontainers.image.source="https://github.com/ddtcorex/dsh-maestro-review"
+LABEL org.opencontainers.image.source="https://github.com/ddtcorex/maestro-reviewer"
 LABEL org.opencontainers.image.revision="$CI_COMMIT_SHA"
 LABEL org.opencontainers.image.version="$CI_COMMIT_TAG"
 

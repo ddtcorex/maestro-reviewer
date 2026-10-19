@@ -86,7 +86,7 @@ review:
 #   rules:
 #     - if: $CI_COMMIT_BRANCH == "main"
 #   script:
-#     - docker build -f packages/dsh-maestro-review/docker/Dockerfile -t $CI_REGISTRY_IMAGE:$CI_COMMIT_SHA -t $CI_REGISTRY_IMAGE:latest .
+#     - docker build -f packages/maestro-reviewer/docker/Dockerfile -t $CI_REGISTRY_IMAGE:$CI_COMMIT_SHA -t $CI_REGISTRY_IMAGE:latest .
 #     - docker push $CI_REGISTRY_IMAGE:$CI_COMMIT_SHA
 #     - docker push $CI_REGISTRY_IMAGE:latest
 #   # Build context must be the maestro-harness workspace root (contains deepseek-harness/) —

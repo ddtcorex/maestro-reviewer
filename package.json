@@ -1,12 +1,12 @@
 {
-  "name": "@ddtcorex/dsh-maestro-review",
+  "name": "@ddtcorex/maestro-reviewer",
   "private": false,
   "version": "0.12.1",
   "description": "Maestro Review: GitLab review pipeline + orchestrator for automated MR review",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/ddtcorex/dsh-maestro-review.git"
+    "url": "git+https://github.com/ddtcorex/maestro-reviewer.git"
   },
   "engines": {
     "node": "^22.19.0 || >=24.0.0"

@@ -1,18 +1,18 @@
 name: Bug Report
-description: Report a reproducible bug in dsh-maestro-review.
+description: Report a reproducible bug in maestro-reviewer.
 labels: [bug]
 body:
   - type: markdown
     attributes:
       value: |
         Before filing, please search existing issues to avoid duplicates.
-        For security vulnerabilities, use private reporting: https://github.com/ddtcorex/dsh-maestro-review/security/advisories
+        For security vulnerabilities, use private reporting: https://github.com/ddtcorex/maestro-reviewer/security/advisories
 
   - type: input
     id: version
     attributes:
       label: Package version
-      description: Output of `npm view @ddtcorex/dsh-maestro-review version` or version in package.json
+      description: Output of `npm view @ddtcorex/maestro-reviewer version` or version in package.json
       placeholder: "0.1.0"
     validations:
       required: true

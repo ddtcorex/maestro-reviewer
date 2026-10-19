@@ -93,7 +93,7 @@ const REVIEW_OWNED_KEYS = [
  * Machine runtime state (RUNTIME_KEYS) never enters settings — it stays in this
  * package's own sidecar so a settings edit can never silently flip tunnel state.
  */
-function runtimeStatePath(dshHome?: string): string {
+export function runtimeStatePath(dshHome?: string): string {
   return join(resolveDshHome(dshHome), 'dsh-maestro-review', 'runtime.json')
 }
 
@@ -123,7 +123,7 @@ export async function loadUserConfig(dshHome?: string): Promise<MaestroUserConfi
   ])
   // Scope the read to the keys review OWNS. `readFlat` returns the WHOLE store
   // view — every `DOMAIN_KEY_MAP` key across every domain — so returning it
-  // unfiltered made review's own settings RPC (`/dsh-maestro-review`,
+  // unfiltered made review's own settings RPC (`/maestro-reviewer`,
   // `maestro.getConfig`) answer with remote's tunnel identity: `tunnelHostname`,
   // `tunnelId`, `tunnelCredentialsFile` (the local path of the machine's
   // Cloudflare credentials file), `lanPort`, `lanPinEnabled`, `proxyPort`,

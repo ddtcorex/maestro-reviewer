@@ -6,7 +6,7 @@ import { loadUserConfig } from '../src/host/config-store.ts'
 
 /**
  * `maestro.getConfig` is review's OWN Settings endpoint, on review's own channel
- * (`/dsh-maestro-review`), but `loadUserConfig()` returned the whole flat store
+ * (`/maestro-reviewer`), but `loadUserConfig()` returned the whole flat store
  * view — every `DOMAIN_KEY_MAP` key, not just review's. So the GitLab settings
  * card was answered with remote's tunnel identity: `tunnelHostname`, `tunnelId`,
  * `tunnelCredentialsFile`, `lanPort`, `lanPinEnabled`, `proxyPort`,

@@ -21,7 +21,7 @@ describe('maestro-review settings section', () => {
   })
 
   it('serves only this package own channel', () => {
-    expect(entry).toContain('/dsh-maestro-review')
+    expect(entry).toContain("'/maestro-reviewer'")
     // The tunnel and telegram endpoints left with their owners; a card that
     // still dialled them would save into a channel that no longer serves them.
     expect(entry).not.toContain('/dsh-maestro-remote')

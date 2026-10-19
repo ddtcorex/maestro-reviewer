@@ -1,7 +1,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { makeSkillProvider, resolveSkillsDir } from './skill-provider.js'
 
-export const name = '@ddtcorex/dsh-maestro-review'
+export const name = '@ddtcorex/maestro-reviewer'
 
 export function apply(ctx: Context): void {
   // The bundled DSH tool map is served from here, not from the public
@@ -33,5 +33,5 @@ export function apply(ctx: Context): void {
   // stub in this file used to claim the same channel; that stayed invisible only
   // because apply() was never mounted. Once the `maestro-review-host` row made
   // apply() run, both registrations collided and the Settings card died with:
-  //   webserver: duplicate prefix route "/dsh-maestro-review"
+  //   webserver: duplicate prefix route "/maestro-reviewer" (then named after the package)
 }

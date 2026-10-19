@@ -1,10 +1,10 @@
-# Contributing to dsh-maestro-review
+# Contributing to maestro-reviewer
 
-Thank you for contributing to **dsh-maestro-review** (`@ddtcorex/dsh-maestro-review`), the GitLab review pipeline + orchestrator for automated MR review in DeepSeek Harness.
+Thank you for contributing to **maestro-reviewer** (`@ddtcorex/maestro-reviewer`), the GitLab review pipeline + orchestrator for automated MR review in DeepSeek Harness.
 
 ## Getting Started
 
-1. **Fork and clone** `github.com/ddtcorex/dsh-maestro-review`.
+1. **Fork and clone** `github.com/ddtcorex/maestro-reviewer`.
 2. Install dependencies (requires Node.js 20+, pnpm 10+):
 
    ```bash
@@ -108,7 +108,7 @@ This project follows the [Contributor Covenant Code of Conduct](./CODE_OF_CONDUC
 
 - General questions: open a GitHub Discussion or issue.
 - Contact maintainer: [kaido4492@gmail.com](mailto:kaido4492@gmail.com)
-- Security vulnerabilities: use GitHub's private advisory reporting at `https://github.com/ddtcorex/dsh-maestro-review/security/advisories` — do not file a public issue.
+- Security vulnerabilities: use GitHub's private advisory reporting at `https://github.com/ddtcorex/maestro-reviewer/security/advisories` — do not file a public issue.
 
 ## License
 

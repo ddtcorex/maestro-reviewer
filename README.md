@@ -1,4 +1,8 @@
-# @ddtcorex/dsh-maestro-review
+# @ddtcorex/maestro-reviewer
+
+> Renamed from `@ddtcorex/dsh-maestro-review` in 0.13.0. Profile owners: replace the
+> dependency with `@ddtcorex/maestro-reviewer`. Cordis row ids, the data directory
+> and settings keys are unchanged, so existing profile patches keep applying.
 
 Automated merge-request review for the [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness):
 a GitLab merge-request pipeline, an orchestrator that spins up reviewer/auditor
@@ -46,7 +50,7 @@ package-local sidecar.
 ## Install
 
 ```sh
-dsh plugin --profile web add @ddtcorex/dsh-maestro-review
+dsh plugin --profile web add @ddtcorex/maestro-reviewer
 ```
 
 ## Development
