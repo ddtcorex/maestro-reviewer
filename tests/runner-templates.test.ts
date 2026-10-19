@@ -31,7 +31,7 @@ describe('templates', () => {
     expect(yml).toMatch(/REVIEW_MODEL:/)
     expect(yml).toMatch(/REVIEW_PROFILE/)
     expect(yml).toMatch(/REVIEW_ON_PUSH/)
-    expect(yml).toMatch(/cache:\s*\n\s*key: maestro-review-history/m)
+    expect(yml).toMatch(/cache:\s*\n\s*key: maestro-review-\$SOURCE_PROJECT_ID-\$MR_IID/m)
     expect(yml).toMatch(/\.maestro-history\//)
     // Deep-in-CI recipe: manual run with REVIEW_MODE=deep; the stale
     // "deep stays declined" note must be gone (deep now clones in CI).
@@ -47,5 +47,22 @@ describe('templates', () => {
     expect(yml).toMatch(/REVIEW_ON_PUSH/)
     expect(yml).not.toMatch(/MAESTRO_GITLAB_TOKEN/)
     expect(yml).not.toMatch(/DEEPSEEK_API_KEY/)
+  })
+})
+
+describe('reviewer template state handling (D2)', () => {
+  const doc = () => parse(readFileSync('templates/reviewer-project.gitlab-ci.yml', 'utf-8')) as {
+    review: { cache: { key: string; paths: string[] }; resource_group?: string }
+  }
+  it('keys the history cache per merge request, so concurrent MRs never overwrite each other', () => {
+    expect(doc().review.cache.key).toBe('maestro-review-$SOURCE_PROJECT_ID-$MR_IID')
+  })
+  it('serialises reviews of one merge request with a resource group', () => {
+    expect(doc().review.resource_group).toBe('review-$SOURCE_PROJECT_ID-$MR_IID')
+  })
+  it('documents GitLab, not the cache, as the push-gate source of truth', () => {
+    const docs = readFileSync('docs/ci-reviewer-setup.md', 'utf-8')
+    expect(docs).toMatch(/newest review comment/i)
+    expect(docs).not.toMatch(/History persists across jobs via the `maestro-review-history` cache/)
   })
 })

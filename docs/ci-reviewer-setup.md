@@ -160,9 +160,14 @@ SHA before booting any agent:
 | Head SHA already has a completed **CI-posted** review comment | `webhook already reviewed <sha> — skipping` (see [§6](#6-coexistence-ci-yields-to-webhook): only marker-carrying comments are visible to this check) |
 | 👀 running-marker present | `another review is running — skipping` |
 
-History persists across jobs via the `maestro-review-history` cache
-(`.maestro-history/`, keyed per MR inside one store). Cache miss fails open
-toward reviewing. Report files are written for skips too.
+The gate reads its state from GitLab: the newest review comment posted by
+the token's own user on the MR, through the hidden metadata block next to
+the review marker (comments from before 0.14 are read through the marker).
+Notes by anyone else are ignored. The runner cache
+(`maestro-review-$SOURCE_PROJECT_ID-$MR_IID`, `.maestro-history/`) is only a
+fallback for when GitLab cannot be read; a `resource_group` of the same shape
+runs one review per MR at a time. When neither has an answer the job fails
+open toward reviewing. Report files are written for skips too.
 
 ```mermaid
 flowchart TB
