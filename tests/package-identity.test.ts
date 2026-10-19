@@ -66,7 +66,7 @@ describe('package identity after the maestro-reviewer rename', () => {
     expect(historyPath('/h')).toBe(join('/h', 'dsh-maestro-review', 'reviews.json'))
     expect(runtimeStatePath('/h')).toBe(join('/h', 'dsh-maestro-review', 'runtime.json'))
     expect(read('docker/entrypoint.sh')).toContain('/app/dsh-maestro-review')
-    expect(read('src/host/orchestrator.ts')).toContain("'dsh-maestro-reviewer'")
+    expect(read('src/host/engine.ts')).toContain("'dsh-maestro-reviewer'")
   })
 
   it('mentions the old name only for legacy contracts', () => {

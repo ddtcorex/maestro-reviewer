@@ -4,43 +4,29 @@ import { createHash } from 'node:crypto'
 import { promisify } from 'node:util'
 import { join } from 'node:path'
 import { normalize as posixNormalize } from 'node:path/posix'
-import { homedir, tmpdir } from 'node:os'
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
-import { SessionId } from '@deepseek-ai/dsh-session'
-import { createUserMessage, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
+import { ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import { finalAssistantOutput } from '@deepseek-ai/dsh-subagent'
 import type { AgentHandle } from '@deepseek-ai/dsh-agent'
-import { installModelSelection } from '@deepseek-ai/dsh-agent'
 import type { ModelSelection } from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-agent-preset-registry'
 import type {} from '@deepseek-ai/dsh-agent-default-model'
 import type {} from '@deepseek-ai/dsh-session-title'
 import * as GitlabClient from './gitlab-client.js'
-import * as ReviewFindingsTool from './review-findings-tool.js'
-import * as SearchTool from './search-tool.js'
-import * as HyvaThemeInspectTool from './hyva-theme-inspect-tool.js'
-import * as HyvaCspScanTool from './hyva-csp-scan-tool.js'
-import * as LayoutXmlTool from './layout-xml-tool.js'
-import * as ModuleCheckTool from './module-check-tool.js'
-import * as PhtmlEscapeScanTool from './phtml-escape-scan-tool.js'
-import * as ScopeSplitTool from './scope-split-tool.js'
-import * as PerfLogStatsTool from './perf-log-stats-tool.js'
-import * as ReviewToolPolicy from './tool-policy.js'
-import { detectGovardLint, govardOnPath } from './govard-lint-detection.js'
+import { govardOnPath } from './govard-lint-detection.js'
 import type { ReviewFinding, FindingSeverity } from './review-findings-tool.js'
 import type { ReviewRequest, ReviewResult } from './events.js'
 import { loadUserConfig, type MaestroUserConfig, type ProjectMapping, type ReviewModelSelection } from './config-store.js'
-import { hasCompletedReview, lastCompletedReview, pruneHistory, recordReviewFinish, recordReviewStart } from './review-history.js'
-import { buildIncrementalBlock, fetchCompare, fetchMrDetailHeadSha } from './incremental.js'
+import { hasCompletedReview, pruneHistory, recordReviewFinish, recordReviewStart } from './review-history.js'
+import { fetchMrDetailHeadSha } from './incremental.js'
 import { createReviewSignals } from './review-signals.js'
 import { reviewDigestText, type NotifierLike } from './notify.js'
-import { loadedReviewProfile, type ReviewSkillProfile } from './skills-tool.js'
-import { REVIEW_SOURCE_KIND } from './source.js'
+import type { ReviewSkillProfile } from './skills-tool.js'
 import './events.js'
 import { gitlabAuthHeaders } from './gitlab-auth.js'
 import { reviewMarker, resolveFlow, encodeReviewMeta, buildReviewMeta, type ReviewFlow, type ReviewMeta } from './review-marker.js'
-import { cloneSourceRepo, defaultRun } from './ci-clone.js'
+import { createCommentPoster, createReviewEngine, DEDUPED_SUMMARY, removeWorktree, writeFailedReport, type CodeAccess, type EngineGitlab } from './engine.js'
 
 const execFileAsync = promisify(execFile)
 const GIT_TIMEOUT_MS = 60_000
@@ -943,7 +929,7 @@ export async function declineUnmappedDeepReview(payload: ReviewRequest, deps: Re
  */
 const SAFE_BRANCH_NAME = /^[A-Za-z0-9._/-]+$/
 
-function assertSafeBranchName(sourceBranch: string): void {
+export function assertSafeBranchName(sourceBranch: string): void {
   if (!SAFE_BRANCH_NAME.test(sourceBranch) || sourceBranch.startsWith('-') || sourceBranch.includes('..')) {
     throw new Error(`refusing to operate on unsafe branch name: ${JSON.stringify(sourceBranch)}`)
   }
@@ -1163,199 +1149,8 @@ export async function writeContainerVendorOverride(localRepoPath: string, worktr
   return overridePath
 }
 
-async function removeWorktree(worktreePath: string): Promise<void> {
-  // Best-effort cleanup by design (a failure here must not block or fail the review that
-  // already ran) — but a swallowed failure with zero visibility leaves an orphaned worktree
-  // in /tmp undetectable, so log it rather than discarding it silently.
-  await execFileAsync('git', ['worktree', 'remove', '--force', worktreePath], { cwd: worktreePath, timeout: GIT_TIMEOUT_MS })
-    .catch((err: unknown) => {
-      console.error(`maestro-orchestrator: failed to remove worktree ${worktreePath}:`, err)
-    })
-}
-
-async function writeFailedReport(mrIid: number, body: string): Promise<void> {
-  const dir = join(homedir(), '.dsh', 'maestro', 'failed-reports')
-  await mkdir(dir, { recursive: true })
-  await writeFile(join(dir, `${mrIid}-${Date.now()}.md`), body, 'utf-8')
-}
-
 export function apply(ctx: Context, config: Config): void {
-  // Resolved per review run from Settings so an agentTimeoutMs change takes
-  // effect without a plugin restart.
-  let effectiveAgentTimeoutMs = config.agentTimeoutMs
-  async function runReviewer(worktreePath: string | undefined, payload: ReviewRequest, effective: { gitlabBaseUrl: string; gitlabToken: string; botUsername: string }, reviewProfile?: ReviewSkillProfile, modelSelection?: ModelSelection, incrementalBlock?: string): Promise<ReviewOutcome> {
-    // MR base SHA feeds the govard diff-scope lint command; undefined omits the
-    // lint rule instead of sending a wasted govard invocation.
-    const lintDefaultBase = await fetchMrBaseSha(effective.gitlabBaseUrl, effective.gitlabToken, payload.projectId, payload.mrIid)
-    const primaryOptions = agentOptionsForModel(modelSelection ?? ctx.agentDefaultModel.currentSelection())
-    const fallbackOptions: ModelSelection = { provider: primaryOptions.provider, model: primaryOptions.model }
-    let lastHandle: AgentHandle | undefined
-    const runOnce = async (agentOptions: ModelSelection): Promise<ReviewOutcome> => {
-      let capturedFindings: ReviewFinding[] = []
-      let diffTruncated = false
-      let handle: AgentHandle | undefined
-      try {
-        handle = await ctx.agents.create({
-          sessionId: SessionId(`maestro-reviewer-${payload.mrIid}-${Date.now()}`),
-          meta: { cwd: worktreePath ?? tmpdir() },
-          agentOptions,
-          setup: async (agentCtx) => {
-            installModelSelection(agentCtx, { current: agentOptions, assembled: undefined })
-            await agentCtx.plugin(ReviewToolPolicy)
-            await mountAgentPreset(ctx.agentPresets, agentCtx, 'dsh-maestro-reviewer')
-            await agentCtx.plugin(GitlabClient, {
-              baseUrl: effective.gitlabBaseUrl,
-              projectId: payload.projectId,
-              mrIid: payload.mrIid,
-              token: effective.gitlabToken,
-              botUsername: effective.botUsername,
-              onDiffTruncated: () => { diffTruncated = true },
-            })
-            await agentCtx.plugin(ReviewFindingsTool, { onReport: (findings) => { capturedFindings = findings } })
-            // Diff-only runs have no worktree; nothing to search there.
-            if (worktreePath !== undefined) {
-              await agentCtx.plugin(SearchTool, { rootPath: worktreePath })
-              await agentCtx.plugin(HyvaThemeInspectTool, { rootPath: worktreePath })
-              await agentCtx.plugin(HyvaCspScanTool, { rootPath: worktreePath })
-              await agentCtx.plugin(LayoutXmlTool, { rootPath: worktreePath })
-              await agentCtx.plugin(ModuleCheckTool, { rootPath: worktreePath })
-              await agentCtx.plugin(PhtmlEscapeScanTool, { rootPath: worktreePath })
-              await agentCtx.plugin(ScopeSplitTool, { rootPath: worktreePath })
-              await agentCtx.plugin(PerfLogStatsTool, { rootPath: worktreePath })
-            }
-          },
-        })
-      } catch (err) {
-        lastHandle = handle
-        throw new Error(`failed to create reviewer agent: ${err instanceof Error ? err.message : String(err)}`)
-      }
-      lastHandle = handle
-      ctx.sessionTitle.rename(handle.agent.session, `Maestro Reviewer — MR !${payload.mrIid} (${payload.projectPath})`)
-      try {
-        const profileInstruction = reviewProfile === undefined
-          ? 'This is a diff-only review with no local checkout or Magento environment. Do not claim that tests, static analysis, or Magento runtime validation ran. '
-          : `Call maestro_load_review_profile with {"profile":"${reviewProfile}"} before examining code. `
-        // The lint runs as a govard CLI command through the bash tool. Only
-        // demand it when the registry resolves bash for this agent and govard
-        // is on PATH, and carry the MR base sha in the command.
-        const lint = worktreePath !== undefined && lintDefaultBase && detectGovardLint(ctx, handle.agent)
-          ? { worktreePath, base: lintDefaultBase }
-          : null
-        let scopePrompt = payload.scope.kind === 'discussion'
-          ? buildReviewerScopePrompt({ scopeKind: 'discussion', discussionId: payload.scope.discussionId, path: payload.scope.path, line: payload.scope.line, profileInstruction, lint })
-          : buildReviewerScopePrompt({ scopeKind: 'full', mode: payload.mode, profileInstruction, lint })
-        if (incrementalBlock !== undefined) scopePrompt = `${incrementalBlock}\n\n${scopePrompt}`
-        handle.agent.followup(createUserMessage({
-          content: [{ type: 'text', text: scopePrompt }],
-          source: { kind: REVIEW_SOURCE_KIND },
-        }))
-        await whenIdleWithTimeout(handle, effectiveAgentTimeoutMs)
-        assertTurnSucceededOrSalvage(handle, capturedFindings.length > 0, 'reviewer')
-        if (reviewProfile !== undefined && loadedReviewProfile(handle.agent) !== reviewProfile) {
-          throw new Error(`reviewer did not successfully load the required ${reviewProfile} review skill profile; no findings were posted`)
-        }
-
-        // An inline command is a request to discuss one existing thread, not a
-        // license to fan out new threads across the MR. The report tool remains
-        // useful as a structured response channel, but its findings are folded
-        // into the one reply made by runReviewAndAudit below.
-        if (payload.scope.kind === 'discussion') {
-          const response = capturedFindings.length === 0
-            ? 'No actionable issue found for the requested line.'
-            : capturedFindings.map((finding) => finding.body).join('\n\n')
-          return { summary: response, failures: [] }
-        }
-
-        const failures: string[] = []
-        let postedNew = 0
-        let postedReplies = 0
-        const findingPoster: GitlabFindingPoster = {
-          baseUrl: effective.gitlabBaseUrl,
-          token: effective.gitlabToken,
-          projectId: payload.projectId,
-          mrIid: payload.mrIid,
-        }
-        for (const finding of capturedFindings) {
-          try {
-            await postReviewFindings([finding], findingPoster)
-            if (finding.status === 'new') postedNew++
-            else postedReplies++
-          } catch (err) {
-            const locator = finding.status === 'new' ? `${finding.path}:${finding.line}` : finding.discussionId
-            failures.push(`${locator}: ${err instanceof Error ? err.message : String(err)}`)
-          }
-        }
-        return { summary: reviewerSummary(postedNew, postedReplies, diffTruncated), failures, severityCounts: countFindingSeverities(capturedFindings), findings: capturedFindings, models: [primaryOptions.model] }
-      } finally {
-        await handle.dispose()
-      }
-    }
-    try {
-      return await runOnce(primaryOptions)
-    } catch (err) {
-      const turnMsg = getTurnErrorMessage(lastHandle)
-      const isTurnUnsupported = turnMsg !== undefined && (turnMsg.includes('does not support reasoning effort') || turnMsg.includes('UNSUPPORTED_REASONING_EFFORT'))
-      const isUnsupported = isUnsupportedReasoningError(err) || isTurnUnsupported
-      if (primaryOptions.reasoningEffort !== undefined && isUnsupported) {
-        const originalMsg = turnMsg ?? (err instanceof Error ? err.message : String(err))
-        try {
-          const result = await runOnce(fallbackOptions)
-          console.warn(`maestro-orchestrator: Review model ${primaryOptions.provider}/${primaryOptions.model} with reasoningEffort "${String(primaryOptions.reasoningEffort)}" is unsupported; retried without reasoningEffort and succeeded`)
-          return result
-        } catch (retryErr) {
-          const retryMsg = getTurnErrorMessage(lastHandle) ?? (retryErr instanceof Error ? retryErr.message : String(retryErr))
-          throw new Error(`Review model ${primaryOptions.provider}/${primaryOptions.model} with reasoningEffort "${String(primaryOptions.reasoningEffort)}" is unsupported (${originalMsg}). Retried without reasoningEffort but still failed: ${retryMsg}. Remove reasoningEffort in Settings → Maestro → Review model or choose a reasoning-capable model.`)
-        }
-      }
-      if (err instanceof Error && err.message.includes('did not successfully load the required')) {
-        const effort = String(primaryOptions.reasoningEffort)
-        const hint = primaryOptions.reasoningEffort === undefined
-          ? `${err.message}. Check that maestro-skills are installed and DSH was restarted after install.`
-          : `${err.message}. Model ${primaryOptions.provider}/${primaryOptions.model} with reasoningEffort "${effort}" may be unsupported — check Settings → Maestro → Review model. Original turn likely failed with UNSUPPORTED_REASONING_EFFORT — see session.jsonl.zstd turn/end.`
-        throw new Error(hint)
-      }
-      throw err
-    }
-  }
-
-  async function runAuditor(worktreePath: string, payload: ReviewRequest, effective: { gitlabBaseUrl: string; gitlabToken: string; botUsername: string }, modelSelection?: ModelSelection, opts?: { staticOnly?: boolean }): Promise<string> {
-    let handle: AgentHandle
-    const agentOptions = agentOptionsForModel(modelSelection ?? ctx.agentDefaultModel.currentSelection())
-    try {
-      handle = await ctx.agents.create({
-        sessionId: SessionId(`maestro-auditor-${payload.mrIid}-${Date.now()}`),
-        meta: { cwd: worktreePath },
-        agentOptions,
-        setup: async (agentCtx) => {
-          installModelSelection(agentCtx, { current: agentOptions, assembled: undefined })
-          await agentCtx.plugin(ReviewToolPolicy)
-          await mountAgentPreset(ctx.agentPresets, agentCtx, 'dsh-maestro-auditor')
-          await agentCtx.plugin(GitlabClient, {
-            baseUrl: effective.gitlabBaseUrl,
-            projectId: payload.projectId,
-            mrIid: payload.mrIid,
-            token: effective.gitlabToken,
-            botUsername: effective.botUsername,
-          })
-        },
-      })
-    } catch (err) {
-      throw new Error(`failed to create auditor agent: ${err instanceof Error ? err.message : String(err)}`)
-    }
-    ctx.sessionTitle.rename(handle.agent.session, `Maestro Auditor — MR !${payload.mrIid} (${payload.projectPath})`)
-    try {
-      const prompt = buildAuditorPrompt({ staticOnly: opts?.staticOnly === true, cliAvailable: detectGovardLint(ctx, handle.agent) })
-      handle.agent.followup(createUserMessage({ content: [{ type: 'text', text: prompt }], source: { kind: REVIEW_SOURCE_KIND } }))
-      await whenIdleWithTimeout(handle, effectiveAgentTimeoutMs)
-      const output = auditorOutputFromSession(handle.agent.session)
-      const text = output.map(block => ('text' in block ? block.text : '')).join('')
-      assertTurnSucceededOrSalvage(handle, text.trim() !== '', 'auditor')
-      return `## Maestro Performance Audit\n\n${text}`
-    } finally {
-      await handle.dispose()
-    }
-  }
-
+  const engine = createReviewEngine(ctx)
   async function runReview(payload: ReviewRequest): Promise<ReviewResult> {
     const t0 = Date.now()
     try {
@@ -1366,9 +1161,11 @@ export function apply(ctx: Context, config: Config): void {
         botUsername: userConfig.botUsername ?? config.botUsername,
         projectMappings: userConfig.projectMappings ?? config.projectMappings,
       }
-      if (typeof userConfig.agentTimeoutMs === 'number' && userConfig.agentTimeoutMs >= 1000) {
-        effectiveAgentTimeoutMs = userConfig.agentTimeoutMs
-      }
+      // Resolved per review run from Settings so an agentTimeoutMs change takes
+      // effect without a plugin restart.
+      const agentTimeoutMs = typeof userConfig.agentTimeoutMs === 'number' && userConfig.agentTimeoutMs >= 1000
+        ? userConfig.agentTimeoutMs
+        : config.agentTimeoutMs
       // Best-effort housekeeping; a prune failure must never block a review.
       if (typeof userConfig.reviewSessionRetentionDays === 'number' && userConfig.reviewSessionRetentionDays > 0) {
         void pruneHistory(userConfig.reviewSessionRetentionDays).catch((err: unknown) => {
@@ -1377,12 +1174,10 @@ export function apply(ctx: Context, config: Config): void {
       }
       const mapping = effective.projectMappings.find(m => m.projectPath === payload.projectPath)
       // CI-deep (spec §3): unmapped deep review with CI env + head SHA skips
-      // both the decline and the diff-only fallback and runs the clone branch
-      // below, which shares the mapped path's completion tail.
+      // both the decline and the diff-only fallback and runs the clone access.
       const ciDeep = mapping === undefined && payload.mode === 'deep' && shouldCiDeepReview(payload)
       // CI quick-with-profile: unmapped quick + non-generic profile + CI env
-      // skips the diff-only fallback and joins the clone branch below, which
-      // runs reviewer-only (quick never audits).
+      // also clones, reviewer-only (quick never audits).
       const ciQuickProfile = mapping === undefined && shouldCiQuickProfileReview(payload)
       // Unmapped reviewer assignments remain no-ops. Only an explicit mention
       // may opt into the intentionally limited, diff-only fallback below.
@@ -1412,48 +1207,17 @@ export function apply(ctx: Context, config: Config): void {
         console.error(`maestro-orchestrator: drop missing-token project=${payload.projectPath} mr=!${String(payload.mrIid)} trigger=${payload.trigger} — ${message}`)
         return { ok: false, failures: [message], durationMs: Date.now() - t0 }
       }
-      const resolved = { ...effective, gitlabToken }
-      const historyId = `${payload.projectId}-${payload.mrIid}-${Date.now()}`
-      const currentHeadSha = await fetchMrDetailHeadSha(resolved.gitlabBaseUrl, gitlabToken, payload.projectId, payload.mrIid)
-        .catch(() => undefined) as string | undefined
-      await recordReviewStart({
-        id: historyId,
-        projectId: payload.projectId,
-        projectPath: payload.projectPath,
-        mrIid: payload.mrIid,
-        mode: payload.mode,
-        scope: payload.scope.kind,
-        trigger: payload.trigger,
-        startedAt: Date.now(),
-        headSha: currentHeadSha,
-      })
-      // H6 incremental context: what changed since the last completed review on this MR.
-      let incrementalBlock: string | undefined
-      try {
-        // CI hands over the prior head it read from GitLab; the history store is runner-local there.
-        const priorHeadSha = payload.priorHeadSha ?? (await lastCompletedReview(payload.projectId, payload.mrIid))?.headSha
-        if (priorHeadSha !== undefined && currentHeadSha !== undefined && priorHeadSha !== currentHeadSha) {
-          const compare = await fetchCompare(resolved.gitlabBaseUrl, gitlabToken, payload.projectId, priorHeadSha, currentHeadSha)
-          incrementalBlock = buildIncrementalBlock(compare, priorHeadSha, currentHeadSha)
-        }
-      } catch {
-        // Optional optimization only — never fail the review for it.
-      }
+      const gitlab = { baseUrl: effective.gitlabBaseUrl, token: gitlabToken, botUsername: effective.botUsername }
       const fallbackSelection: ModelSelection = (ctx.get?.('agentDefaultModel') as { currentSelection(): ModelSelection } | undefined)?.currentSelection()
         ?? (ctx as unknown as { agentDefaultModel?: { currentSelection(): ModelSelection } }).agentDefaultModel?.currentSelection()
         ?? { provider: 'fallback', model: 'fallback' }
-      const reviewModelSelection = resolveReviewModel(userConfig, mapping, fallbackSelection, config.reviewModel)
+      const model = resolveReviewModel(userConfig, mapping, fallbackSelection, config.reviewModel)
       // Opt-in Telegram digest; a delivery failure is logged and dropped.
       const reviewStartMsOuter = Date.now()
-      const notifyTelegram = (
-        status: 'completed' | 'failed',
-        summary?: string,
-        extra?: { findings?: { newCount: number; replyCount: number; failedCount: number } },
-      ): void => {
+      const notifyTelegram = (status: 'completed' | 'failed', summary?: string): void => {
         if (userConfig.telegramReviewNotifications !== true) return
         const notifier = ctx.get?.('maestroNotifier') as NotifierLike | undefined
         if (notifier === undefined) return
-        const findings = extra?.findings
         void notifier.send(
           'telegram',
           { botToken: userConfig.telegramBotToken, chatId: userConfig.telegramChatId },
@@ -1465,8 +1229,7 @@ export function apply(ctx: Context, config: Config): void {
               summary,
               mode: payload.mode,
               profile: mapping?.reviewProfile,
-              gitlabBaseUrl: resolved.gitlabBaseUrl,
-              findings,
+              gitlabBaseUrl: gitlab.baseUrl,
               durationMs: Date.now() - reviewStartMsOuter,
             }),
           },
@@ -1483,180 +1246,29 @@ export function apply(ctx: Context, config: Config): void {
           )
         })
       }
-      /** First line + bounded excerpt of a posted report, for the history log.
-       *  Word-boundary truncation so Telegram never shows half-cut code (`:src="item…`).
-       *  If the report starts with the markdown header, strip it — Telegram already has its own header.
-       */
-      const summarize = (body: string | undefined): string | undefined => {
-        if (body === undefined) return undefined
-        const withoutHeader = body.replace(/^## 🤖 Maestro Review[^\n]*\n\s*/, '').trim()
-        const cleaned = withoutHeader.replace(/\s+/g, ' ').trim()
-        if (cleaned.length <= 160) return cleaned
-        const cut = cleaned.slice(0, 160)
-        const lastSpace = cut.lastIndexOf(' ')
-        return `${(lastSpace > 80 ? cut.slice(0, lastSpace) : cut).trim()} …`
+      if (mapping === undefined && !ciDeep && !ciQuickProfile && payload.mode === 'deep') {
+        return await declineUnmappedDeep(payload, gitlab, notifyTelegram, t0)
       }
-      // Award-emoji acknowledgements only make sense on the MR itself; inline
-      // discussion reviews answer in-thread instead.
-      const signals = payload.scope.kind === 'mr'
-        ? createReviewSignals({ baseUrl: resolved.gitlabBaseUrl, token: resolved.gitlabToken, projectId: payload.projectId, mrIid: payload.mrIid, botUsername: resolved.botUsername })
-        : undefined
-      await signals?.start()
-      const postComment = async (body: string) => {
-        const response = await GitlabClient.fetchWithTimeout(
-          `${resolved.gitlabBaseUrl}/api/v4/projects/${payload.projectId}/merge_requests/${payload.mrIid}/notes`,
-          {
-            method: 'POST',
-            headers: { ...gitlabAuthHeaders(resolved.gitlabToken), 'Content-Type': 'application/json' },
-            body: JSON.stringify({ body }),
-          },
-        )
-        if (!response.ok) throw new Error(`GitLab API error ${response.status}: ${await response.text()}`)
+      let access: CodeAccess
+      let reviewProfile: ReviewSkillProfile | undefined
+      if (mapping !== undefined) {
+        access = {
+          kind: 'workspace',
+          localRepoPath: mapping.localRepoPath,
+          ensureWorktree,
+          removeWorktree,
+          ...(govardOnPath() ? { teardownEnvironment: teardownGovardEnvironment } : {}),
+          auditor: 'runtime',
+        }
+        reviewProfile = mapping.reviewProfile
+      } else if (ciDeep || ciQuickProfile) {
+        access = { kind: 'clone', host: process.env.GITLAB_HOST?.trim() || new URL(gitlab.baseUrl).hostname }
+        reviewProfile = payload.reviewProfile
+      } else {
+        access = { kind: 'diff' }
       }
-      const replyToDiscussion = async (discussionId: string, body: string) => {
-        const response = await GitlabClient.fetchWithTimeout(
-          `${resolved.gitlabBaseUrl}/api/v4/projects/${payload.projectId}/merge_requests/${payload.mrIid}/discussions/${encodeURIComponent(discussionId)}/notes`,
-          {
-            method: 'POST',
-            headers: { ...gitlabAuthHeaders(resolved.gitlabToken), 'Content-Type': 'application/json' },
-            body: JSON.stringify({ body }),
-          },
-        )
-        if (!response.ok) throw new Error(`GitLab API error ${response.status}: ${await response.text()}`)
-      }
-      try {
-        if (mapping === undefined && !ciDeep && !ciQuickProfile) {
-          // CI-deep (spec §3) skips the decline and falls through to the clone
-          // branch below; every other unmapped deep review still declines here.
-          if (payload.mode === 'deep' && !shouldCiDeepReview(payload)) {
-            const declined = await declineUnmappedDeepReview(payload, { postComment, replyToDiscussion, writeFailedReport, gitlabBaseUrl: resolved.gitlabBaseUrl } as unknown as ReviewCommentDeps)
-            if (!declined) {
-              console.error(`maestro-orchestrator: deduped duplicate in-flight review project=${payload.projectPath} mr=!${payload.mrIid} trigger=${payload.trigger}`)
-              await recordReviewFinish(historyId, { status: 'completed', summary: 'Duplicate in-flight review deduped — see the active run.' })
-              await signals?.finish('completed')
-              return { ok: true, summary: 'Duplicate in-flight review deduped — see the active run.', failures: [], durationMs: Date.now() - t0 }
-            }
-            await recordReviewFinish(historyId, { status: 'completed', summary: 'Deep review declined (unmapped project)' })
-            notifyTelegram('completed', 'Deep review declined (unmapped project)')
-            await signals?.finish('completed')
-            return { ok: true, summary: 'Deep review declined (unmapped project)', failures: [], durationMs: Date.now() - t0 }
-          }
-          const diffBody = await runDiffOnlyReview(payload, {
-            runReviewer: (p) => runReviewer(undefined, p, resolved, payload.reviewProfile, reviewModelSelection, incrementalBlock),
-            postComment,
-            replyToDiscussion,
-            writeFailedReport,
-            gitlabBaseUrl: resolved.gitlabBaseUrl,
-          } as unknown as DiffOnlyReviewDeps)
-          await recordReviewFinish(historyId, { status: 'completed', summary: summarize(diffBody) })
-          notifyTelegram('completed', summarize(diffBody))
-          await signals?.finish('completed')
-          return { ok: true, summary: summarize(diffBody), failures: [], durationMs: Date.now() - t0 }
-        }
-        let fullBody: string
-        if (ciDeep || ciQuickProfile) {
-          // CI-deep (mapping is always undefined here — the unmapped block above
-          // returned for every other case): clone the source at the head SHA,
-          // map it in memory, and reuse the mapped machinery reviewer-only.
-          // CI quick-with-profile joins the same branch; runReviewAndAudit skips
-          // the auditor for quick (shouldAudit), so it stays reviewer-only.
-          // No govard/vendor linking (ciEnsureWorktree is plain fetch + worktree).
-          const ciHost = process.env.GITLAB_HOST?.trim() || new URL(resolved.gitlabBaseUrl).hostname
-          const cloneDir = join('/tmp', `maestro-ci-src-${payload.projectId}-${payload.mrIid}`)
-          // D3: make the MR merge base reachable from the head in the shallow clone.
-          const baseSha = await fetchMrBaseSha(resolved.gitlabBaseUrl, resolved.gitlabToken, payload.projectId, payload.mrIid)
-          await cloneSourceRepo({ fetcher: fetch, run: defaultRun, host: ciHost, projectId: payload.projectId, sourceBranch: payload.sourceBranch, headSha: payload.headSha as string, token: resolved.gitlabToken, dir: cloneDir, ...(baseSha ? { baseSha } : {}) })
-          try {
-            const ciEnsureWorktree = async (repoPath: string, branch: string, pid: number, iid: number, suffix?: string): Promise<string> => {
-              assertSafeBranchName(branch)
-              const wt = join('/tmp', `maestro-mr-${pid}-${iid}${suffix === undefined ? '' : `-${suffix}`}`)
-              // No re-fetch: the clone already holds the head, and `fetch --depth` on a
-              // shallow repo would cut back the history the base check just deepened.
-              await defaultRun('git', ['worktree', 'remove', '--force', wt], repoPath).catch(() => {})
-              await defaultRun('git', ['worktree', 'add', '--detach', '--', wt, payload.headSha as string], repoPath)
-              return wt
-            }
-            fullBody = await runReviewAndAudit(payload, {
-              localRepoPath: cloneDir,
-              ensureWorktree: ciEnsureWorktree,
-              removeWorktree,
-              runReviewer: (worktreePath, p) => runReviewer(worktreePath, p, resolved, payload.reviewProfile ?? 'generic', reviewModelSelection, incrementalBlock),
-              runAuditor: withAuditorDegrade((worktreePath, p) => runAuditor(worktreePath, p, resolved, reviewModelSelection, { staticOnly: true })),
-              postComment,
-              replyToDiscussion,
-              writeFailedReport,
-              gitlabBaseUrl: resolved.gitlabBaseUrl,
-              reviewProfile: payload.reviewProfile ?? 'generic',
-            } as unknown as ReviewAndAuditDeps)
-          } finally {
-            await defaultRun('rm', ['-rf', cloneDir]).catch(() => {})
-          }
-        } else {
-        // Unreachable when mapping is undefined: the unmapped block returned
-        // for every non-CI-deep case, and ciDeep took the branch above.
-        if (mapping === undefined) throw new Error('unreachable: unmapped review without CI-deep decision')
-        try {
-          fullBody = await runReviewAndAudit(payload, {
-            localRepoPath: mapping.localRepoPath,
-            ensureWorktree,
-            removeWorktree,
-            ...(govardOnPath() ? { teardownEnvironment: teardownGovardEnvironment } : {}),
-            runReviewer: (worktreePath, p) => runReviewer(worktreePath, p, resolved, mapping.reviewProfile ?? 'magento2', reviewModelSelection, incrementalBlock),
-            runAuditor: (worktreePath, p) => runAuditor(worktreePath, p, resolved, reviewModelSelection),
-            postComment,
-            replyToDiscussion,
-            writeFailedReport,
-            gitlabBaseUrl: resolved.gitlabBaseUrl,
-            reviewProfile: mapping.reviewProfile ?? 'magento2',
-          } as unknown as ReviewAndAuditDeps)
-        } catch (err) {
-          const isBranchNotFound = (err as { code?: string })?.code === 'BRANCH_NOT_FOUND' || isBranchNotFoundError(err)
-          if (isBranchNotFound) {
-            const diffBody = await runDiffOnlyReview(payload, {
-              runReviewer: (p) => runReviewer(undefined, p, resolved, payload.reviewProfile, reviewModelSelection, incrementalBlock),
-              postComment,
-              replyToDiscussion,
-              writeFailedReport,
-              gitlabBaseUrl: resolved.gitlabBaseUrl,
-            } as unknown as DiffOnlyReviewDeps)
-            if (diffBody === '') {
-              console.error(`maestro-orchestrator: deduped duplicate in-flight review project=${payload.projectPath} mr=!${payload.mrIid} trigger=${payload.trigger}`)
-              await recordReviewFinish(historyId, { status: 'completed', summary: 'Duplicate in-flight review deduped — see the active run.' })
-              await signals?.finish('completed')
-              return { ok: true, summary: 'Duplicate in-flight review deduped — see the active run.', failures: [], durationMs: Date.now() - t0 }
-            }
-            const summary = summarize(diffBody)
-            const branchNote = `fallback diff-only: branch ${payload.sourceBranch} not found on origin — ${summary ?? ''}`.trim()
-            await recordReviewFinish(historyId, { status: 'completed', summary: branchNote })
-            notifyTelegram('completed', branchNote)
-            await signals?.finish('completed')
-            return { ok: true, summary: branchNote, failures: [], durationMs: Date.now() - t0 }
-          }
-          throw err
-        }
-        }
-        if (fullBody === '') {
-          console.error(`maestro-orchestrator: deduped duplicate in-flight review project=${payload.projectPath} mr=!${payload.mrIid} trigger=${payload.trigger}`)
-          await recordReviewFinish(historyId, { status: 'completed', summary: 'Duplicate in-flight review deduped — see the active run.' })
-          await signals?.finish('completed')
-          return { ok: true, summary: 'Duplicate in-flight review deduped — see the active run.', failures: [], durationMs: Date.now() - t0 }
-        }
-        await recordReviewFinish(historyId, { status: 'completed', summary: summarize(fullBody) })
-        notifyTelegram('completed', summarize(fullBody))
-        await signals?.finish('completed')
-        return { ok: true, summary: summarize(fullBody), failures: [], durationMs: Date.now() - t0 }
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err)
-        await recordReviewFinish(historyId, { status: 'failed', error: message }).catch(() => {})
-        notifyTelegram('failed', message)
-        await signals?.finish('failed')
-        return { ok: false, summary: undefined, failures: [message], durationMs: Date.now() - t0 }
-      }
+      return await engine.run(payload, { gitlab, access, reviewProfile, model, agentTimeoutMs, notify: notifyTelegram })
     } catch (err) {
-      // Worktree creation, agent creation, and fallback delivery all run from
-      // this function — surface failures as a result instead of an unhandled
-      // rejection, so both the fire-and-forget webhook path and an awaiting
-      // CI caller observe the same outcome.
       const message = err instanceof Error ? err.message : String(err)
       console.error(`maestro-orchestrator: review run failed for MR !${String(payload.mrIid)}:`, err)
       return { ok: false, summary: undefined, failures: [message], durationMs: Date.now() - t0 }
@@ -1665,4 +1277,52 @@ export function apply(ctx: Context, config: Config): void {
 
   ctx.on('maestro/review-request', (payload) => { void runReview(payload) })
   ctx.provide('reviewRunner', runReview)
+}
+
+/** Host-only: a deep request on an unmapped project gets a "not started" note, recorded like a run. */
+async function declineUnmappedDeep(
+  payload: ReviewRequest,
+  gitlab: EngineGitlab,
+  notify: (status: 'completed' | 'failed', summary?: string) => void,
+  t0: number,
+): Promise<ReviewResult> {
+  const historyId = `${payload.projectId}-${payload.mrIid}-${Date.now()}`
+  const currentHeadSha = await fetchMrDetailHeadSha(gitlab.baseUrl, gitlab.token, payload.projectId, payload.mrIid)
+    .catch(() => undefined) as string | undefined
+  await recordReviewStart({
+    id: historyId,
+    projectId: payload.projectId,
+    projectPath: payload.projectPath,
+    mrIid: payload.mrIid,
+    mode: payload.mode,
+    scope: payload.scope.kind,
+    trigger: payload.trigger,
+    startedAt: Date.now(),
+    headSha: currentHeadSha,
+  })
+  const signals = payload.scope.kind === 'mr'
+    ? createReviewSignals({ baseUrl: gitlab.baseUrl, token: gitlab.token, projectId: payload.projectId, mrIid: payload.mrIid, botUsername: gitlab.botUsername })
+    : undefined
+  await signals?.start()
+  const { postComment, replyToDiscussion } = createCommentPoster(gitlab, payload)
+  try {
+    const declined = await declineUnmappedDeepReview(payload, { postComment, replyToDiscussion, writeFailedReport, gitlabBaseUrl: gitlab.baseUrl } as unknown as ReviewCommentDeps)
+    if (!declined) {
+      console.error(`maestro-orchestrator: deduped duplicate in-flight review project=${payload.projectPath} mr=!${payload.mrIid} trigger=${payload.trigger}`)
+      await recordReviewFinish(historyId, { status: 'completed', summary: DEDUPED_SUMMARY })
+      await signals?.finish('completed')
+      return { ok: true, summary: DEDUPED_SUMMARY, failures: [], durationMs: Date.now() - t0 }
+    }
+    const summary = 'Deep review declined (unmapped project)'
+    await recordReviewFinish(historyId, { status: 'completed', summary })
+    notify('completed', summary)
+    await signals?.finish('completed')
+    return { ok: true, summary, failures: [], durationMs: Date.now() - t0 }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    await recordReviewFinish(historyId, { status: 'failed', error: message }).catch(() => {})
+    notify('failed', message)
+    await signals?.finish('failed')
+    return { ok: false, summary: undefined, failures: [message], durationMs: Date.now() - t0 }
+  }
 }

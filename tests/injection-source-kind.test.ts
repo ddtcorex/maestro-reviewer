@@ -14,14 +14,14 @@ describe('review message attribution', () => {
     expect(REVIEW_SOURCE_KIND).not.toBe('user')
     expect(REVIEW_SOURCE_KIND).not.toBe('plugin')
 
-    const src = readFileSync(new URL('../src/host/orchestrator.ts', import.meta.url), 'utf8')
+    const src = readFileSync(new URL('../src/host/engine.ts', import.meta.url), 'utf8')
     const attributed = src.match(/source: \{ kind: REVIEW_SOURCE_KIND \}/g) ?? []
     expect(attributed, 'both injections must use the shared constant').toHaveLength(2)
     expect(src, 'no injection may claim a human prompt').not.toMatch(/source: \{ kind: 'user' \}/)
   })
 
   it('keeps an explicit title for both review sessions', () => {
-    const src = readFileSync(new URL('../src/host/orchestrator.ts', import.meta.url), 'utf8')
+    const src = readFileSync(new URL('../src/host/engine.ts', import.meta.url), 'utf8')
     expect((src.match(/sessionTitle\.rename\(handle\.agent\.session, `Maestro Reviewer — MR !/g) ?? [])).toHaveLength(1)
     expect((src.match(/sessionTitle\.rename\(handle\.agent\.session, `Maestro Auditor — MR !/g) ?? [])).toHaveLength(1)
   })
