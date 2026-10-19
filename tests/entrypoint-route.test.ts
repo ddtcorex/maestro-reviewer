@@ -13,7 +13,7 @@ function route(env: Record<string, string>, settings = BAKED) {
   const generic = join(dir, 'settings.generic-openai.yaml')
   writeFileSync(target, settings)
   writeFileSync(generic, readFileSync('docker/ci-settings.generic-openai.yaml', 'utf-8'))
-  const r = spawnSync('sh', ['-c', '. docker/route.sh; select_route "$1" "$2"', 'sh', target, generic], {
+  const r = spawnSync('sh', ['-c', '. docker/route.sh; select_route "$1" "$2"; rc=$?; echo "PIN=${REVIEW_MODEL_PROVIDER:-}/${REVIEW_MODEL:-}"; exit $rc', 'sh', target, generic], {
     env: { PATH: process.env.PATH ?? '/usr/bin:/bin', CI_JOB_ID: '123', ...env }, encoding: 'utf-8',
   })
   return { code: r.status, out: readFileSync(target, 'utf-8'), stderr: r.stderr + r.stdout }
@@ -59,6 +59,15 @@ describe('select_route', () => {
       expect(r.stderr).toContain(drop)
       expect(r.out).toBe(BAKED)
     }
+  })
+
+  it('a project route drops the default-scope model pin, so the project key never runs a model the project did not choose', () => {
+    const pin = { REVIEW_MODEL_PROVIDER: 'custom-openai', REVIEW_MODEL: 'default-pinned' }
+    const project = route({ ...pin, REVIEW_ROUTE: 'project', REVIEW_ROUTE_BASE_URL: 'https://api.openai.com/v1', REVIEW_LLM_API_KEY: 'k', REVIEW_LLM_MODEL: 'project-model' })
+    expect(project.code).toBe(0)
+    expect(project.stderr).toContain('PIN=/')
+    const fallback = route({ ...pin, ...triple })
+    expect(fallback.stderr).toContain('PIN=custom-openai/default-pinned')
   })
 
   it('unconfigured returns 3 so the entrypoint exits without a review', () => {

@@ -9,7 +9,8 @@
 #   project        written by the resolve job for a project with its own
 #                  provider: the key and model come from that project's
 #                  review/<id> scope, the base URL and API from the resolve job
-#                  (REVIEW_ROUTE_BASE_URL/API), never from an inherited value.
+#                  (REVIEW_ROUTE_BASE_URL/API), never from an inherited value;
+#                  the REVIEW_MODEL_PROVIDER/REVIEW_MODEL pin is dropped.
 #   unconfigured   the project requires its own key and has none: return 3,
 #                  the caller exits without a review.
 route_fail() {
@@ -33,6 +34,8 @@ select_route() {
       [ -n "${REVIEW_ROUTE_BASE_URL:-}" ] || { route_fail "REVIEW_ROUTE_BASE_URL is required for the project route"; return 1; }
       REVIEW_LLM_BASE_URL="$REVIEW_ROUTE_BASE_URL"
       REVIEW_LLM_API="${REVIEW_ROUTE_API:-openai-completions}"
+      # A default-scope model pin must not choose the model a project pays for.
+      unset REVIEW_MODEL_PROVIDER REVIEW_MODEL
       ;;
     *)
       route_fail "invalid REVIEW_ROUTE (allowed: default, project, unconfigured)"
