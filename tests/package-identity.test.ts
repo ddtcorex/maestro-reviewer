@@ -44,9 +44,7 @@ describe('package identity after the maestro-reviewer rename', () => {
   })
 
   it('points every shipped Cordis row at the new module path and keeps row ids', () => {
-    // profiles/reviewer-ci is excluded on purpose: it installs the published
-    // package by name, so it moves only when the new name is on the registry.
-    const files = ['cordis.patch.yml', 'presets/maestro-reviewer.patch.yml', 'presets/maestro-auditor.patch.yml', 'presets/maestro-coder/agent.cordis.yml']
+    const files = ['cordis.patch.yml', 'presets/maestro-reviewer.patch.yml', 'presets/maestro-auditor.patch.yml', 'presets/maestro-coder/agent.cordis.yml', 'profiles/reviewer-ci/cordis.patch.yml']
     const docs = files.map(f => parse(read(f)))
     const names = docs.flatMap(d => moduleNames(d))
     expect(names.length).toBeGreaterThan(0)
@@ -54,6 +52,13 @@ describe('package identity after the maestro-reviewer rename', () => {
     expect(rowIds(docs[0])).toEqual(expect.arrayContaining([
       'maestro-review-host', 'maestro-review-webhook', 'maestro-review-orchestrator', 'maestro-review-settings-rpc',
     ]))
+  })
+
+  it('installs the new name in the reviewer-ci profile', () => {
+    const profile = JSON.parse(read('profiles/reviewer-ci/package.json')) as { dependencies: Record<string, string>, dsh: { profile: { bundles: string[] } } }
+    expect(profile.dependencies['@ddtcorex/maestro-reviewer']).toBe(pkg.version)
+    expect(profile.dependencies).not.toHaveProperty('@ddtcorex/dsh-maestro-review')
+    expect(profile.dsh.profile.bundles).toContain('@ddtcorex/maestro-reviewer')
   })
 
   it('keeps the persisted legacy contracts', () => {
@@ -67,7 +72,7 @@ describe('package identity after the maestro-reviewer rename', () => {
   it('mentions the old name only for legacy contracts', () => {
     // `dsh-maestro-reviewer` / `dsh-maestro-auditor` are preset ids, not the old package name.
     const OLD = /dsh-maestro-review(?!er)/
-    const ALLOWED_FILES = [/^CHANGELOG\.md$/, /^profiles\/reviewer-ci\//, /^tests\/package-identity\.test\.ts$/]
+    const ALLOWED_FILES = [/^CHANGELOG\.md$/, /^tests\/package-identity\.test\.ts$/]
     const ALLOWED_LINES = [
       /plugin:@ddtcorex\/dsh-maestro-review/, // persisted message source kind
       /dsh-maestro-review\/(reviews|runtime)\.json/, // on-disk data dir

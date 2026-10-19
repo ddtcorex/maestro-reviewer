@@ -1,6 +1,6 @@
 # Marks profiles/reviewer-ci as its OWN standalone pnpm workspace root — without
 # this file, pnpm's workspace-root detection walks up and finds
-# packages/dsh-maestro-review's own pnpm-workspace.yaml two levels up (this
+# the package's own pnpm-workspace.yaml two levels up (this
 # profile is nested inside that package's directory tree), silently folding
 # the profile into that unrelated workspace instead of installing it
 # independently (verified 2026-09-03: `pnpm --dir profiles/reviewer-ci install`
@@ -33,4 +33,4 @@ allowBuilds:
 # 2026-09-18). The Docker build additionally passes
 # --config.minimumReleaseAge=0.
 minimumReleaseAgeExclude:
-  - '@ddtcorex/dsh-maestro-review@0.9.0'
+  - '@ddtcorex/maestro-reviewer@0.13.0'
