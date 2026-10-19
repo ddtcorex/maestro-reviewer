@@ -30,9 +30,10 @@ describe('cordis patch mounting', () => {
     expect(rowInject.length).toBeGreaterThan(0)
   })
 
-  it('keeps the existing submodule rows', () => {
-    for (const required of ['providers/gitlab.js', 'orchestrator.js', 'settings-rpc.js'])
-      expect(patch, required).toContain(required)
+  it('ships the engine row and none of the DSH host rows', () => {
+    expect(patch).toContain('lib/engine-row.js')
+    for (const hostOnly of ['providers/gitlab.js', 'orchestrator.js', 'settings-rpc.js', '- id: connection'])
+      expect(patch, hostOnly).not.toContain(hostOnly)
   })
 
   it('never declares a web-only service on the mounting row', () => {

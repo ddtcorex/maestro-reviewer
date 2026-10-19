@@ -16,56 +16,15 @@ export REVIEW_REPORT_DIR="$PWD"
 # dir — without this, reports/history land inside the container and the
 # artifacts/cache steps find nothing (proven 2026-09-04 live). Local `docker
 # run -w` sets PWD already, so this only fires in real CI.
-# Route selection (only for our baked template — the __CI_MANAGED__ marker; a
-# job-mounted settings.yaml passes through untouched): deepseek is the sole
-# baked default (needs DEEPSEEK_API_KEY). Setting REVIEW_LLM_API_KEY overlays
-# the bring-your-own OpenAI-compatible route instead, so a deployment is never
-# locked to a single provider.
-if grep -q __CI_MANAGED__ /app/settings.yaml 2>/dev/null; then
-  if [ -n "${REVIEW_LLM_API_KEY:-}" ]; then
-    if [ -z "${REVIEW_LLM_BASE_URL:-}" ]; then
-      echo "[review] REVIEW_LLM_BASE_URL is required when REVIEW_LLM_API_KEY is set" >&2
-      exit 1
-    fi
-    if [ -z "${REVIEW_LLM_MODEL:-}" ]; then
-      echo "[review] REVIEW_LLM_MODEL is required when REVIEW_LLM_API_KEY is set" >&2
-      exit 1
-    fi
-    REVIEW_LLM_API="${REVIEW_LLM_API:-openai-completions}"
-    case "$REVIEW_LLM_API" in
-      openai-completions|openai-responses) ;;
-      *)
-        echo "[review] invalid REVIEW_LLM_API (allowed: openai-completions, openai-responses)" >&2
-        exit 1
-        ;;
-    esac
-    # Charset guards keep the sed substitutions below injection-free.
-    case "$REVIEW_LLM_BASE_URL" in
-      *[!A-Za-z0-9:/_.+-]*)
-        echo "[review] invalid REVIEW_LLM_BASE_URL (allowed: A-Za-z0-9:/_.+-)" >&2
-        exit 1
-        ;;
-    esac
-    case "$REVIEW_LLM_MODEL" in
-      *[!A-Za-z0-9/_+.-]*)
-        echo "[review] invalid REVIEW_LLM_MODEL (allowed: A-Za-z0-9/_+.-)" >&2
-        exit 1
-        ;;
-    esac
-    # A stable per-job session id for gateways that key routing/prompt-cache
-    # affinity off it (e.g. OpenCode Zen's Go route hard-requires
-    # x-opencode-session — see ci-settings.generic-openai.yaml). One CI job is
-    # one review "conversation", so GitLab's own CI_JOB_ID (always numeric,
-    # unique per job) is a stable id with no charset guard needed; $$ covers a
-    # local `docker run` where CI_JOB_ID is unset.
-    REVIEW_LLM_SESSION_ID="${CI_JOB_ID:-$$}"
-    sed -e "s#__REVIEW_LLM_API__#${REVIEW_LLM_API}#g" \
-        -e "s#__REVIEW_LLM_BASE_URL__#${REVIEW_LLM_BASE_URL}#g" \
-        -e "s#__REVIEW_LLM_MODEL__#${REVIEW_LLM_MODEL}#g" \
-        -e "s#__REVIEW_LLM_SESSION_ID__#${REVIEW_LLM_SESSION_ID}#g" \
-        /app/settings.generic-openai.yaml > /app/settings.yaml
-  fi
-fi
+# Provider route selection lives in route.sh (unit tested): the baked
+# deepseek default, the bring-your-own OpenAI-compatible overlay, and the
+# per-project route written by the resolve job. Return 3 means the project
+# requires its own key and has none: exit cleanly without a review.
+. /route.sh
+rc=0
+select_route /app/settings.yaml /app/settings.generic-openai.yaml || rc=$?
+if [ "$rc" -eq 3 ]; then exit 0; fi
+if [ "$rc" -ne 0 ]; then exit "$rc"; fi
 # Review history must survive across jobs (fresh container each run) or the
 # push-gate and incremental context go blind. The reviewer job caches
 # $REVIEW_REPORT_DIR/.maestro-history (see templates/reviewer-project.gitlab-ci.yml);

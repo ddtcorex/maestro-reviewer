@@ -1,6 +1,6 @@
-# maestro-reviewer bundle patch: 4 rows, maestro-review-host, maestro-review-webhook,
-# maestro-review-orchestrator, maestro-review-settings-rpc
-# RPC channel: /maestro-reviewer (see src/host/settings-rpc.ts)
+# maestro-reviewer bundle patch: maestro-review-host (skills) and
+# maestro-review-engine (the reviewEngine service). The DSH host rows (webhook,
+# host orchestrator, settings RPC, Settings UI) ship in @ddtcorex/dsh-maestro-review.
 - insert:
     # Mounts the package root (lib/index.js -> apply()). Required: `dsh plugin add`
     # applies ONLY the rows in this file, so without it the skill-provider
@@ -10,36 +10,13 @@
     # skills service exists — a headless/CI profile has no web `connection`, and
     # declaring that unused service left this row pending forever (boot failed
     # with "1 entry did not activate ... waiting for service: connection"):
-    # apply() never touches it, and the settings RPC that does lives in its own
-    # row (maestro-review-settings-rpc), which such a profile disables.
+    # apply() never touches it (the settings RPC that does lives in
+    # @ddtcorex/dsh-maestro-review).
     - id: maestro-review-host
       name: '@ddtcorex/maestro-reviewer'
       inject: ['skills']
-    - id: maestro-review-webhook
-      name: '@ddtcorex/maestro-reviewer/lib/providers/gitlab.js'
-      config:
-        secret: !!js process.env.MAESTRO_GITLAB_WEBHOOK_SECRET
-        botUsername: maestro-bot
-    - id: maestro-review-orchestrator
-      name: '@ddtcorex/maestro-reviewer/lib/orchestrator.js'
-      config:
-        gitlabBaseUrl: https://gitlab.example.com
-        gitlabToken: !!js process.env.MAESTRO_GITLAB_TOKEN
-        botUsername: maestro-bot
-        projectMappings: []
-    - id: maestro-review-settings-rpc
-      name: '@ddtcorex/maestro-reviewer/lib/settings-rpc.js'
-      # rpc.handle registers a webServer route inside an effect fiber which carries only the row's inject (not the module's);
-      # without webServer the row fails on harnesses that provide webServer after rows apply
-      # (DSH 0.1.5-rc.1+); on DSH 0.2.x it is not sufficient on its own, see the `connection` entry at the end of this file.
-      inject: ['connection', 'webServer']
-
-# DSH 0.2.x resolves `webServer` for `ctx.connection.rpc.handle` on the
-# `connection` row own fiber, so a row-level inject cannot reach it. `inject`
-# replaces the base list, hence `webStartup` (the base row needs it for
-# trustedHosts) is repeated. Identical in every maestro package that registers
-# RPC channels, so each one stays installable alone.
-- id: connection
-  inject:
-    - webStartup
-    - webServer
+    # Provides `reviewEngine`: one review run from an explicit config and code
+    # access mode, used by the CI trigger and by host plugins.
+    - id: maestro-review-engine
+      name: '@ddtcorex/maestro-reviewer/lib/engine-row.js'
+      inject: ['agentDefaultModel', 'agents', 'agentPresets', 'sessionTitle']

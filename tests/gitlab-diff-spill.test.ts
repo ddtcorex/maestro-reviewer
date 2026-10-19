@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { resolveDiffSpillPath, writeDiffSpill } from '../src/host/gitlab-client.js'
+import { resolveDiffSpillPath, writeDiffSpill } from '../src/host/forge/gitlab/gitlab-client.js'
 
 describe('resolveDiffSpillPath', () => {
   it('lands inside the agent workspace root', () => {

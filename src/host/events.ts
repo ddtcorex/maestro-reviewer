@@ -49,12 +49,3 @@ export interface ReviewResult {
   failures: string[]
   durationMs: number
 }
-
-declare module '@deepseek-ai/cordis' {
-  interface Events {
-    'maestro/review-request': (payload: ReviewRequest) => void
-  }
-  interface Context {
-    reviewRunner: (payload: ReviewRequest) => Promise<ReviewResult>
-  }
-}

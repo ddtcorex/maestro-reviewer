@@ -2,61 +2,16 @@
 #
 # `dsh-base` (see dsh.profile.bundles in package.json) already self-composes its
 # own ~80-row cordis.patch.yml (it ships a dsh.bundle.patch field). So does
-# @ddtcorex/maestro-reviewer itself, self-composing 4 rows: maestro-review-host,
-# maestro-review-webhook, maestro-review-orchestrator, maestro-review-settings-rpc
-# (verified 2026-09-03: using `insert:` for a row id the bundle already provides throws
-# "duplicate loader entry id" at boot). This file overrides three of those rows (webhook,
-# settings-rpc, orchestrator; bare `- id: X` entries, no
-# `insert:` wrapper — the same pattern deepseek-harness's own headless bundle uses to
-# override `system-prompt`/`tools`) instead of re-inserting them.
-
-# maestro-review-webhook needs `webServer`, which this profile never provides (no dsh
-# web/web-app bundle) — disable it explicitly rather than leaving it waiting forever
-# on a service that will never arrive.
-- id: maestro-review-webhook
-  disabled: true
-
-# maestro-review-settings-rpc serves the Settings UI over the web `connection`
-# (via `maestroTunnel`) — meaningless in a CI container where neither service
-# exists. Verified 2026-09-04: leaving it enabled fails boot with
-# "1 entry did not activate .../settings-rpc.js: pending (waiting for
-# services: connection, maestroTunnel)".
-- id: maestro-review-settings-rpc
-  disabled: true
-
-# Override the auto-composed row's placeholder config. projectMappings is
-# deliberately empty — this profile only serves the diff-only review path
-# (phase 1, quick mode), matching the non-goal "no full-stack govard env up
-# in CI in phase 1". gitlabBaseUrl must read GITLAB_HOST at runtime (not a
-# static placeholder) since a source project can point ci-trigger.ts at any
-# GitLab host via its own CI variables.
-- id: maestro-review-orchestrator
-  config:
-    # Ternary must be quoted — an unquoted !!js scalar containing a bare `:`
-    # (the ternary's false-branch separator) gets misparsed as a YAML mapping
-    # key instead of passed through whole to the JS evaluator (verified
-    # 2026-09-03: without quotes, cordis reported gitlabBaseUrl as
-    # "[object Object]" instead of a string).
-    gitlabBaseUrl: !!js "process.env.GITLAB_HOST ? 'https://' + process.env.GITLAB_HOST : ''"
-    gitlabToken: !!js process.env.MAESTRO_GITLAB_TOKEN
-    # botUsername drives more than mention text: review-signals.ts's
-    # unawardOwn() (clearing the running "eyes" marker) and gitlab-client.ts's
-    # selectOwnThreads() (re-review dedup/reply) both filter GitLab objects by
-    # `author.username === botUsername`. The hardcoded "maestro-bot" default
-    # only matches if MAESTRO_GITLAB_TOKEN really belongs to a "maestro-bot"
-    # account; a personal PAT posts as its owner's real username instead, so
-    # neither check ever recognized its own objects (found live 2026-09-05:
-    # every award_emoji in E2E testing was posted as the token owner, never
-    # "maestro-bot" — stale eyes markers never cleared). Set
-    # REVIEW_BOT_USERNAME to the token's real GitLab username when it isn't
-    # a literal "maestro-bot" account.
-    botUsername: !!js "process.env.REVIEW_BOT_USERNAME || 'maestro-bot'"
-    projectMappings: []
-    agentTimeoutMs: 1200000
-    # Pinned review model (no Settings UI in CI). Optional as a pair: both unset
-    # → host default; ID without provider → the review fails with a provider
-    # error instead of silently calling the wrong model.
-    reviewModel: !!js "process.env.REVIEW_MODEL ? { provider: process.env.REVIEW_MODEL_PROVIDER, model: process.env.REVIEW_MODEL } : undefined"
+# @ddtcorex/maestro-reviewer itself, with exactly two rows: maestro-review-host
+# (skills) and maestro-review-engine (the reviewEngine service). Neither needs a
+# web server or connection, so this profile overrides none of them; the DSH host
+# rows (webhook, host orchestrator, settings RPC) live in a separate plugin this
+# image never installs. Using `insert:` for a row id a bundle already provides
+# throws "duplicate loader entry id" at boot (verified 2026-09-03).
+#
+# The CI trigger calls the engine with its configuration read from the job
+# environment (GITLAB_HOST, MAESTRO_GITLAB_TOKEN, REVIEW_BOT_USERNAME,
+# REVIEW_MODEL_PROVIDER and REVIEW_MODEL; see src/host/providers/ci-trigger.ts).
 
 # New rows this profile needs that dsh-base/maestro-reviewer don't already provide.
 - insert:

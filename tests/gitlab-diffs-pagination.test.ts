@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { fetchAllDiffs, MAX_DIFF_FILES, diffToolText } from '../src/host/gitlab-client.js'
+import { fetchAllDiffs, MAX_DIFF_FILES, diffToolText } from '../src/host/forge/gitlab/gitlab-client.js'
 import { reviewerSummary } from '../src/host/orchestrator.js'
 
 const diff = (i: number) => ({ old_path: `f${i}`, new_path: `f${i}`, diff: '+x' })

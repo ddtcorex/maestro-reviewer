@@ -4,47 +4,42 @@
 
 ## Purpose
 
-Merge-request (MR) review plugin for the DeepSeek Harness (DSH): a review pipeline (webhook → orchestrator → review-intake → findings) for GitLab, plus review history/signals and the review-run tools.
+The Maestro merge-request review engine and its GitLab CI flow. The DSH host
+features (webhook intake, project mappings and local worktrees, the Settings
+section, Telegram digests) live in `@ddtcorex/dsh-maestro-review`
+(`packages/dsh-maestro-review` in the workspace), which imports this package's
+`lib/` modules listed in `tests/engine-exports.test.ts`.
 
-Names by boundary: npm package = `@ddtcorex/maestro-reviewer`; Cordis patch rows = `maestro-review-host` (the package root, mounts the skill provider), `maestro-review-webhook`, `maestro-review-orchestrator`, `maestro-review-settings-rpc`.
-
-Part of the Maestro Harness suite. Host half + client half (review settings/slot UI).
+Names by boundary: npm package = `@ddtcorex/maestro-reviewer`; Cordis patch rows = `maestro-review-host` (the package root, mounts the skill provider) and `maestro-review-engine` (provides the `reviewEngine` service); the reviewer-ci profile adds `maestro-review-ci-trigger`.
 
 ## Layout
 
-Host code lives in `src/host/` (flat `rootDir`, emits `lib/index.js`):
+Host code lives in `src/host/` (flat `rootDir`, emits `lib/index.js`); there is no client bundle:
 
-- `providers/gitlab.ts`: GitLab webhook intake (row `maestro-review-webhook`).
-- `providers/ci-trigger.ts` — CI entry: builds the `ReviewRequest` from env, push-gate, coexistence yield.
-- `orchestrator.ts` — the review pipeline orchestration (`runReview`, comment builders, CI-deep clone branch).
-- `review-intake.ts` — webhook routing (`@bot` mention → quick, `/maestro deep` → deep).
-- `review-marker.ts` / `ci-coexist.ts` / `ci-clone.ts` — comment marker, yield checks, CI source clone.
-- `review-findings-tool.ts` / `review-history.ts` / `review-signals.ts` — intake, findings tool, history, signals.
-- `gitlab-auth.ts` — header selection (`PRIVATE-TOKEN` vs `JOB-TOKEN` via `GITLAB_TOKEN_KIND`).
-- `settings-rpc.ts` — settings RPC (row `maestro-review-settings-rpc`).
-- `config-store.ts`: flat adapter over the shared settings store (`~/.dsh/dsh-maestro-config/settings.json`); `vendor/store.ts` is the embedded, hash-sealed copy generated from `dsh-maestro-core` by `scripts/vendor-store.mjs` (never hand-edit it); `secure-compare.ts`: constant-time secret comparison.
-- `govard-lint-detection.ts`: whether the govard CLI lint run may be demanded: the `bash` tool resolves for the agent AND `govard` is executable on PATH (false otherwise, so the lint rule and the auditor environment flow are omitted from the prompts).
-- `notify.ts` / `skills-tool.ts` — notifier texts + contract slice (delivery via the optional
-  `maestroNotifier` service from `@ddtcorex/dsh-maestro-notifier`) and skills helpers.
-- `events.ts`: typed event contract; `index.ts`: host `apply()` (row `maestro-review-host`); `source.ts`: the source kind stamped on injected review messages; `skill-provider.ts`: registers the bundled `skills/` dir; `tool-policy.ts`: deny-list of host tools a review agent must not call.
-- `gitlab-client.ts`: per-agent GitLab tools (`gitlab_get_mr_diff`, `gitlab_get_file_diff`, `gitlab_list_own_review_threads`, inline comments); `incremental.ts`: incremental re-review context block.
-- `review-findings-tool.ts` registers `report_review_findings` (the single structured findings channel).
-- Review-run tools mounted by the orchestrator: `search-tool.ts`, `hyva-theme-inspect-tool.ts`, `hyva-csp-scan-tool.ts`, `layout-xml-tool.ts`, `module-check-tool.ts`, `phtml-escape-scan-tool.ts`, `scope-split-tool.ts`, `perf-log-stats-tool.ts`.
+- `engine.ts`: `createReviewEngine` (one run: history, signals, incremental block, agents, comment posting, dedupe outcomes) over a `CodeAccess` of `diff`, `clone` or `workspace`; `toModelSelection`; `engine-row.ts` is the row `maestro-review-engine`.
+- `orchestrator.ts`: the run's building blocks: prompts, comment builders, agent turn checks, `runReviewAndAudit` / `runDiffOnlyReview` and their in-flight dedupe, `declineUnmappedDeepReview`.
+- `forge/types.ts`: `ReviewForge`; `forge/gitlab/`: `gitlabForge`, the per-agent GitLab tools (`gitlab-client.ts`), auth headers (`gitlab-auth.ts`, `PRIVATE-TOKEN` vs `JOB-TOKEN` via `GITLAB_TOKEN_KIND`), MR REST calls and the finding poster (`mr-api.ts`), award markers (`review-signals.ts`).
+- `providers/ci-trigger.ts`: CI entry: builds the `ReviewRequest` and the engine options from the job environment (`ciAccess`, `ciModel`), push-gate, coexistence yield, the deep request (label) and its removal.
+- `ci-resolve.ts` / `ci-resolve-run.ts` / `ci-resolve-cli.ts`: the reviewer pipeline's `resolve` job (pure route and child-pipeline rules, the GitLab reads, the CLI run by `docker/resolve.sh`).
+- `review-marker.ts` / `ci-coexist.ts` / `ci-clone.ts`: comment marker and metadata, yield checks, CI source clone.
+- `review-findings-tool.ts` (registers `report_review_findings`) / `review-history.ts` / `severity.ts` / `incremental.ts`.
+- `govard-lint-detection.ts`: whether the govard CLI lint run may be demanded: the `bash` tool resolves for the agent AND `govard` is executable on PATH.
+- `events.ts`: `ReviewRequest` / `ReviewResult` types; `index.ts`: host `apply()` (row `maestro-review-host`); `source.ts`: the source kind stamped on injected review messages; `skill-provider.ts` / `skills-tool.ts`: the bundled `skills/` dir and profile loading; `tool-policy.ts`: deny-list of host tools a review agent must not call.
+- Review-run tools: `search-tool.ts`, `hyva-theme-inspect-tool.ts`, `hyva-csp-scan-tool.ts`, `layout-xml-tool.ts`, `module-check-tool.ts`, `phtml-escape-scan-tool.ts`, `scope-split-tool.ts`, `perf-log-stats-tool.ts`.
 - `augment.d.ts` / `dsh-skill.d.ts`: ambient type declarations.
-- `src/client/`: settings section (`index.tsx`, `review/ReviewSettings.tsx`, `review/styles.ts`, brand mark and nav icon); `scripts/build-client.mjs` bundles it into `lib/client.js` as part of `pnpm build`.
-- `presets/`: agent presets (`maestro-reviewer`, `maestro-auditor` as bundle patch rows; `maestro-coder` as a directory preset — legacy, no patch row ships it since nothing in-tree loads directory presets; convert to a patch row before relying on it); `skills/dsh-native-tools/`: the capability to tool and CLI command map.
-- `profiles/reviewer-ci/` — headless DSH profile for the CI image (settings-rpc disabled: no web connection in CI).
-- `docker/` — reviewer image (`Dockerfile`, `entrypoint.sh`, `ci-settings.*.yaml` model variants).
-- `templates/` — `reviewer-project.gitlab-ci.yml` (secrets holder) + `source-project.gitlab-ci.yml` (bridge).
-- `docs/ci-reviewer-setup.md` — setup + per-case trigger workflows (quick/deep × CI/webhook).
-- `tests/` — vitest suites (`pnpm test`).
+- `presets/`: agent presets (`maestro-reviewer`, `maestro-auditor` as bundle patch rows; `maestro-coder` as a directory preset, legacy, no patch row ships it); `skills/dsh-native-tools/`: the capability to tool and CLI command map.
+- `profiles/reviewer-ci/`: headless DSH profile for the CI image (the engine rows plus the CI trigger; no web connection).
+- `docker/`: reviewer image (`Dockerfile`, `entrypoint.sh`, `route.sh` provider route selection sourced by the entrypoint, `resolve.sh` for the resolve job, `ci-settings.*.yaml` model variants).
+- `templates/`: `reviewer-project.gitlab-ci.yml` (secrets holder) + `source-project.gitlab-ci.yml` (bridge).
+- `docs/ci-reviewer-setup.md`: setup + per-case trigger workflows.
+- `tests/`: vitest suites (`pnpm test`).
 
 ## Development
 
 ```sh
 pnpm verify   # tsc --noEmit
-pnpm test     # vitest run
-pnpm build    # tsc  -> lib/
+pnpm build    # tsc -> lib/
+pnpm test     # vitest run (engine-exports.test.ts needs lib/)
 ```
 
 ## Git workflow
@@ -121,7 +116,14 @@ minute locally, with zero release steps:**
      already-opened MR never re-reviews — open a **fresh MR** (new branch)
      for each independent local validation, not another push to the same
      one.
-  5. A turn's own error message is all you get — `dsh-session`'s
+  5. **Trigger variables cannot be used to test anything any more.** A
+     trigger overrides every variable of the downstream pipeline, image
+     included, so the reviewer project forbids pipeline variables
+     (`no_one_allowed`) and the `resolve` job refuses to run otherwise. A
+     manual or API-triggered reviewer run with variables is rejected by
+     GitLab; test a new image on a separate reviewer project, or on the
+     maintainers' local GitLab rig.
+  6. A turn's own error message is all you get: `dsh-session`'s
      `TurnEndReasonMap['error']` only carries `{ message, code }`
      (`errorChain(error)` flattened, by the framework's own design), and
      the session log itself is deleted on `handle.dispose()` once the
@@ -132,6 +134,10 @@ minute locally, with zero release steps:**
      against the real dependency in a test (see above), or add temporary
      `console.error` instrumentation to the exact suspected line before
      the next run.
+
+Before any tag, run the maintainers' local GitLab rig (tier 1 and tier 2
+scenarios against the image built from the release commit); a release is
+never the debug loop.
 
 Only once a fix is confirmed working this way — ideally end to end against
 a real disposable MR — start the release checklist below. It should
@@ -262,12 +268,13 @@ release, not after one goes wrong.
 
 ## Conventions
 
-- **GitLab only**: there is no provider abstraction. The `ReviewProvider` contract and the GitHub stub were removed as dead code; add one back only together with a real second forge.
+- **One forge, behind `forge/types.ts`**: the engine reaches the forge only through `ReviewForge` (head and base SHA, compare, notes, findings, signals, the agents' read tools); GitLab is the one implementation, in `src/host/forge/gitlab/`. Only that directory and the `ci-*` modules (GitLab CI by definition) build `/api/v4/` URLs, pinned by `tests/forge-boundary.test.ts`. A second forge is a sibling directory, added together with a real user of it.
 - **Tool-only review subagents**: review/audit subagents run with tool-only presets; findings are written via the `report_review_findings` tool, not free text.
-- **Secrets** — compare PINs/tokens with `secure-compare.ts`; never log or commit real tokens. In CI, `MAESTRO_GITLAB_TOKEN` must be a PAT/group token (`api` scope) — `CI_JOB_TOKEN` is read-only for posting (probed on GitLab 18.11); redact it from clone URLs and errors.
-- **CI flow** — `providers/ci-trigger.ts` owns the push-gate + coexistence yield; the orchestrator's CI-deep branch clones and reuses `runReviewAndAudit` with a plain worktree (no vendor/govard linking) and a static-only auditor prompt. Webhook behavior stays untouched: CI yields, never the reverse.
-- Keep host (network/webhook/orchestration) and client (settings UI) split. RPC confinement is a transport property, not a registration option: `connection.rpc.handle(channel, handler)` takes exactly two parameters, so never pass an `{ authority: 'loopback' }` third argument (it is silently ignored); loopback is reported by `connection.isLoopback`.
+- **Secrets**: never log or commit real tokens. In CI, `MAESTRO_GITLAB_TOKEN` must be a PAT/group token (`api` scope); `CI_JOB_TOKEN` is read-only for posting (probed on GitLab 18.11); redact it from clone URLs and errors.
+- **CI trust model**: never read identity or configuration from a trigger. The reviewer project forbids pipeline variables; `resolve` learns the MR from GitLab (GraphQL `pipeline.upstream`, the upstream ref, MR labels) and writes the child pipeline with literal values. Per-project settings are reviewer variables scoped `review/<source project id>`; a project route is all or nothing. Reviewer-project reads use `REVIEW_RESOLVE_TOKEN` (Maintainer, environment scope `resolve`, never present in the review job); source reads use `MAESTRO_GITLAB_TOKEN`. No backward compatibility shims.
+- **CI flow**: `providers/ci-trigger.ts` owns the push-gate and coexistence yield and calls the engine with an explicit access: quick with no or the generic profile is `diff`, a framework profile and deep are `clone` (a plain worktree, no vendor or govard linking, static-only auditor). The engine never reads CI variables. CI yields to the webhook flow, never the reverse.
+- **Engine exports are a contract**: `dsh-maestro-review` imports `lib/` modules by path; rename or move one only together with the plugin, and keep `tests/engine-exports.test.ts` in step.
 
 ## Validation
 
-`pnpm verify` + `pnpm test` green before any success claim. Provider intake must be validated against a real MR (webhook payload → intake → findings), not just stubs.
+`pnpm verify` + `pnpm build` + `pnpm test` green before any success claim, and the maestro-harness GitLab rig (tier 1 and tier 2) for CI behavior. Webhook intake is validated in `dsh-maestro-review`.

@@ -1,6 +1,30 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 
+describe('reviewer-ci rows', () => {
+  const profile = readFileSync('profiles/reviewer-ci/cordis.patch.yml', 'utf-8')
+  const bundle = readFileSync('cordis.patch.yml', 'utf-8')
+
+  it('the bundle provides the engine row with the services the agents need', () => {
+    expect(bundle).toMatch(/- id: maestro-review-engine\n\s+name: '@ddtcorex\/maestro-reviewer\/lib\/engine-row\.js'\n\s+inject: \['agentDefaultModel', 'agents', 'agentPresets', 'sessionTitle'\]/)
+  })
+
+  it('the CI trigger runs through the engine, with no host orchestrator, webhook or settings row', () => {
+    expect(profile).toMatch(/- id: maestro-review-ci-trigger\n\s+name: '@ddtcorex\/maestro-reviewer\/lib\/providers\/ci-trigger\.js'/)
+    for (const id of ['maestro-review-orchestrator', 'maestro-review-webhook', 'maestro-review-settings-rpc']) {
+      expect(profile).not.toMatch(new RegExp(`- id: ${id}\\b`))
+      expect(bundle).not.toMatch(new RegExp(`- id: ${id}\\b`))
+    }
+  })
+
+  it('the engine no longer detects CI from the environment', async () => {
+    const orchestrator = await import('../src/host/orchestrator.js') as Record<string, unknown>
+    expect(orchestrator.shouldCiDeepReview).toBeUndefined()
+    expect(orchestrator.shouldCiQuickProfileReview).toBeUndefined()
+    expect(readFileSync('src/host/engine.ts', 'utf-8')).not.toMatch(/process\.env/)
+  })
+})
+
 describe('profiles/reviewer-ci/cordis.patch.yml', () => {
   it('botUsername reads from REVIEW_BOT_USERNAME (falling back to maestro-bot) instead of a bare hardcoded value', () => {
     // The orchestrator's `botUsername` config also drives review-signals.ts's
@@ -14,9 +38,9 @@ describe('profiles/reviewer-ci/cordis.patch.yml', () => {
     // apart from anyone else's — found live 2026-09-05 (every award_emoji
     // during today's real E2E tests was posted as the token owner's real
     // GitLab username, never "maestro-bot").
-    const yml = readFileSync('profiles/reviewer-ci/cordis.patch.yml', 'utf-8')
-    expect(yml).not.toMatch(/^\s*botUsername:\s*maestro-bot\s*$/m)
-    expect(yml).toMatch(/botUsername:\s*!!js\s*["']process\.env\.REVIEW_BOT_USERNAME\s*\|\|\s*['"]maestro-bot['"]["']/)
+    // Since the engine split the CI trigger reads it from the environment itself.
+    const src = readFileSync('src/host/providers/ci-trigger.ts', 'utf-8')
+    expect(src).toMatch(/botUsername: env\.REVIEW_BOT_USERNAME \|\| 'maestro-bot'/)
   })
 })
 

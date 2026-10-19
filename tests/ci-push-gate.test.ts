@@ -41,11 +41,9 @@ describe('latestCompletedReview', () => {
     expect((await latestCompletedReview(fetcher, opts))?.headSha).toBe('abc123')
   })
 
-  it('reads a pre-metadata bot comment through its marker, so an upgrade does not re-review everything', async () => {
+  it('ignores a bot comment without metadata (no pre-0.14 compatibility)', async () => {
     const { fetcher } = gitlab([[note(1, BOT, `## Review\n\n${reviewMarker('d00d00', 'ci-deep')}`)]])
-    const prior = await latestCompletedReview(fetcher, opts)
-    expect(prior?.headSha).toBe('d00d00')
-    expect(prior?.mode).toBe('deep')
+    expect(await latestCompletedReview(fetcher, opts)).toBeUndefined()
   })
 
   it('returns undefined when the MR has no bot review', async () => {
@@ -64,7 +62,7 @@ describe('runCiTrigger push-gate from GitLab state', () => {
   async function gate(env: Record<string, string>, pages: Array<Array<ReturnType<typeof note>>>, g: Parameters<typeof gitlab>[1] = {}, cache?: { headSha?: string }) {
     const { parseCiEnvConfig, runCiTrigger } = await import('../src/host/providers/ci-trigger.js')
     const cfg = parseCiEnvConfig({ GITLAB_HOST: 'h', MAESTRO_GITLAB_TOKEN: 'tok', SOURCE_PROJECT_ID: '1', MR_IID: '2', ...env })
-    const ctx = { reviewRunner: vi.fn(async () => ({ ok: true, summary: 'done', failures: [], durationMs: 5 })) }
+    const ctx = { reviewEngine: { run: vi.fn(async () => ({ ok: true, summary: 'done', failures: [], durationMs: 5 })) } }
     const history = { lastCompletedReview: vi.fn(async () => cache) }
     const result = await runCiTrigger(ctx as never, cfg, { fetcher: gitlab(pages, g).fetcher, writeFile: fakeWriteFile, history })
     return { result, ctx, history }
@@ -73,19 +71,19 @@ describe('runCiTrigger push-gate from GitLab state', () => {
   it('skips the head SHA GitLab already shows as reviewed, without consulting the runner cache', async () => {
     const { result, ctx, history } = await gate({}, [[note(1, BOT, reviewBody('cafe01'))]], { mrSha: 'cafe01' })
     expect(result.summary).toMatch(/already reviewed at cafe01/)
-    expect(ctx.reviewRunner).not.toHaveBeenCalled()
+    expect(ctx.reviewEngine.run).not.toHaveBeenCalled()
     expect(history.lastCompletedReview).not.toHaveBeenCalled()
   })
 
   it('reviews a new head with REVIEW_ON_PUSH=1 and hands the prior head over for the incremental block', async () => {
     const { ctx } = await gate({ REVIEW_ON_PUSH: '1' }, [[note(1, BOT, reviewBody('abc123'))]], { mrSha: 'cafe01' })
-    expect(ctx.reviewRunner).toHaveBeenCalledTimes(1)
-    expect((ctx.reviewRunner.mock.calls[0] as unknown[])[0]).toMatchObject({ headSha: 'cafe01', priorHeadSha: 'abc123' })
+    expect(ctx.reviewEngine.run).toHaveBeenCalledTimes(1)
+    expect((ctx.reviewEngine.run.mock.calls[0] as unknown[])[0]).toMatchObject({ headSha: 'cafe01', priorHeadSha: 'abc123' })
   })
 
   it('reviews when GitLab shows no prior review even if the runner cache claims one', async () => {
     const { ctx } = await gate({}, [[note(1, 7, 'hi')]], { mrSha: 'cafe01' }, { headSha: 'cafe01' })
-    expect(ctx.reviewRunner).toHaveBeenCalledTimes(1)
+    expect(ctx.reviewEngine.run).toHaveBeenCalledTimes(1)
   })
 
   it('falls back to the runner cache only when the GitLab state cannot be read', async () => {
@@ -96,29 +94,29 @@ describe('runCiTrigger push-gate from GitLab state', () => {
 
   it('fails open toward reviewing when both GitLab and the cache are empty', async () => {
     const { ctx } = await gate({}, [[]], { userStatus: 500, mrSha: 'cafe01' }, undefined)
-    expect(ctx.reviewRunner).toHaveBeenCalledTimes(1)
+    expect(ctx.reviewEngine.run).toHaveBeenCalledTimes(1)
   })
 
   it('skips a new head without REVIEW_ON_PUSH once GitLab shows a bot review (the 0.14 default)', async () => {
     const { result, ctx } = await gate({}, [[note(1, BOT, reviewBody('abc123'))]], { mrSha: 'cafe01' })
     expect(result.summary).toMatch(/REVIEW_ON_PUSH is not set/)
-    expect(ctx.reviewRunner).not.toHaveBeenCalled()
+    expect(ctx.reviewEngine.run).not.toHaveBeenCalled()
   })
 
   it('reviews when only a human pasted a completed marker for the head SHA', async () => {
     const spoof = `<!-- maestro-review sha=cafe01 flow=ci-quick status=completed -->`
     const { ctx } = await gate({}, [[note(1, 7, spoof)]], { mrSha: 'cafe01' })
-    expect(ctx.reviewRunner).toHaveBeenCalledTimes(1)
+    expect(ctx.reviewEngine.run).toHaveBeenCalledTimes(1)
   })
 
   it('reviews when a human reacted with eyes', async () => {
     const { ctx } = await gate({}, [[note(1, 7, 'lgtm')]], { mrSha: 'cafe01', awards: [{ name: 'eyes', user: { id: 7 } }] })
-    expect(ctx.reviewRunner).toHaveBeenCalledTimes(1)
+    expect(ctx.reviewEngine.run).toHaveBeenCalledTimes(1)
   })
 
   it('yields to the bot user\'s own eyes marker', async () => {
     const { result, ctx } = await gate({}, [[]], { mrSha: 'cafe01', awards: [{ name: 'eyes', user: { id: BOT } }] })
     expect(result.summary).toMatch(/another review is running/)
-    expect(ctx.reviewRunner).not.toHaveBeenCalled()
+    expect(ctx.reviewEngine.run).not.toHaveBeenCalled()
   })
 })

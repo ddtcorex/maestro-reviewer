@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { selectOwnThreads } from '../src/host/gitlab-client.js'
+import { selectOwnThreads } from '../src/host/forge/gitlab/gitlab-client.js'
 
 function note(author: string, body: string, extra: Record<string, unknown> = {}) {
   return { body, author: { username: author }, ...extra }

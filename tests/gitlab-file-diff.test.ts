@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { diffFileList, selectFileDiff } from '../src/host/gitlab-client.js'
+import { diffFileList, selectFileDiff } from '../src/host/forge/gitlab/gitlab-client.js'
 
 const diffs = [
   { old_path: 'a.php', new_path: 'a.php', diff: '@@ -1 +1 @@\n-x\n+y\n' },

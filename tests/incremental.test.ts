@@ -2,7 +2,9 @@ import { describe, it, expect, afterEach, vi } from 'vitest'
 import { mkdtemp, writeFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { buildIncrementalBlock, fetchCompare, fetchMrDetailHeadSha, type CompareResult } from '../src/host/incremental.js'
+import { buildIncrementalBlock } from '../src/host/incremental.js'
+import { fetchCompare, fetchMrDetailHeadSha } from '../src/host/forge/gitlab/mr-api.js'
+import type { CompareResult } from '../src/host/forge/types.js'
 import { recordReviewStart, recordReviewFinish, lastCompletedReview } from '../src/host/review-history.js'
 
 const cleanup: string[] = []

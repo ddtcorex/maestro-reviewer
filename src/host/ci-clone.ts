@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import { gitlabAuthHeaders } from './gitlab-auth.js'
+import { gitlabAuthHeaders } from './forge/gitlab/gitlab-auth.js'
 
 /**
  * Source checkout for CI deep reviews (spec §3): clone the source project at
