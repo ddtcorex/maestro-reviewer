@@ -9,7 +9,7 @@ import { describe, expect, it } from 'vitest'
  * skills-tool, the engine types) are erased and checked by the plugin's tsc.
  */
 const PLUGIN_SURFACE: Record<string, string[]> = {
-  'lib/engine.js': ['DEDUPED_SUMMARY', 'removeWorktree', 'writeFailedReport', 'createReviewEngine'],
+  'lib/engine.js': ['DEDUPED_SUMMARY', 'removeWorktree', 'writeFailedReport', 'createReviewEngine', 'toModelSelection'],
   'lib/engine-row.js': ['apply', 'name', 'inject'],
   'lib/forge/gitlab/index.js': ['gitlabForge'],
   'lib/govard-lint-detection.js': ['govardOnPath'],

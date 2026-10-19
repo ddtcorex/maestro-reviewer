@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { homedir, tmpdir } from 'node:os'
 import type { Context } from '@deepseek-ai/cordis'
 import { SessionId } from '@deepseek-ai/dsh-session'
-import { createUserMessage } from '@deepseek-ai/dsh-llm'
+import { createUserMessage, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import type { AgentHandle, ModelSelection } from '@deepseek-ai/dsh-agent'
 import { installModelSelection } from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-agent-preset-registry'
@@ -82,6 +82,19 @@ export interface EngineRunOptions {
   forge?: ReviewForge
   /** Final status of a run that did review (not of a deduped one). */
   notify?(status: 'completed' | 'failed', summary?: string): void
+}
+
+/**
+ * A model selection from plain settings values. Callers outside this package
+ * use it instead of branding the reasoning effort with their own dsh-llm copy,
+ * whose brand TypeScript treats as a different type.
+ */
+export function toModelSelection(raw: { provider: string; model: string; reasoningEffort?: string }): ModelSelection {
+  return {
+    provider: raw.provider,
+    model: raw.model,
+    ...(raw.reasoningEffort === undefined ? {} : { reasoningEffort: ReasoningEffortId(raw.reasoningEffort) }),
+  }
 }
 
 export interface ReviewEngine { run(payload: ReviewRequest, opts: EngineRunOptions): Promise<ReviewResult> }

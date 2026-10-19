@@ -109,3 +109,11 @@ describe('review engine', () => {
     expect(call[2]).toMatchObject({ model, agentTimeoutMs: 1234, gitlab })
   })
 })
+
+describe('toModelSelection', () => {
+  it('builds a selection from plain settings values, keeping the reasoning effort only when set', async () => {
+    const { toModelSelection } = await import('../src/host/engine.js')
+    expect(toModelSelection({ provider: 'p', model: 'm' })).toEqual({ provider: 'p', model: 'm' })
+    expect(toModelSelection({ provider: 'p', model: 'm', reasoningEffort: 'high' })).toEqual({ provider: 'p', model: 'm', reasoningEffort: 'high' })
+  })
+})
