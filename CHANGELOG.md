@@ -1,5 +1,38 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+
+- **Diffs over 20 files are paginated** (D1): the reviewer reads every page
+  up to 3000 files and says so in the comment when it had to stop.
+- **CI review state comes from GitLab, not the runner cache** (D2): the
+  push-gate and the incremental base read the newest bot review comment, so a
+  lost or shared runner cache no longer re-reviews or skips the wrong MR. The
+  cache is a fallback only, keyed per MR, with a per-MR `resource_group`.
+- **The merge base is reachable in CI clones** (D3): a 50-commit clone is
+  deepened until the base is an ancestor of the head; if it still is not, the
+  review continues with a warning.
+- **Only the bot's own signals skip a CI review.** A completed marker pasted
+  by someone else, or a human's eyes reaction, no longer suppresses it.
+
+### Added
+
+- Review comments carry a hidden, versioned metadata block (head SHA, mode,
+  models, and findings as code, fingerprint and severity, never body text).
+- Findings accept an optional stable `code` (for example `SEC-XSS-ESCAPE`).
+
+### Upgrade notes
+
+- **Fewer re-reviews by default.** Runners without a shared cache used to
+  miss the push-gate history and re-review every push. The state now comes
+  from GitLab, so after the first CI review of an MR (including comments
+  posted by 0.13) later pushes are skipped unless `REVIEW_ON_PUSH=1`. Set it
+  on the reviewer project to keep re-reviewing every push.
+- The CI flow no longer yields to an in-flight webhook review that runs under
+  a different GitLab user than `MAESTRO_GITLAB_TOKEN`; use one bot identity
+  for both flows to keep that coexistence.
+
 ## [0.13.0] - 2026-10-19
 
 ### Changed
