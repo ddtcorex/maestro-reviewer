@@ -10,7 +10,7 @@ Templates: `templates/reviewer-project.gitlab-ci.yml` (copy into the reviewer
 project), `templates/source-project.gitlab-ci.yml` (copy into each source
 project). Image: `docker/Dockerfile` → published to Docker Hub as
 `ddtcorex/maestro-reviewer:<version>` (the template pins an exact version,
-e.g. `0.12.1` — see [troubleshooting](#7-troubleshooting) for why `:latest`
+e.g. `0.13.0` — see [troubleshooting](#7-troubleshooting) for why `:latest`
 is deliberately not used).
 
 ---
@@ -271,7 +271,7 @@ sequenceDiagram
 - **Bridge fails instantly** — `branch:` in the bridge doesn't match the
   reviewer project's default branch, or the pipeline user lacks access.
 - **Job uses an old image** — the template pins an exact version tag (e.g.
-  `:0.12.1`) rather than `:latest`, deliberately: a moving tag would let a
+  `:0.13.0`) rather than `:latest`, deliberately: a moving tag would let a
   fresh push change every deployment's behavior with no changelog to trace
   it against. Bump `REVIEWER_IMAGE` in the reviewer project's own copy of
   the template to pick up a new release.
