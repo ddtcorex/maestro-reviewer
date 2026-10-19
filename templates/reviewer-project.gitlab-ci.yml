@@ -1,96 +1,87 @@
-# ddtcorex/maestro-reviewer — dedicated reviewer project
-stages: [review]
+# ddtcorex/maestro-reviewer: dedicated reviewer project
+#
+# Trust model (read docs/ci-reviewer-setup.md before changing anything here):
+# a trigger can override every variable of a downstream job, the image
+# included. So this project MUST forbid pipeline variables:
+#   Settings > CI/CD > Variables > "Minimum role to use pipeline variables"
+#   = no_one_allowed   (API: ci_pipeline_variables_minimum_override_role)
+# The resolve job refuses to run otherwise. Source bridges therefore pass no
+# variables; resolve asks GitLab which MR triggered this pipeline (GraphQL
+# upstream), decides the provider route, and writes review-child.yml, whose
+# review job carries `environment: review/<source project id>` and the
+# identity as literals. The child runs /entrypoint.sh as before.
+stages: [resolve, review]
 
 variables:
-  # Image registry — pin the SHA for reproducibility
+  # Pin the tag (or digest) for reproducibility.
   REVIEWER_IMAGE: "ddtcorex/maestro-reviewer:0.13.0"
-  # Or use $CI_REGISTRY_IMAGE:$CI_COMMIT_SHA when building the image in the same project
+
+resolve:
+  stage: resolve
+  # The image's ENTRYPOINT starts a review; resolve needs its own command.
+  image: { name: $REVIEWER_IMAGE, entrypoint: [""] }
+  # The `resolve` environment is what lets REVIEW_RESOLVE_TOKEN (environment
+  # scope "resolve") reach this job and never the review job.
+  environment: { name: resolve, action: prepare }
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "pipeline"
+  variables:
+    GIT_STRATEGY: none
+  script:
+    - /resolve.sh
+  artifacts:
+    expire_in: 1 day
+    paths:
+      - review-child.yml
 
 review:
   stage: review
-  image: $REVIEWER_IMAGE
-  # Only runs when triggered from the source project (or manually)
+  needs: [resolve]
   rules:
-    - if: $CI_PIPELINE_SOURCE == "pipeline"          # bridge trigger
-    - if: $CI_PIPELINE_SOURCE == "trigger"           # token trigger
-    - if: $CI_PIPELINE_SOURCE == "web"               # manual retry
-      when: manual
-  variables:
-    GIT_STRATEGY: none   # no need to check out the reviewer repo
-  # Every parameter comes from env (SOURCE_PROJECT_ID, MR_IID, GITLAB_HOST, REVIEW_MODE) — no CLI args.
-  script:
-    - /entrypoint.sh
-  # Review state lives on GitLab: the push-gate and the incremental base read the
-  # newest review comment (its hidden metadata) through the API. The history cache
-  # below is only a fallback for when GitLab cannot be read; it is keyed per MR so
-  # concurrent reviews of different MRs never overwrite each other, and the
-  # resource group runs one review per MR at a time. entrypoint.sh symlinks the
-  # store at this cached path. Cache miss fails open toward reviewing.
-  resource_group: review-$SOURCE_PROJECT_ID-$MR_IID
-  cache:
-    key: maestro-review-$SOURCE_PROJECT_ID-$MR_IID
-    paths:
-      - .maestro-history/
-  artifacts:
-    when: always
-    expire_in: 1 week
-    paths:
-      - review-report.json
-      - review-report.md
-  # Secrets — Protected + Masked, only available on the reviewer project's protected branches.
-  # MAESTRO_GITLAB_TOKEN is REQUIRED and must be a user PAT or Group/Project
-  # Access Token (api scope). CI_JOB_TOKEN is NOT enough: proven 2026-09-04 on
-  # GitLab 18.11 that reads work (GET=200) but posting the review comment fails
-  # (POST /notes=401) even with the source project allowlisting this reviewer —
-  # the run would "complete" without ever posting. A human-tied PAT needs yearly
-  # rotation; prefer a bot/group token where the instance allows creating one.
-  # MAESTRO_GITLAB_TOKEN (api scope) — required
-  # Model route selection — deepseek is the sole baked default; set
-  # REVIEW_LLM_API_KEY to overlay any OpenAI-compatible endpoint instead:
-  # DEEPSEEK_API_KEY (required unless using the route below) — deepseek-official
-  #   straight from api.deepseek.com.
-  # REVIEW_LLM_API_KEY / REVIEW_LLM_BASE_URL / REVIEW_LLM_MODEL — bring-your-own
-  #   OpenAI-compatible endpoint (self-hosted, Azure OpenAI, OpenRouter, a
-  #   private gateway, ...). All three required together; the job fails closed
-  #   if REVIEW_LLM_API_KEY is set without the other two. Optional
-  #   REVIEW_LLM_API selects the wire protocol (openai-completions [default]
-  #   or openai-responses).
-  # TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID (optional)
-  # Model pin (optional, as a pair — unset both for the active route's default
-  #   model, baked in docker/ci-settings.*.yaml):
-  # REVIEW_MODEL_PROVIDER: "deepseek-official"       # or "custom-openai"
-  # REVIEW_MODEL: "deepseek-v4-flash"                # the active route's model id
-  #   Only the provider's key is needed — no settings mount required. ID without
-  #   provider fails the review with a provider error (not silently the wrong
-  #   model); provider without ID is ignored.
-  # Review skill profile (optional — unset for the legacy diff-only generic review):
-  # REVIEW_PROFILE: "magento2"                       # magento2 | laravel | symfony | wordpress | generic
-  #   The reviewer must load the full skill set or the review fails closed
-  #   (no half-skilled review). Runtime-backed checks still degrade without a
-  #   checkout — the profile adds framework checklists, not a govard run.
-  # Review mode (default quick; deep runs on demand — no new variables):
-  # REVIEW_MODE: "deep"                              # manual downstream run with the same
-  #   bridge variables (SOURCE_PROJECT_ID, MR_IID, GITLAB_HOST) + REVIEW_ON_PUSH=1
-  #   to re-review pushes. The job clones the source at the MR head SHA with
-  #   MAESTRO_GITLAB_TOKEN (api scope, oauth2) and runs reviewer (+auditor
-  #   degraded to reviewer-only without a runtime). No govard in the container.
-  #   CI yields to webhook: if the head SHA already has a completed review
-  #   comment (either flow), the run skips instead of double-posting.
-  # Re-review pushes (optional — mirrors Settings UI autoRereviewOnPush, default off):
-  # REVIEW_ON_PUSH: "1"                              # re-review new pushes with incremental context;
-  #   unset = only the first (opened) review runs; same head SHA always skips.
+    - if: $CI_PIPELINE_SOURCE == "pipeline"
+  trigger:
+    include:
+      - artifact: review-child.yml
+        job: resolve
+    strategy: depend
+    forward:
+      yaml_variables: false
+      pipeline_variables: false
 
-# Build the image inside the same reviewer project (optional):
+# CI/CD variables of this project (Settings > CI/CD > Variables).
 #
-# build:image:
-#   stage: .pre
-#   image: docker:27
-#   services: [docker:27-dind]
-#   rules:
-#     - if: $CI_COMMIT_BRANCH == "main"
-#   script:
-#     - docker build -f packages/maestro-reviewer/docker/Dockerfile -t $CI_REGISTRY_IMAGE:$CI_COMMIT_SHA -t $CI_REGISTRY_IMAGE:latest .
-#     - docker push $CI_REGISTRY_IMAGE:$CI_COMMIT_SHA
-#     - docker push $CI_REGISTRY_IMAGE:latest
-#   # Build context must be the maestro-harness workspace root (contains deepseek-harness/) —
-#   # the trailing "." above assumes this job checks out maestro-harness, not this repo alone.
+# Tokens, both masked and protected:
+# - MAESTRO_GITLAB_TOKEN (environment scope *): bot user or group/project
+#   access token, api scope, Developer on every source project (posts the
+#   review, clones for deep) and at least Reporter on this project (resolve
+#   reads its own upstream through it). CI_JOB_TOKEN is not enough: proven
+#   2026-09-04 on GitLab 18.11, reads work but POST /notes answers 401.
+# - REVIEW_RESOLVE_TOKEN (environment scope "resolve"): project access token
+#   of THIS project, Maintainer, read_api. It reads the restriction setting
+#   and the per-project variable scopes, which a Maintainer can see for every
+#   project, so it is kept out of the review job, where an LLM agent reads
+#   untrusted MR content.
+#
+# Provider, defaults at environment scope *:
+# - DEEPSEEK_API_KEY: the baked deepseek-official route, or
+# - REVIEW_LLM_API_KEY + REVIEW_LLM_BASE_URL + REVIEW_LLM_MODEL (optional
+#   REVIEW_LLM_API: openai-completions | openai-responses): any
+#   OpenAI-compatible endpoint.
+#
+# Per source project, environment scope review/<source project id> (for
+# example review/123). A project route is all or nothing: with a scoped
+# REVIEW_LLM_API_KEY it needs REVIEW_LLM_MODEL and REVIEW_LLM_PROVIDER
+# (openai | anthropic | gemini | openrouter | deepseek | custom) or
+# REVIEW_LLM_BASE_URL at the same scope, else resolve fails naming what is
+# missing. A preset fills the base URL; custom needs REVIEW_LLM_BASE_URL.
+# - REVIEW_REQUIRE_PROJECT_KEY: "1" never falls back to the default key; with
+#   no scoped key the MR gets one note and no review.
+# - REVIEW_MODE: quick (default) | deep
+# - REVIEW_PROFILE: magento2 | laravel | symfony | wordpress | generic
+# - REVIEW_ON_PUSH: "1" re-reviews new pushes (default: first review only)
+#
+# On demand: the MR label maestro-review::deep runs one deep review of the
+# current head (retry the bridge job or push); the bot removes the label once
+# the deep review is posted.
+#
+# Optional notifications: TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID.

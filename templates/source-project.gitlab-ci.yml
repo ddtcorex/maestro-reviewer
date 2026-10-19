@@ -1,48 +1,28 @@
-# example-group/example-project — source project (copy this template into YOUR source project)
+# example-group/example-project: source project (copy this job into YOUR source project)
 stages: [review]
 
-# Only runs when there is an MR (fork MRs run fine too — this job has no secrets)
+# Runs for every MR pipeline (fork MRs too: this job holds no secrets).
 maestro:trigger-review:
   stage: review
   # The job only fails on a reviewer-infra problem (LLM/API error, timeout,
-  # failed comment post) — it never fails because findings were reported.
-  # Non-blocking so an outage of the shared reviewer project (serving many
-  # source projects) can't block this project's merge/deploy; check the MR
-  # comment for the actual review result. Drop this line to hard-block merge
-  # on any reviewer-infra failure instead.
+  # failed comment post), never because findings were reported. Non-blocking
+  # so an outage of the shared reviewer project can't block this project's
+  # merge or deploy; drop the line to hard-block merges on such failures.
   allow_failure: true
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
-  # No image needed, no secrets needed
+  # The reviewer project forbids pipeline variables, so this bridge must pass
+  # none and forward none: not the project's global `variables:` either.
+  # Review settings (mode, profile, provider, re-review on push) live on the
+  # reviewer project as CI variables scoped to review/<this project's id>.
+  # For one deep review of the current head, add the MR label
+  # maestro-review::deep and retry this job.
+  inherit:
+    variables: false
   trigger:
-    project: ddtcorex/maestro-reviewer   # ← reviewer project path
-    branch: main                          # ← the reviewer project's default branch (master on some instances)
-    strategy: depend                      # optional: wait for the reviewer pipeline, surface its status on the MR
-  variables:
-    SOURCE_PROJECT_ID: $CI_PROJECT_ID
-    MR_IID: $CI_MERGE_REQUEST_IID
-    GITLAB_HOST: $CI_SERVER_HOST
-    REVIEW_MODE: "quick"                 # or "deep" for a static-only audit (no govard runtime in CI)
-    REVIEW_PROFILE: "generic"            # per-project skill profile: magento2 | laravel | symfony | wordpress | generic
-    # REVIEW_ON_PUSH: "1"               # uncomment to re-review every push (default: only the opened review runs)
-
-# Trigger Token fallback (when not using `trigger: project:`):
-#
-# maestro:trigger-review:token:
-#   stage: review
-#   rules:
-#     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
-#   image: curlimages/curl:8
-#   variables:
-#     REVIEWER_PROJECT_ID: "123"  # id of the maestro-reviewer project
-#   script:
-#     - |
-#       curl --fail --request POST \
-#         --form token=$MAESTRO_TRIGGER_TOKEN \
-#         --form ref=main \
-#         --form variables[SOURCE_PROJECT_ID]=$CI_PROJECT_ID \
-#         --form variables[MR_IID]=$CI_MERGE_REQUEST_IID \
-#         --form variables[GITLAB_HOST]=$CI_SERVER_HOST \
-#         "https://${CI_SERVER_HOST}/api/v4/projects/${REVIEWER_PROJECT_ID}/trigger/pipeline"
-#   # MAESTRO_TRIGGER_TOKEN is the reviewer project's Trigger Token, stored in the source project
-#   # (can only trigger, never read/write code — safer than GITLAB_TOKEN)
+    project: example-group/maestro-reviewer   # the reviewer project path
+    branch: main                              # its default branch (master on some instances)
+    strategy: depend                          # surface the reviewer pipeline status on the MR
+    forward:
+      yaml_variables: false
+      pipeline_variables: false
