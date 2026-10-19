@@ -55,7 +55,9 @@ export function parseCiEnvConfig(env: Record<string, string | undefined>): CiEnv
     gitlabToken: env.MAESTRO_GITLAB_TOKEN,
     sourceProjectId: Number(env.SOURCE_PROJECT_ID),
     mrIid: Number(env.MR_IID),
-    mode: env.REVIEW_MODE === 'deep' ? 'deep' : 'quick',
+    // A deep request from the resolve job wins over REVIEW_MODE: project variables
+    // outrank the child pipeline's own values, so REVIEW_MODE alone could be quick.
+    mode: env.REVIEW_DEEP_REQUESTED === '1' || env.REVIEW_MODE === 'deep' ? 'deep' : 'quick',
     dryRun: env.REVIEW_DRY_RUN === '1',
     reviewProfile: env.REVIEW_PROFILE as ReviewSkillProfile | undefined,
     rereviewOnPush: env.REVIEW_ON_PUSH === '1',

@@ -16,6 +16,7 @@ interface World {
   labels?: string[]
   scoped?: Record<string, string>
   scopedStatus?: number
+  projectVars?: string[]
   notes?: Array<{ author: { id: number }; body: string }>
 }
 
@@ -38,6 +39,7 @@ function gitlab(w: World) {
       if (w.settingStatus) return json(w.settingStatus, {})
       return json(200, w.setting === null ? { id: REVIEWER } : { id: REVIEWER, ci_pipeline_variables_minimum_override_role: w.setting ?? 'no_one_allowed' })
     }
+    if (p === `/projects/${REVIEWER}/variables`) return tok === RESOLVE ? json(200, (w.projectVars ?? []).map(key => ({ key, environment_scope: '*' }))) : json(403, {})
     const v = /^\/projects\/900\/variables\/([A-Z_]+)$/.exec(p)
     if (v) {
       if (tok !== RESOLVE) return json(403, {})
@@ -131,6 +133,14 @@ describe('runResolve', () => {
       const r = await run(w)
       const all = `${r.raw}\n${r.logs.join('\n')}\n${JSON.stringify(r.posted)}`
       expect(all).not.toContain('SECRET')
+    }
+  })
+
+  it('refuses to run when a project variable would shadow a value the child pipeline pins', async () => {
+    for (const name of ['REVIEW_ROUTE', 'SOURCE_PROJECT_ID', 'REVIEW_DEEP_REQUESTED', 'REVIEW_ROUTE_KEY_SHA']) {
+      const r = await run({ projectVars: ['DEEPSEEK_API_KEY', name] })
+      expect(r.exitCode).toBe(1)
+      expect(r.logs.join('\n')).toContain(name)
     }
   })
 

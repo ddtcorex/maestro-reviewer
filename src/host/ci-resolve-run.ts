@@ -16,6 +16,12 @@ import { childPipelineYaml, decideRoute, noopChildYaml, parseMrRef, SCOPED_LLM_N
 export const DEEP_LABEL = 'maestro-review::deep'
 export const UNCONFIGURED_MARKER = '<!-- maestro-review-unconfigured -->'
 const CHILD_FILE = 'review-child.yml'
+/**
+ * Values the child pipeline pins as job variables. GitLab ranks project CI
+ * variables above `.gitlab-ci.yml` ones, so a project variable of the same
+ * name (at any scope) would silently replace them.
+ */
+export const PINNED_CHILD_NAMES = ['SOURCE_PROJECT_ID', 'MR_IID', 'GITLAB_HOST', 'REVIEW_ROUTE', 'REVIEW_ROUTE_BASE_URL', 'REVIEW_ROUTE_API', 'REVIEW_ROUTE_MODEL', 'REVIEW_ROUTE_KEY_SHA', 'REVIEW_DEEP_REQUESTED'] as const
 const MAINTAINER_HINT = 'REVIEW_RESOLVE_TOKEN must be a Maintainer token (read_api) on the reviewer project, stored masked with environment scope "resolve"'
 
 export interface ResolveDeps {
@@ -56,6 +62,20 @@ export async function runResolve(env: Record<string, string | undefined>, deps: 
     if (setting === undefined) throw new ResolveError(`cannot read the reviewer project's pipeline-variables setting (GET project -> ${projectRes.status}): ${MAINTAINER_HINT}`)
     if (setting !== 'no_one_allowed') {
       throw new ResolveError(`pipeline variables are not restricted on the reviewer project (minimum override role "${setting}"); set it to no_one_allowed (Settings > CI/CD > Variables) before any review can run`)
+    }
+
+    const shadowing = new Set<string>()
+    let page = '1'
+    for (let n = 0; page && n < 20; n++) {
+      const res = await get(resolveToken, `/projects/${reviewerId}/variables?per_page=100&page=${page}`)
+      if (!res.ok) throw new ResolveError(`cannot list the reviewer project's variables (${res.status}): ${MAINTAINER_HINT}`)
+      for (const v of await res.json() as Array<{ key?: string }>) {
+        if (v.key !== undefined && (PINNED_CHILD_NAMES as readonly string[]).includes(v.key)) shadowing.add(v.key)
+      }
+      page = res.headers.get('x-next-page') ?? ''
+    }
+    if (shadowing.size > 0) {
+      throw new ResolveError(`project variable(s) ${[...shadowing].join(', ')} would override what the child pipeline pins; delete them from the reviewer project`)
     }
 
     // 2. Who triggered this pipeline, asked of GitLab rather than of variables.
