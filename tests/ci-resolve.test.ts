@@ -1,0 +1,94 @@
+import { describe, expect, it } from 'vitest'
+import { parse } from 'yaml'
+import { childPipelineYaml, decideRoute, noopChildYaml, parseMrRef, PROVIDER_PRESETS } from '../src/host/ci-resolve.js'
+
+describe('parseMrRef', () => {
+  it('reads the MR iid from head, merge and train refs', () => {
+    expect(parseMrRef('refs/merge-requests/12/head')).toBe(12)
+    expect(parseMrRef('refs/merge-requests/7/merge')).toBe(7)
+    expect(parseMrRef('refs/merge-requests/3/train')).toBe(3)
+  })
+  it('returns undefined for a branch or tag ref', () => {
+    expect(parseMrRef('main')).toBeUndefined()
+    expect(parseMrRef('refs/heads/main')).toBeUndefined()
+    expect(parseMrRef('refs/merge-requests/x/head')).toBeUndefined()
+  })
+})
+
+describe('decideRoute', () => {
+  const key = { REVIEW_LLM_API_KEY: 'present' } as const
+  it('uses the default route when the project scopes nothing', () => {
+    expect(decideRoute({})).toEqual({ route: 'default' })
+  })
+  it('builds a project route from a preset', () => {
+    expect(decideRoute({ ...key, REVIEW_LLM_MODEL: 'claude-x', REVIEW_LLM_PROVIDER: 'anthropic' }))
+      .toEqual({ route: 'project', baseUrl: 'https://api.anthropic.com/v1', api: 'openai-completions' })
+  })
+  it('ships exactly the spec presets', () => {
+    expect(PROVIDER_PRESETS).toEqual({
+      openai: 'https://api.openai.com/v1',
+      anthropic: 'https://api.anthropic.com/v1',
+      gemini: 'https://generativelanguage.googleapis.com/v1beta/openai',
+      openrouter: 'https://openrouter.ai/api/v1',
+      deepseek: 'https://api.deepseek.com',
+    })
+  })
+  it('lets a scoped base URL win over the preset and keeps a valid API choice', () => {
+    expect(decideRoute({ ...key, REVIEW_LLM_MODEL: 'm', REVIEW_LLM_PROVIDER: 'openai', REVIEW_LLM_BASE_URL: 'https://gw.example.com/v1', REVIEW_LLM_API: 'openai-responses' }))
+      .toEqual({ route: 'project', baseUrl: 'https://gw.example.com/v1', api: 'openai-responses' })
+  })
+  it('needs a base URL for custom', () => {
+    expect(decideRoute({ ...key, REVIEW_LLM_MODEL: 'm', REVIEW_LLM_PROVIDER: 'custom' })).toEqual({ route: 'invalid', missing: ['REVIEW_LLM_BASE_URL'] })
+    expect(decideRoute({ ...key, REVIEW_LLM_MODEL: 'm', REVIEW_LLM_PROVIDER: 'custom', REVIEW_LLM_BASE_URL: 'https://x.example.com/v1' }))
+      .toEqual({ route: 'project', baseUrl: 'https://x.example.com/v1', api: 'openai-completions' })
+  })
+  it('names what a key-only route is missing, never falling back to the default', () => {
+    expect(decideRoute({ ...key })).toEqual({ route: 'invalid', missing: ['REVIEW_LLM_MODEL', 'REVIEW_LLM_PROVIDER or REVIEW_LLM_BASE_URL'] })
+  })
+  it('rejects LLM settings scoped without a key', () => {
+    expect(decideRoute({ REVIEW_LLM_MODEL: 'm' })).toEqual({ route: 'invalid', missing: ['REVIEW_LLM_API_KEY'] })
+  })
+  it('is unconfigured when the project requires its own key and has none', () => {
+    expect(decideRoute({ REVIEW_REQUIRE_PROJECT_KEY: '1' })).toEqual({ route: 'unconfigured' })
+  })
+  it('rejects an unknown provider and an unknown API', () => {
+    expect(decideRoute({ ...key, REVIEW_LLM_MODEL: 'm', REVIEW_LLM_PROVIDER: 'acme' })).toEqual({ route: 'invalid', missing: ['REVIEW_LLM_PROVIDER (unknown: acme)'] })
+    expect(decideRoute({ ...key, REVIEW_LLM_MODEL: 'm', REVIEW_LLM_PROVIDER: 'openai', REVIEW_LLM_API: 'grpc' })).toEqual({ route: 'invalid', missing: ['REVIEW_LLM_API (unknown: grpc)'] })
+  })
+})
+
+describe('childPipelineYaml', () => {
+  const base = { image: 'ddtcorex/maestro-reviewer:0.14.0', sourceProjectId: 42, mrIid: 7, gitlabHost: 'git.example.com' }
+  const job = (text: string) => (parse(text) as Record<string, any>).review
+
+  it('pins identity as literals on a review/<id> environment', () => {
+    const j = job(childPipelineYaml({ ...base, route: 'default', deep: false }))
+    expect(j.environment).toEqual({ name: 'review/42', action: 'prepare' })
+    expect(j.image).toBe('ddtcorex/maestro-reviewer:0.14.0')
+    expect(j.variables).toEqual({ GIT_STRATEGY: 'none', SOURCE_PROJECT_ID: '42', MR_IID: '7', GITLAB_HOST: 'git.example.com', REVIEW_ROUTE: 'default' })
+    expect(j.resource_group).toBe('review-42-7')
+    expect(j.cache.key).toBe('maestro-review-42-7')
+    expect(j.script).toEqual(['/entrypoint.sh'])
+    expect(JSON.stringify(j.variables)).not.toContain('$')
+  })
+
+  it('carries the project route values and the deep request', () => {
+    const j = job(childPipelineYaml({ ...base, route: 'project', baseUrl: 'https://api.openai.com/v1', api: 'openai-completions', deep: true }))
+    expect(j.variables).toMatchObject({ REVIEW_ROUTE: 'project', REVIEW_ROUTE_BASE_URL: 'https://api.openai.com/v1', REVIEW_ROUTE_API: 'openai-completions', REVIEW_MODE: 'deep', REVIEW_DEEP_REQUESTED: '1' })
+  })
+
+  it('keeps reports as artifacts', () => {
+    const j = job(childPipelineYaml({ ...base, route: 'default', deep: false }))
+    expect(j.artifacts.paths).toEqual(['review-report.json', 'review-report.md'])
+    expect(j.artifacts.when).toBe('always')
+  })
+})
+
+describe('noopChildYaml', () => {
+  it('is one job on the reviewer image that prints the reason', () => {
+    const doc = parse(noopChildYaml('not triggered by a merge request pipeline', 'img:1')) as Record<string, any>
+    expect(Object.keys(doc)).toEqual(['skip'])
+    expect(doc.skip.image).toEqual({ name: 'img:1', entrypoint: [''] })
+    expect(doc.skip.script.join(' ')).toContain('not triggered by a merge request pipeline')
+  })
+})
