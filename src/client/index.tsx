@@ -1,5 +1,5 @@
 /**
- * dsh-maestro-review — client bundle entry.
+ * maestro-reviewer — client bundle entry.
  *
  * Registers `settings.section` id `maestro-review` (order 32): the GitLab and
  * Review keys this package owns.
@@ -62,7 +62,7 @@ const REVIEW_NAV_CSS = `
 function installStyleTag(css: string, pluginCss: string): () => void {
   if (typeof document === 'undefined') return () => {}
   const tag = document.createElement('style')
-  tag.dataset.plugin = '@ddtcorex/dsh-maestro-review'
+  tag.dataset.plugin = '@ddtcorex/maestro-reviewer'
   tag.dataset.pluginCss = pluginCss
   tag.textContent = css
   document.head.appendChild(tag)

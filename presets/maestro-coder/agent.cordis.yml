@@ -217,7 +217,7 @@
       4. If requested, run the project's unit tests with the bash tool through the govard CLI, e.g. `govard shell -c "vendor/bin/phpunit ..."`, to verify your code. Do not explain unnecessarily.
 
 - id: skills-tool
-  name: '@ddtcorex/dsh-maestro-review/lib/skills-tool.js'
+  name: '@ddtcorex/maestro-reviewer/lib/skills-tool.js'
 
 - id: present
   name: '@deepseek-ai/dsh-tool-present'

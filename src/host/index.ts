@@ -1,7 +1,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { makeSkillProvider, resolveSkillsDir } from './skill-provider.js'
 
-export const name = '@ddtcorex/dsh-maestro-review'
+export const name = '@ddtcorex/maestro-reviewer'
 
 export function apply(ctx: Context): void {
   // The bundled DSH tool map is served from here, not from the public

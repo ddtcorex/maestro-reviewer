@@ -1,4 +1,4 @@
-# AGENTS.md — dsh-maestro-review
+# AGENTS.md — maestro-reviewer
 
 > `CLAUDE.md` at the repo root is a symlink to `AGENTS.md`. Claude Code follows the same rule set as Codex CLI. Only edit `AGENTS.md` — never edit `CLAUDE.md` directly or replace the symlink with a copy.
 
@@ -6,7 +6,7 @@
 
 Merge-request (MR) review plugin for the DeepSeek Harness (DSH): a review pipeline (webhook → orchestrator → review-intake → findings) for GitLab, plus review history/signals and the review-run tools.
 
-Names by boundary: npm package = `@ddtcorex/dsh-maestro-review`; Cordis patch rows = `maestro-review-host` (the package root, mounts the skill provider), `maestro-review-webhook`, `maestro-review-orchestrator`, `maestro-review-settings-rpc`.
+Names by boundary: npm package = `@ddtcorex/maestro-reviewer`; Cordis patch rows = `maestro-review-host` (the package root, mounts the skill provider), `maestro-review-webhook`, `maestro-review-orchestrator`, `maestro-review-settings-rpc`.
 
 Part of the Maestro Harness suite. Host half + client half (review settings/slot UI).
 
@@ -86,7 +86,7 @@ minute locally, with zero release steps:**
   local `lib/` onto an already-built image's installed copy:
   ```sh
   docker run -d --name overlay-test --entrypoint sleep <local-tag> 3600
-  docker exec overlay-test readlink -f /app/profiles/reviewer-ci/node_modules/@ddtcorex/dsh-maestro-review
+  docker exec overlay-test readlink -f /app/profiles/reviewer-ci/node_modules/@ddtcorex/maestro-reviewer
   docker cp lib/. overlay-test:<that path>/lib/
   docker commit overlay-test <local-tag>-fixed && docker rm -f overlay-test
   ```
@@ -140,7 +140,7 @@ bump, and (if warranted) one final confirming live run, not a cascade of
 "tag it and see" releases.
 
 Every release ships **two independent artifacts** that must stay in lockstep:
-the npm package (`@ddtcorex/dsh-maestro-review`) and the Docker image
+the npm package (`@ddtcorex/maestro-reviewer`) and the Docker image
 (`ddtcorex/maestro-reviewer`). The Docker image installs the npm package
 from the registry rather than copying source (`docker/Dockerfile`), so a
 release that stops after the npm tag ships a Docker image running **stale
@@ -175,14 +175,14 @@ batch.
    GitHub Release). Never run `pnpm publish`/`npm publish` manually — it
    bypasses the Release workflow and leaves `CHANGELOG`/GitHub Release out
    of sync. Confirm both: `gh run watch <run-id>` on the release workflow,
-   and poll `npm view @ddtcorex/dsh-maestro-review version` until it shows
+   and poll `npm view @ddtcorex/maestro-reviewer version` until it shows
    `X.Y.Z` (registry propagation lags the workflow's "done" by roughly
    1-2 minutes — a stale `npm view` right after tagging is not a failure).
 3. **Bump the `profiles/reviewer-ci` pin, on its own `chore/pin-reviewer-ci-X.Y.Z`
    branch** (mandatory, not optional — this is the step that actually makes
    the Docker image pick up the release): set
    `profiles/reviewer-ci/package.json`'s
-   `dependencies["@ddtcorex/dsh-maestro-review"]` to `X.Y.Z` (a `^X.Y.Z`
+   `dependencies["@ddtcorex/maestro-reviewer"]` to `X.Y.Z` (a `^X.Y.Z`
    range is fine to declare, but **does not self-update**: a plain `pnpm
    install` keeps whatever version is already locked as long as it still
    satisfies the range — pnpm does not eagerly re-resolve to the newest
@@ -190,15 +190,15 @@ batch.
    fixes on 2026-09-14, discovered only because those two releases
    happened to live in files the Dockerfile copies directly from the
    checkout (`presets/`, `profiles/reviewer-ci/pnpm-workspace.yaml`) rather
-   than in `dsh-maestro-review`'s own installed code — 0.7.4's actual fix
+   than in `maestro-reviewer`'s own installed code — 0.7.4's actual fix
    would have shipped silently absent otherwise. Always force it with
-   `pnpm update @ddtcorex/dsh-maestro-review` (not bare `install`) — and a
+   `pnpm update @ddtcorex/maestro-reviewer` (not bare `install`) — and a
    version published minutes ago is inside pnpm's 24h `minimumReleaseAge`
    window, so bypass that too (the exact same flag is already baked into
    `docker/Dockerfile`'s own frozen install for this reason,
    `ERR_PNPM_MINIMUM_RELEASE_AGE_VIOLATION` otherwise):
    ```sh
-   cd profiles/reviewer-ci && pnpm --config.minimumReleaseAge=0 update @ddtcorex/dsh-maestro-review
+   cd profiles/reviewer-ci && pnpm --config.minimumReleaseAge=0 update @ddtcorex/maestro-reviewer
    ```
    Verify the resulting `git diff --stat profiles/reviewer-ci/pnpm-lock.yaml`
    touches only that one package (specifier/resolution/integrity) before
@@ -209,7 +209,7 @@ batch.
    `dsh-agent-preset-registry`) must independently track whatever the shipped
    preset patch files (`presets/maestro-reviewer.patch.yml`,
    `presets/maestro-auditor.patch.yml`) actually require — bumping only the
-   `dsh-maestro-review` pin is not sufficient.** Root-caused 2026-09-14:
+   `maestro-reviewer` pin is not sufficient.** Root-caused 2026-09-14:
    #102 (0.7.0) migrated the persona rows from a `text` field to
    `prefix`/`suffix`, which only `@deepseek-ai/dsh-persona` ≥ some 0.1.5-line
    version understands; the reviewer-ci profile stayed on

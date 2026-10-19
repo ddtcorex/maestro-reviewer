@@ -11,6 +11,10 @@
  * The reviewer and auditor sessions keep their own explicit
  * `sessionTitle.rename(...)`: the harness only auto-titles a `kind: 'user'`
  * message, so a plugin-attributed prompt feeds no title.
+ *
+ * Persisted legacy contract: the value keeps the package's former name
+ * (renamed to `@ddtcorex/maestro-reviewer` in 0.13.0) because it is stamped
+ * into session logs, and rehydrated sessions must keep recognising it.
  */
 export const REVIEW_SOURCE_KIND = 'plugin:@ddtcorex/dsh-maestro-review'
 

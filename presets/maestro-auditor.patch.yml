@@ -1,5 +1,5 @@
 # Agent preset Maestro Auditor: declared as a bundle patch row so that every
-# profile composing @ddtcorex/dsh-maestro-review gets it. DSH 0.1.7 collects
+# profile composing @ddtcorex/maestro-reviewer gets it. DSH 0.1.7 collects
 # preset definitions from loader rows naming @deepseek-ai/dsh-agent-preset; the
 # retired plural @deepseek-ai/dsh-agent-presets instead scanned
 # $DSH_HOME/.agent-presets, which is why the reviewer image used to COPY the
@@ -12,7 +12,7 @@
         id: dsh-maestro-auditor
         name: Maestro Auditor
         description: >-
-          Automated Performance Architect that profiles a GitLab merge request's Magento 2 environment through the govard CLI, and falls back to a report-only diff review when the CLI is unavailable. Invoked programmatically by dsh-maestro-review's orchestrator — not meant for manual selection.
+          Automated Performance Architect that profiles a GitLab merge request's Magento 2 environment through the govard CLI, and falls back to a report-only diff review when the CLI is unavailable. Invoked programmatically by maestro-reviewer's orchestrator — not meant for manual selection.
         plugins:
           - id: persona
             name: '@deepseek-ai/dsh-persona'

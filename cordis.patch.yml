@@ -1,4 +1,4 @@
-# dsh-maestro-review bundle patch: 4 rows, maestro-review-host, maestro-review-webhook,
+# maestro-reviewer bundle patch: 4 rows, maestro-review-host, maestro-review-webhook,
 # maestro-review-orchestrator, maestro-review-settings-rpc
 # RPC channel: /dsh-maestro-review (see src/host/settings-rpc.ts)
 - insert:
@@ -13,22 +13,22 @@
     # apply() never touches it, and the settings RPC that does lives in its own
     # row (maestro-review-settings-rpc), which such a profile disables.
     - id: maestro-review-host
-      name: '@ddtcorex/dsh-maestro-review'
+      name: '@ddtcorex/maestro-reviewer'
       inject: ['skills']
     - id: maestro-review-webhook
-      name: '@ddtcorex/dsh-maestro-review/lib/providers/gitlab.js'
+      name: '@ddtcorex/maestro-reviewer/lib/providers/gitlab.js'
       config:
         secret: !!js process.env.MAESTRO_GITLAB_WEBHOOK_SECRET
         botUsername: maestro-bot
     - id: maestro-review-orchestrator
-      name: '@ddtcorex/dsh-maestro-review/lib/orchestrator.js'
+      name: '@ddtcorex/maestro-reviewer/lib/orchestrator.js'
       config:
         gitlabBaseUrl: https://gitlab.example.com
         gitlabToken: !!js process.env.MAESTRO_GITLAB_TOKEN
         botUsername: maestro-bot
         projectMappings: []
     - id: maestro-review-settings-rpc
-      name: '@ddtcorex/dsh-maestro-review/lib/settings-rpc.js'
+      name: '@ddtcorex/maestro-reviewer/lib/settings-rpc.js'
       # rpc.handle registers a webServer route inside an effect fiber which carries only the row's inject (not the module's);
       # without webServer the row fails on harnesses that provide webServer after rows apply
       # (DSH 0.1.5-rc.1+); on DSH 0.2.x it is not sufficient on its own, see the `connection` entry at the end of this file.

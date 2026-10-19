@@ -41,7 +41,7 @@ describe('cordis patch mounting', () => {
     // `connection` service (as 0.8.0 did) left the row PENDING FOREVER in any
     // headless profile that has no web layer: boot died with
     //   "plugin tree failed to load: 1 entry did not activate
-    //    @ddtcorex/dsh-maestro-review: pending (waiting for service: connection)"
+    //    @ddtcorex/maestro-reviewer: pending (waiting for service: connection)"
     // which is exactly how the published reviewer-ci image failed on a real run
     // (2026-09-22). The settings RPC that genuinely needs `connection` lives in
     // its own row (settings-rpc.js), which a headless profile disables.

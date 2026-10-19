@@ -1,5 +1,5 @@
 name: Feature Request
-description: Suggest a new feature or improvement to dsh-maestro-review.
+description: Suggest a new feature or improvement to maestro-reviewer.
 labels: [enhancement]
 body:
   - type: markdown

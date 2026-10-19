@@ -1,5 +1,5 @@
 /**
- * The GitLab and Review keys `dsh-maestro-review` owns, and nothing else.
+ * The GitLab and Review keys `maestro-reviewer` owns, and nothing else.
  *
  * Secrets follow a three-state rule and are never rendered back: the server
  * answers `hasGitlabToken` / `hasWebhookSecret` instead of the value, a blank

@@ -1,5 +1,5 @@
 # Agent preset Maestro Reviewer: declared as a bundle patch row so that every
-# profile composing @ddtcorex/dsh-maestro-review gets it. DSH 0.1.7 collects
+# profile composing @ddtcorex/maestro-reviewer gets it. DSH 0.1.7 collects
 # preset definitions from loader rows naming @deepseek-ai/dsh-agent-preset; the
 # retired plural @deepseek-ai/dsh-agent-presets instead scanned
 # $DSH_HOME/.agent-presets, which is why the reviewer image used to COPY the
@@ -12,7 +12,7 @@
         id: dsh-maestro-reviewer
         name: Maestro Reviewer
         description: >-
-          Automated AI Tech Lead that reviews a GitLab merge request's diff against project coding standards. Invoked programmatically by dsh-maestro-review's orchestrator — not meant for manual selection.
+          Automated AI Tech Lead that reviews a GitLab merge request's diff against project coding standards. Invoked programmatically by maestro-reviewer's orchestrator — not meant for manual selection.
         plugins:
           - id: persona
             name: '@deepseek-ai/dsh-persona'
@@ -33,7 +33,7 @@
                 6. Call report_review_findings exactly once with your complete list of findings, then stop. Do not call gitlab_post_mr_comment, gitlab_post_inline_comment, or gitlab_reply_to_thread yourself — the orchestrator posts them from your report_review_findings call.
 
           - id: skills-tool
-            name: '@ddtcorex/dsh-maestro-review/lib/skills-tool.js'
+            name: '@ddtcorex/maestro-reviewer/lib/skills-tool.js'
 
           # Delegation tools: the providers live in the Profile
           # (`subagent-codex` + `subagent-claude-code` rows), so a deployment without

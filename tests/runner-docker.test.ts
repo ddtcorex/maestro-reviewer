@@ -53,7 +53,7 @@ describe('docker', () => {
     expect(sh).toMatch(/GITLAB_TOKEN_KIND/)
     expect(sh).toMatch(/__CI_MANAGED__/)
     expect(sh).toMatch(/\.maestro-history/)
-    expect(sh).toMatch(/dsh-maestro-review/)
+    expect(sh).toContain('/app/dsh-maestro-review')
     // opencode was removed entirely — no leftover references
     expect(sh).not.toMatch(/OPENCODE/)
   })
