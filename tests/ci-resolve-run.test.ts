@@ -112,10 +112,18 @@ describe('runResolve', () => {
     expect(r.child).toBeUndefined()
   })
 
-  it('runs with a loud warning under the migration escape hatch', async () => {
-    const r = await run({ setting: 'developer' }, env({ REVIEW_ALLOW_UNRESTRICTED_TRIGGER: '1' }))
+  it('under the migration escape hatch, runs the default route without a resolve token', async () => {
+    const r = await run({ setting: 'developer' }, env({ REVIEW_ALLOW_UNRESTRICTED_TRIGGER: '1', REVIEW_RESOLVE_TOKEN: undefined }))
     expect(r.exitCode).toBe(0)
     expect(r.logs.join('\n')).toMatch(/WARNING.*REVIEW_ALLOW_UNRESTRICTED_TRIGGER/)
+    expect(r.child?.review.variables.REVIEW_ROUTE).toBe('default')
+  })
+
+  it('under the escape hatch, never sends the resolve token anywhere (the job is not trustworthy yet)', async () => {
+    const r = await run({ setting: 'developer', scoped: { REVIEW_LLM_API_KEY: 'sk-client-SECRET', REVIEW_LLM_MODEL: 'm', REVIEW_LLM_PROVIDER: 'openai' } }, env({ REVIEW_ALLOW_UNRESTRICTED_TRIGGER: '1', CI_SERVER_URL: 'https://evil.example.com' }))
+    expect(r.seenTokens.some(s => s.endsWith(RESOLVE))).toBe(false)
+    expect(r.child?.review.variables.REVIEW_ROUTE).toBe('default')
+    expect(r.logs.join('\n')).toMatch(/REVIEW_RESOLVE_TOKEN.*only after/)
   })
 
   it('fails closed naming the Maintainer role when the resolve token is missing, weak or unable to see the setting', async () => {

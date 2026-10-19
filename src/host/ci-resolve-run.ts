@@ -43,22 +43,28 @@ export async function runResolve(env: Record<string, string | undefined>, deps: 
     const reviewerId = need('CI_PROJECT_ID')
     const host = need('CI_SERVER_HOST')
     const image = need('REVIEWER_IMAGE')
-    const resolveToken = need('REVIEW_RESOLVE_TOKEN')
+    // Migration escape hatch: while trigger variables are still allowed nothing
+    // in this job is trustworthy (a trigger can even swap the image), so the
+    // Maintainer token is never used and only the default route runs.
+    const migrating = env.REVIEW_ALLOW_UNRESTRICTED_TRIGGER === '1'
+    const resolveToken = migrating ? '' : need('REVIEW_RESOLVE_TOKEN')
     const botToken = need('MAESTRO_GITLAB_TOKEN')
     const server = env.CI_SERVER_URL ?? `https://${host}`
     const api = `${server}/api/v4`
     const get = async (token: string, path: string) => deps.fetcher(`${api}${path}`, { headers: gitlabAuthHeaders(token) })
 
     // 1. Guardrail: the job is only trustworthy when trigger variables are forbidden.
-    const projectRes = await get(resolveToken, `/projects/${reviewerId}`)
-    const project = projectRes.ok ? await projectRes.json() as { ci_pipeline_variables_minimum_override_role?: string } : undefined
-    const setting = project?.ci_pipeline_variables_minimum_override_role
-    if (setting === undefined) throw new ResolveError(`cannot read the reviewer project's pipeline-variables setting (GET project -> ${projectRes.status}): ${MAINTAINER_HINT}`)
-    if (setting !== 'no_one_allowed') {
-      if (env.REVIEW_ALLOW_UNRESTRICTED_TRIGGER !== '1') {
+    if (migrating) {
+      deps.log('[review] WARNING: REVIEW_ALLOW_UNRESTRICTED_TRIGGER=1, so the pipeline-variables restriction is not checked and only the default provider route runs. Restrict pipeline variables (no_one_allowed) and remove the flag after the migration.')
+      if (env.REVIEW_RESOLVE_TOKEN) deps.log('[review] WARNING: REVIEW_RESOLVE_TOKEN is set but ignored; create it only after pipeline variables are restricted, since until then any trigger can read it.')
+    } else {
+      const projectRes = await get(resolveToken, `/projects/${reviewerId}`)
+      const project = projectRes.ok ? await projectRes.json() as { ci_pipeline_variables_minimum_override_role?: string } : undefined
+      const setting = project?.ci_pipeline_variables_minimum_override_role
+      if (setting === undefined) throw new ResolveError(`cannot read the reviewer project's pipeline-variables setting (GET project -> ${projectRes.status}): ${MAINTAINER_HINT}`)
+      if (setting !== 'no_one_allowed') {
         throw new ResolveError(`pipeline variables are not restricted on the reviewer project (minimum override role "${setting}"); set it to no_one_allowed (Settings > CI/CD > Variables), or set REVIEW_ALLOW_UNRESTRICTED_TRIGGER=1 only while migrating`)
       }
-      deps.log(`[review] WARNING: pipeline variables are not restricted ("${setting}"); running only because REVIEW_ALLOW_UNRESTRICTED_TRIGGER=1. Any trigger can still change this job. Restrict and remove the flag after the migration.`)
     }
 
     // 2. Who triggered this pipeline, asked of GitLab rather than of variables.
@@ -93,7 +99,7 @@ export async function runResolve(env: Record<string, string | undefined>, deps: 
     // 3. Provider route from the project's own scope only.
     const scope = `review/${sourceId}`
     const scoped: ScopedLlm = {}
-    for (const name of SCOPED_LLM_NAMES) {
+    for (const name of migrating ? [] : SCOPED_LLM_NAMES) {
       const res = await get(resolveToken, `/projects/${reviewerId}/variables/${name}?filter%5Benvironment_scope%5D=${encodeURIComponent(scope)}`)
       if (res.status === 404) continue
       if (!res.ok) throw new ResolveError(`cannot read variable ${name} at scope ${scope} (${res.status}): ${MAINTAINER_HINT}`)
