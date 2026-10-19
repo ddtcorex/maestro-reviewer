@@ -62,8 +62,17 @@ maintainers' local rig reruns them after every GitLab version change.
 2. **Forbid pipeline variables:** **Settings > CI/CD > Variables > Minimum
    role to use pipeline variables = No one allowed** (API field
    `ci_pipeline_variables_minimum_override_role: no_one_allowed`).
-3. Copy `templates/reviewer-project.gitlab-ci.yml` and pin `REVIEWER_IMAGE`.
-4. Set the CI/CD variables (all **Protected + Masked** where GitLab allows):
+3. **Protect the pipeline branch** (`main`, or whatever the bridges'
+   `branch:` names): push and merge for **Maintainers** only, force push off,
+   no per-user or per-group grants. Source developers are Developers here; if
+   they could change the pipeline file they could read every protected key.
+   `resolve` checks this on every run.
+4. Copy `templates/reviewer-project.gitlab-ci.yml` and pin `REVIEWER_IMAGE`.
+5. Set the CI/CD variables (all **Protected + Masked** where GitLab allows).
+   Never define a variable named after a value the child pipeline pins
+   (`SOURCE_PROJECT_ID`, `MR_IID`, `GITLAB_HOST`, `REVIEW_ROUTE*`,
+   `REVIEW_DEEP_REQUESTED`): project variables outrank pipeline-file ones, so
+   `resolve` refuses to run while one exists.
 
 | Variable | Environment scope | What |
 |---|---|---|
@@ -154,9 +163,15 @@ so a project that scoped only a key and a model would inherit the default
 base URL and send its key to the default provider. `resolve` therefore
 requires, at the project's own scope, `REVIEW_LLM_MODEL` and either
 `REVIEW_LLM_PROVIDER` or `REVIEW_LLM_BASE_URL` whenever `REVIEW_LLM_API_KEY`
-is scoped, and rejects LLM settings scoped without a key. It fails the
-reviewer pipeline naming what is missing. On a project route the
-default-scope `REVIEW_MODEL_PROVIDER`/`REVIEW_MODEL` pin is ignored.
+is scoped, and rejects LLM settings scoped without a key, or a base URL or
+model with characters GitLab would expand (only `http(s)://` plus
+`A-Za-z0-9.:/_+-`). It fails the reviewer pipeline naming what is missing.
+`resolve` pins the model and a hash of the key it saw into the child; the
+review job refuses any other key, so a key deleted or changed in between can
+never let the default key reach the project's endpoint. On a project route
+the default-scope `REVIEW_MODEL_PROVIDER`/`REVIEW_MODEL` pin is ignored.
+Wildcard scopes such as `review/*` are not supported: use exact
+`review/<id>` scopes.
 
 **Require switch.** With `REVIEW_REQUIRE_PROJECT_KEY=1` at the project's
 scope and no scoped key, the MR gets one note ("AI review is not configured
@@ -180,6 +195,7 @@ uploaded by the review job (even on skip or failure).
 Add the MR label **`maestro-review::deep`**, then retry the bridge job or
 push. `resolve` turns the label into a deep request:
 
+- A deep request always runs deep, whatever `REVIEW_MODE` says.
 - Deep runs **once per head SHA**: it runs even when that SHA already has a
   quick review, and skips only when the bot already posted a deep review for
   it.
@@ -303,6 +319,13 @@ works by design; build and test it on a separate reviewer project.
   `read_api`, or is not scoped to `resolve`.
 - **`its upstream is not visible`**: `MAESTRO_GITLAB_TOKEN`'s user needs at
   least Reporter on the reviewer project and on the source project.
+- **`branch main of the reviewer project is not protected` / `must be
+  protected for Maintainers only`**: see [section 1](#1-one-time-setup-the-reviewer-project), step 3.
+- **`project variable(s) ... would override what the child pipeline pins`**:
+  delete those variables from the reviewer project.
+- **`the project key changed since resolve`**: the project's scoped key was
+  changed or deleted after `resolve` ran (or an old child job was retried);
+  rerun the whole reviewer pipeline, never only the child job.
 - **`incomplete provider settings for project <id>`**: the project's scope is
   partial; the message names the missing variables
   ([section 3](#3-per-project-settings)).

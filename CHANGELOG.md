@@ -10,6 +10,12 @@
   own image with the reviewer's secrets or redirect its token and LLM key.
   The reviewer project must now forbid pipeline variables, bridges pass none,
   and a new `resolve` job learns the MR from GitLab (GraphQL upstream).
+- `resolve` also refuses to run unless the reviewer pipeline branch is
+  Maintainer-only (push, merge, no force push), while a project variable
+  shadows a value the child pipeline pins, or when a project's base URL or
+  model holds characters GitLab would expand. The review job refuses a key
+  other than the one `resolve` saw, so a deleted project key never lets the
+  default key reach that project's endpoint.
 - **Only the bot's own signals skip a CI review.** A completed marker pasted
   by someone else, or a human's eyes reaction, no longer suppresses it.
 
