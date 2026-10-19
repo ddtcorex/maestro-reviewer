@@ -51,7 +51,7 @@ describe('docker', () => {
   })
 
   it('entrypoint.sh validates required env then execs dsh --profile reviewer-ci with no task text', () => {
-    const sh = readFileSync('docker/entrypoint.sh', 'utf-8')
+    const sh = readFileSync('docker/entrypoint.sh', 'utf-8') + readFileSync('docker/route.sh', 'utf-8') // route selection lives in route.sh
     expect(sh).toMatch(/MAESTRO_GITLAB_TOKEN/)
     expect(sh).toMatch(/SOURCE_PROJECT_ID/)
     expect(sh).toMatch(/MR_IID/)
@@ -69,7 +69,7 @@ describe('docker', () => {
   })
 
   it('entrypoint.sh overlays the generic OpenAI-compatible route only when REVIEW_LLM_API_KEY is set, otherwise keeps the baked deepseek default', () => {
-    const sh = readFileSync('docker/entrypoint.sh', 'utf-8')
+    const sh = readFileSync('docker/entrypoint.sh', 'utf-8') + readFileSync('docker/route.sh', 'utf-8') // route selection lives in route.sh
     expect(sh).toMatch(/REVIEW_LLM_API_KEY/)
     expect(sh).toMatch(/REVIEW_LLM_BASE_URL/)
     expect(sh).toMatch(/REVIEW_LLM_MODEL/)
