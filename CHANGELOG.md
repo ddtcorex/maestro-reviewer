@@ -1,5 +1,28 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- `review-report.json` (and `ReviewResult`) carries `toolCalls`: attempted
+  calls per tool name across the run's agents, denied ones included, to decide
+  from real reviews which tools are worth keeping.
+
+### Removed
+
+- `maestro_search_files`: the native `grep` and `glob` tools of `dsh-base`
+  cover it.
+- `maestro_get_skills`: nothing used it any more; load skills with the native
+  `skill` tool. `maestro_load_review_profile` stays.
+- The legacy `presets/maestro-coder` directory preset (DSH stopped reading
+  directory presets on 2026-09-29; no row shipped it), and the dead
+  `maestro_write_file` entry of the review tool deny list.
+
+### Fixed
+
+- `gitlab_get_mr_diff` told the agent to read the spilled diff with
+  `maestro_read_file`, a tool that no longer exists; it now names `read`.
+
 ## [0.15.1] - 2026-10-20
 
 Temporary opt-out for installations without a dedicated bot user (#174).

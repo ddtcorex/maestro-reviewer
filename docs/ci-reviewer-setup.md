@@ -338,7 +338,9 @@ or the profile's checklist on a checkout of the head SHA. The bot posts one
 `Maestro Review` comment (verdict, summary, findings by severity) and an
 inline thread per finding. The review job always uploads
 `review-report.json` and `review-report.md` (kept one week), even on skip or
-failure. A finding never fails the pipeline; only a reviewer-infra problem
+failure. When agents ran, `review-report.json` also carries `toolCalls`: how
+many times the agents attempted each tool, the data used to decide which
+review tools are worth keeping. A finding never fails the pipeline; only a reviewer-infra problem
 does, and the bridge's `allow_failure` keeps that from blocking the merge.
 
 ### 5.2 Deep review (on demand)

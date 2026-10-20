@@ -44,7 +44,6 @@ const OWNED_BY_THIS_PLUGIN = [
   'maestro_review_scope_split',
   'phtml_escape_scan',
   'magento_module_check',
-  'maestro_get_skills',
 ]
 
 describe('dsh-native-tools skill', () => {
@@ -86,6 +85,10 @@ describe('dsh-native-tools skill', () => {
     )
     expect(registered.has('govard_lint')).toBe(false)
     expect(registered.has('magento_module_check')).toBe(true)
+  })
+
+  it('names no tool that was removed from the review surface', () => {
+    for (const gone of ['maestro_get_skills', 'maestro_search_files']) expect(read()).not.toContain(gone)
   })
 
   it('names no tool of the retired govard plugin', () => {

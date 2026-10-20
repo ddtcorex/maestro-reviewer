@@ -134,7 +134,7 @@ interface OwnThread {
  * spills large tool outputs to /tmp/dsh-spill-*, which sits outside the
  * agent's cwd — and Guard blocks the agent from reading it back
  * ("path outside cwd", tickets g-dd0d1679/g-716cd436). Writing the diff
- * inside the workspace root keeps it readable via maestro_read_file.
+ * inside the workspace root keeps it readable via the read tool.
  */
 export function resolveDiffSpillPath(workspaceRoot: string, mrIid: number): string {
   return join(resolve(workspaceRoot), '.maestro', `mr-${mrIid}.diff`)
@@ -202,7 +202,7 @@ export function apply(ctx: Context, config: Config): void {
 
   ctx.tools.register(defineTool({
     name: 'gitlab_get_mr_diff',
-    description: 'Fetch the current unified diff for this merge request. The full diff is written to path (inside your workspace, readable via maestro_read_file); bytes is its size and files lists per-file sizes. Prefer gitlab_get_file_diff per file you inspect — small inline results never spill. Do not look for anything under /tmp.',
+    description: 'Fetch the current unified diff for this merge request. The full diff is written to path (inside your workspace, readable with the read tool); bytes is its size and files lists per-file sizes. Prefer gitlab_get_file_diff per file you inspect — small inline results never spill. Do not look for anything under /tmp.',
     parameters: {},
     output: {
       schema: { type: 'object', additionalProperties: false, properties: { path: { type: 'string', required: true }, bytes: { type: 'number', required: true }, files: { type: 'array', items: { type: 'object', additionalProperties: false, properties: { path: { type: 'string', required: true }, bytes: { type: 'number', required: true } } } } } },

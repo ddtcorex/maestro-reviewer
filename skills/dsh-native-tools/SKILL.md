@@ -54,9 +54,6 @@ Left column is the phrase the public skill uses; right column is what to call.
 | native MR diff | `gitlab_get_mr_diff`, `gitlab_list_own_review_threads`, `gitlab_post_inline_comment` — diff plus own threads plus inline comments in one call |
 | local environment inside a review worktree | `govard env up` brings it up, `govard shell -c "<command>"` runs one command in the container, `govard env down -v` tears it down (always, even after a failure). All three run with `bash`; the worktree carries its own project name so it never collides with the primary checkout |
 
-The `maestro_get_skills` tool searches this same skill catalogue by keyword and
-returns full content — useful when a review profile has not preloaded a skill.
-
 ## Session-shape notes
 
 - Skills arrive as catalog summaries in a `<system-reminder>`; load one with the

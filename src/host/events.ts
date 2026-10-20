@@ -48,4 +48,6 @@ export interface ReviewResult {
   summary?: string
   failures: string[]
   durationMs: number
+  /** Tool calls the review's agents attempted, per tool name (absent when no agent ran). */
+  toolCalls?: Record<string, number>
 }
