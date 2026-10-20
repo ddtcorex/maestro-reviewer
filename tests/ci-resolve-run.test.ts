@@ -303,6 +303,21 @@ describe('runResolve', () => {
     expect(r.logs.join('\n')).toMatch(/reviewer project/)
   })
 
+  it('with REVIEW_ACCEPT_PRIVILEGED_BOT=1 only warns about an over-privileged bot, and still refuses an admin', async () => {
+    const levels = { [CONFIG]: 40, [REVIEWER]: 40 }
+    const accepted = await run({ memberLevels: levels }, env({ REVIEW_ACCEPT_PRIVILEGED_BOT: '1' }))
+    expect(accepted.exitCode).toBe(0)
+    expect(accepted.child?.review).toBeDefined()
+    const log = accepted.logs.join('\n')
+    expect(log).toMatch(/warning.*config project.*REVIEW_ACCEPT_PRIVILEGED_BOT/)
+    expect(log).toMatch(/warning.*reviewer project.*REVIEW_ACCEPT_PRIVILEGED_BOT/)
+    for (const value of ['0', 'true', 'yes', '']) {
+      expect((await run({ memberLevels: levels }, env({ REVIEW_ACCEPT_PRIVILEGED_BOT: value }))).exitCode, value).toBe(1)
+    }
+    const admin = await run({ me: { id: 5, username: 'bot', is_admin: true } }, env({ REVIEW_ACCEPT_PRIVILEGED_BOT: '1' }))
+    expect(admin.exitCode).toBe(1)
+  })
+
   it('no longer requires the reviewer branch itself to be Maintainers only', async () => {
     const r = await run({})
     expect(r.exitCode).toBe(0)

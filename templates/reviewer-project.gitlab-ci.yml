@@ -65,7 +65,9 @@ review:
 #   access token, api scope, Developer on every source project (posts the
 #   review, clones for deep), Reporter on this project (resolve reads its own
 #   upstream through it; Maintainer is refused) and exactly Reporter on the
-#   config project (Developer or above is refused). CI_JOB_TOKEN is not
+#   config project (Developer or above is refused; REVIEW_ACCEPT_PRIVILEGED_BOT
+#   = "1" turns both role refusals into warnings, temporarily, until a
+#   dedicated bot exists). CI_JOB_TOKEN is not
 #   enough: proven 2026-09-04 on GitLab 18.11, reads work but POST /notes
 #   answers 401.
 # - REVIEW_RESOLVE_TOKEN (environment scope "resolve"): project access token

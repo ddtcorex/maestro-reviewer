@@ -117,11 +117,19 @@ export async function runResolve(env: Record<string, string | undefined>, deps: 
       const viaMembers = res.ok ? (await res.json() as { access_level?: number }).access_level ?? 0 : 0
       return Math.max(viaMembers, permissions?.project_access?.access_level ?? 0, permissions?.group_access?.access_level ?? 0)
     }
+    // REVIEW_ACCEPT_PRIVILEGED_BOT=1 is a Maintainer's explicit, temporary
+    // acceptance of that risk (for example while no dedicated bot user can be
+    // created): the two role checks below then only warn. Admins stay refused.
+    const acceptPrivileged = env.REVIEW_ACCEPT_PRIVILEGED_BOT === '1'
+    const roleProblem = (message: string) => {
+      if (!acceptPrivileged) throw new ResolveError(message)
+      deps.log(`[review] warning: ${message}; continuing because REVIEW_ACCEPT_PRIVILEGED_BOT=1`)
+    }
     if (await botLevel(cfgProject.id, cfgProject.permissions) >= 30) {
-      throw new ResolveError(`REVIEW_GITLAB_TOKEN's user is Developer or above on the config project ${config.project}; it must be Reporter there (check group memberships and shared groups too)`)
+      roleProblem(`REVIEW_GITLAB_TOKEN's user is Developer or above on the config project ${config.project}; it must be Reporter there (check group memberships and shared groups too)`)
     }
     if (await botLevel(Number(reviewerId)) >= 40) {
-      throw new ResolveError(`REVIEW_GITLAB_TOKEN's user is Maintainer or above on the reviewer project and could read every key; give it Reporter there`)
+      roleProblem(`REVIEW_GITLAB_TOKEN's user is Maintainer or above on the reviewer project and could read every key; give it Reporter there`)
     }
 
     // Every protection rule that matches the config branch applies, and

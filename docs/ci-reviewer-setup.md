@@ -262,6 +262,7 @@ for any name from [4.5](#45-pinned-by-the-pipeline-never-define).
 | `REVIEW_MODEL_PROVIDER`, `REVIEW_MODEL` | no, set both or neither | protected | Pin a model on the default route: provider `deepseek-official` (baked route) or `custom-openai` (bring-your-own route) plus a model id, for example `deepseek-official` + `deepseek-v4-pro`. Ignored on a project route. |
 | `REVIEW_REQUIRE_PROJECT_KEY` | no | protected | `1` at `*`: no project ever falls back to the default key; a project without its own key gets one "AI review is not configured" note and no model call. A project's scoped `0` opts it out. |
 | `REVIEW_MODE`, `REVIEW_PROFILE`, `REVIEW_ON_PUSH` | no | protected | Defaults for every project, same meaning as in 4.3. |
+| `REVIEW_ACCEPT_PRIVILEGED_BOT` | no, temporary only | protected | `1`: a bot that is Developer or above on the config project, or Maintainer or above on the reviewer project, only logs a warning instead of failing `resolve`. For the period before a dedicated bot user exists (for example a Maintainer's own token). It accepts the risk the check exists for: an agent reading untrusted MR content holds a token that can read every key and change the pipeline file. Administrators stay refused; every other check stays. Delete it as soon as a dedicated bot is in place. |
 
 ### 4.3 Per source project settings, scope `review/<source project id>`
 
@@ -431,7 +432,8 @@ fallback, and deep is declined there (use the CI label instead).
 
 1. Make sure the bot is a dedicated, non-admin user that is at most Reporter
    on the reviewer project (3.3): a reviewer Maintainer's personal token is
-   refused from 0.15 on.
+   refused from 0.15 on. If no such user can be created yet, set
+   `REVIEW_ACCEPT_PRIVILEGED_BOT=1` (from 0.15.1) and plan its removal.
 2. Create the config project (3.1) with the 0.15 pipeline file, and give the
    bot and every MR author Reporter on it.
 3. Add `REVIEW_GITLAB_TOKEN` with the bot's token, flags as in 4.2.
@@ -466,7 +468,7 @@ works by design; test it on a separate reviewer project.
 | `the reviewer repository holds a file at the literal CI config path` | delete that file from the reviewer repository (3.2 step 1) |
 | `cannot read the config project ...: REVIEW_GITLAB_TOKEN's user needs Reporter on it` | add the bot as Reporter on the config project |
 | `REVIEW_GITLAB_TOKEN's user is Developer or above on the config project` | the bot must be exactly Reporter there; check parent groups and groups the project is shared with |
-| `REVIEW_GITLAB_TOKEN's user is Maintainer or above on the reviewer project` | lower the bot to Reporter on the reviewer project; never use a reviewer Maintainer's own token |
+| `REVIEW_GITLAB_TOKEN's user is Maintainer or above on the reviewer project` | lower the bot to Reporter on the reviewer project; never use a reviewer Maintainer's own token, or, only until a dedicated bot exists, set `REVIEW_ACCEPT_PRIVILEGED_BOT=1` (4.2) |
 | `REVIEW_GITLAB_TOKEN belongs to a GitLab administrator` | use a dedicated, non-admin bot user (3.3) |
 | `branch ... of the config project ... is not protected` / `must be protected for Maintainers only ... by every rule that matches it` | protect the config branch as in 3.1 step 3, including any wildcard rule that matches it; an explicit ref in the config path must be that branch |
 | `the config project ... has no default branch` | push the pipeline file to a branch, or name the branch in the config path |
