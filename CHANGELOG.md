@@ -1,6 +1,8 @@
 # Changelog
 
-## [Unreleased]
+## [0.16.0] - 2026-10-20
+
+Lighter review tool surface and per-tool call counts in the report (#177).
 
 ### Added
 
