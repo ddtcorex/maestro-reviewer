@@ -1,6 +1,34 @@
 import { describe, expect, it } from 'vitest'
 import { parse } from 'yaml'
-import { childPipelineYaml, decideRoute, noopChildYaml, parseMrRef, PROVIDER_PRESETS } from '../src/host/ci-resolve.js'
+import { childPipelineYaml, decideRoute, noopChildYaml, parseCiConfigPath, parseMrRef, PROVIDER_PRESETS } from '../src/host/ci-resolve.js'
+
+describe('parseCiConfigPath', () => {
+  it('parses a file in another project, with an optional ref, the way GitLab splits it', () => {
+    expect(parseCiConfigPath('maestro-reviewer.yml@my-group/reviewer-config')).toEqual({ file: 'maestro-reviewer.yml', project: 'my-group/reviewer-config' })
+    expect(parseCiConfigPath('ci/review.yaml@a/b.c/d_e:stable')).toEqual({ file: 'ci/review.yaml', project: 'a/b.c/d_e', ref: 'stable' })
+    expect(parseCiConfigPath('f.yml@g/p:release/1.0')).toEqual({ file: 'f.yml', project: 'g/p', ref: 'release/1.0' })
+  })
+
+  it('returns undefined for anything GitLab would not load from another project', () => {
+    for (const v of [
+      undefined, null, '', '  ', '.gitlab-ci.yml', 'ci/review.yml', '@g/p', 'f.yml@', 'f.yml@noslash', 'f.yml@g/p:', 'f.yml@g//p', 'f.yml@g/p x',
+      // GitLab's external-project rule is case-sensitive and needs yml or yaml right before the @
+      'maestro-reviewer.YML@g/p', 'maestro-reviewer@g/p', 'f.json@g/p',
+      // GitLab loads any value with an http(s) scheme as a remote file, first
+      'http://evil.example/p.yml@g/p', 'f.yml@g/p:https://x', 'HTTPS://x.yml@g/p',
+      // GitLab splits on the first @: the project part must then be a plain path
+      'a@b.yml@g/p',
+      // GitLab does not trim
+      ' f.yml@g/p', 'f.yml@g/p ',
+    ]) {
+      expect(parseCiConfigPath(v), String(v)).toBeUndefined()
+    }
+  })
+
+  it('validates the project and ref GitLab would use when the ref holds an @', () => {
+    expect(parseCiConfigPath('f.yml@dev/proj:x@grp/cfg')).toEqual({ file: 'f.yml', project: 'dev/proj', ref: 'x@grp/cfg' })
+  })
+})
 
 describe('parseMrRef', () => {
   it('reads the MR iid from head, merge and train refs', () => {
@@ -49,7 +77,7 @@ describe('decideRoute', () => {
     expect(decideRoute({ REVIEW_LLM_MODEL: 'm' })).toEqual({ route: 'invalid', missing: ['REVIEW_LLM_API_KEY'] })
   })
   it('rejects a base URL or model GitLab would expand or the settings file could not hold', () => {
-    expect(decideRoute({ ...key, REVIEW_LLM_MODEL: 'm', REVIEW_LLM_BASE_URL: 'https://x.example.com/$MAESTRO_GITLAB_TOKEN' })).toEqual({ route: 'invalid', missing: ['REVIEW_LLM_BASE_URL (unsafe value)'] })
+    expect(decideRoute({ ...key, REVIEW_LLM_MODEL: 'm', REVIEW_LLM_BASE_URL: 'https://x.example.com/$REVIEW_GITLAB_TOKEN' })).toEqual({ route: 'invalid', missing: ['REVIEW_LLM_BASE_URL (unsafe value)'] })
     expect(decideRoute({ ...key, REVIEW_LLM_MODEL: 'm', REVIEW_LLM_BASE_URL: 'ftp://x.example.com' })).toEqual({ route: 'invalid', missing: ['REVIEW_LLM_BASE_URL (unsafe value)'] })
     expect(decideRoute({ ...key, REVIEW_LLM_MODEL: 'gpt $X', REVIEW_LLM_PROVIDER: 'openai' })).toEqual({ route: 'invalid', missing: ['REVIEW_LLM_MODEL (unsafe value)'] })
   })

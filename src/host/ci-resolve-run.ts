@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import { join } from 'node:path'
 import { gitlabAuthHeaders } from './forge/gitlab/gitlab-auth.js'
 import { fetchBotUserId } from './ci-coexist.js'
-import { childPipelineYaml, decideRoute, namespaceAllowed, noopChildYaml, parseAllowedNamespaces, parseMrRef, SCOPED_LLM_NAMES, type ScopedLlm } from './ci-resolve.js'
+import { childPipelineYaml, decideRoute, namespaceAllowed, noopChildYaml, parseAllowedNamespaces, parseCiConfigPath, parseMrRef, protectionMatches, SCOPED_LLM_NAMES, type ScopedLlm } from './ci-resolve.js'
 
 /**
  * The resolve job of the reviewer pipeline (spec 3.2). Under the
@@ -11,7 +11,7 @@ import { childPipelineYaml, decideRoute, namespaceAllowed, noopChildYaml, parseA
  * trigger variables, decides the provider route, and writes the child
  * pipeline. Reviewer-project reads use REVIEW_RESOLVE_TOKEN (Maintainer, scoped
  * to the `resolve` environment so the review job never receives it); source
- * reads use MAESTRO_GITLAB_TOKEN. Tokens are never logged or written.
+ * reads use REVIEW_GITLAB_TOKEN. Tokens are never logged or written.
  */
 
 export const DEEP_LABEL = 'maestro-review::deep'
@@ -58,7 +58,7 @@ export async function runResolve(env: Record<string, string | undefined>, deps: 
     const host = need('CI_SERVER_HOST')
     const image = need('REVIEWER_IMAGE')
     const resolveToken = need('REVIEW_RESOLVE_TOKEN')
-    const botToken = need('MAESTRO_GITLAB_TOKEN')
+    const botToken = need('REVIEW_GITLAB_TOKEN')
     // Only allowlisted namespaces may spend the reviewer's keys or expose its
     // bot token to an agent reading their content.
     const allowed = parseAllowedNamespaces(env.REVIEW_ALLOWED_NAMESPACES)
@@ -69,25 +69,81 @@ export async function runResolve(env: Record<string, string | undefined>, deps: 
 
     // 1. Guardrail: the job is only trustworthy when trigger variables are forbidden.
     const projectRes = await get(resolveToken, `/projects/${reviewerId}`)
-    const project = projectRes.ok ? await projectRes.json() as { ci_pipeline_variables_minimum_override_role?: string } : undefined
+    const project = projectRes.ok ? await projectRes.json() as { ci_pipeline_variables_minimum_override_role?: string; ci_config_path?: string | null } : undefined
     const setting = project?.ci_pipeline_variables_minimum_override_role
     if (setting === undefined) throw new ResolveError(`cannot read the reviewer project's pipeline-variables setting (GET project -> ${projectRes.status}): ${MAINTAINER_HINT}`)
     if (setting !== 'no_one_allowed') {
       throw new ResolveError(`pipeline variables are not restricted on the reviewer project (minimum override role "${setting}"); set it to no_one_allowed (Settings > CI/CD > Variables) before any review can run`)
     }
 
-    // The pipeline file and the protected variables are only as safe as the
-    // branch they run from: anyone who can push or merge there can read every key.
-    const pipelineRef = need('CI_COMMIT_REF_NAME')
-    const protRes = await get(resolveToken, `/projects/${reviewerId}/protected_branches/${encodeURIComponent(pipelineRef)}`)
-    if (protRes.status === 404) throw new ResolveError(`branch ${pipelineRef} of the reviewer project is not protected; protect it with push and merge for Maintainers only`)
-    if (!protRes.ok) throw new ResolveError(`cannot read the protection of branch ${pipelineRef} (${protRes.status}): ${MAINTAINER_HINT}`)
+    // The pipeline file receives every key, so it must live where only
+    // Maintainers can change it. It cannot be this project's own branch:
+    // GitLab only lets users who can merge a protected branch trigger it, and
+    // every source developer must be able to trigger it. So the file comes
+    // from a separate config project through the CI config path.
+    const reviewerPath = need('CI_PROJECT_PATH')
+    const configPath = project?.ci_config_path ?? ''
+    const config = parseCiConfigPath(configPath)
+    if (config === undefined || config.project.toLowerCase() === reviewerPath.toLowerCase()) {
+      throw new ResolveError(`the reviewer project's CI config path ("${configPath}") must name a file in a separate config project, for example maestro-reviewer.yml@my-group/reviewer-config (Settings > CI/CD > General pipelines)`)
+    }
+    // Defense in depth: a file at the literal path in this repository, which
+    // Developers may now merge, must never be what GitLab loads instead.
+    const shadowRes = await get(resolveToken, `/projects/${reviewerId}/repository/files/${encodeURIComponent(configPath)}?ref=${encodeURIComponent(need('CI_COMMIT_SHA'))}`)
+    if (shadowRes.status !== 404) {
+      throw new ResolveError(shadowRes.ok
+        ? `the reviewer repository holds a file at the literal CI config path "${configPath}"; delete it, GitLab may load it instead of the config project's file`
+        : `cannot check the reviewer repository for a file at the CI config path (${shadowRes.status}): ${MAINTAINER_HINT}`)
+    }
+    const cfgRes = await get(botToken, `/projects/${encodeURIComponent(config.project)}`)
+    if (!cfgRes.ok) throw new ResolveError(`cannot read the config project ${config.project} (${cfgRes.status}): REVIEW_GITLAB_TOKEN's user needs Reporter on it`)
+    type Access = { access_level?: number } | null | undefined
+    const cfgProject = await cfgRes.json() as { id?: number; default_branch?: string | null; permissions?: { project_access?: Access; group_access?: Access } }
+    if (typeof cfgProject.id !== 'number' || cfgProject.id === Number(reviewerId)) {
+      throw new ResolveError(`the CI config path must point at a separate config project, not back at the reviewer project`)
+    }
+
+    // The review job holds the bot token while an agent reads untrusted MR
+    // content: a bot able to change the config, or to read this project's
+    // variables, could be steered into leaking every key. Membership through
+    // shared groups only shows in members/all, so both views count.
+    const meRes = await get(botToken, '/user')
+    const me = meRes.ok ? await meRes.json() as { id?: number; is_admin?: boolean } : undefined
+    if (typeof me?.id !== 'number') throw new ResolveError(`cannot identify REVIEW_GITLAB_TOKEN's user (GET /user -> ${meRes.status})`)
+    if (me.is_admin === true) throw new ResolveError(`REVIEW_GITLAB_TOKEN belongs to a GitLab administrator; use a dedicated bot user`)
+    const botLevel = async (projectId: number, permissions?: { project_access?: Access; group_access?: Access }) => {
+      const res = await get(botToken, `/projects/${projectId}/members/all/${me.id}`)
+      if (!res.ok && res.status !== 404) throw new ResolveError(`cannot read the bot's role on project ${projectId} (${res.status}): REVIEW_GITLAB_TOKEN's user needs Reporter on it`)
+      const viaMembers = res.ok ? (await res.json() as { access_level?: number }).access_level ?? 0 : 0
+      return Math.max(viaMembers, permissions?.project_access?.access_level ?? 0, permissions?.group_access?.access_level ?? 0)
+    }
+    if (await botLevel(cfgProject.id, cfgProject.permissions) >= 30) {
+      throw new ResolveError(`REVIEW_GITLAB_TOKEN's user is Developer or above on the config project ${config.project}; it must be Reporter there (check group memberships and shared groups too)`)
+    }
+    if (await botLevel(Number(reviewerId)) >= 40) {
+      throw new ResolveError(`REVIEW_GITLAB_TOKEN's user is Maintainer or above on the reviewer project and could read every key; give it Reporter there`)
+    }
+
+    // Every protection rule that matches the config branch applies, and
+    // GitLab grants the most permissive one, wildcards included.
+    const cfgRef = config.ref ?? cfgProject.default_branch ?? ''
+    if (cfgRef === '') throw new ResolveError(`the config project ${config.project} has no default branch; name the branch in the CI config path or push one`)
     type Level = { access_level?: number | null; user_id?: number | null; group_id?: number | null; deploy_key_id?: number | null }
-    const prot = await protRes.json() as { allow_force_push?: boolean; push_access_levels?: Level[]; merge_access_levels?: Level[] }
-    const maintainersOnly = (levels: Level[] | undefined) => (levels ?? []).every(l =>
+    type Rule = { name?: string; allow_force_push?: boolean; push_access_levels?: Level[]; merge_access_levels?: Level[] }
+    const rules: Rule[] = []
+    let protPage = '1'
+    for (let n = 0; protPage && n < 20; n++) {
+      const res = await get(botToken, `/projects/${cfgProject.id}/protected_branches?per_page=100&page=${protPage}`)
+      if (!res.ok) throw new ResolveError(`cannot read the branch protection of the config project ${config.project} (${res.status}): REVIEW_GITLAB_TOKEN's user needs Reporter on it`)
+      rules.push(...(await res.json() as Rule[]))
+      protPage = res.headers.get('x-next-page') ?? ''
+    }
+    const matching = rules.filter(r => typeof r.name === 'string' && protectionMatches(r.name, cfgRef))
+    if (matching.length === 0) throw new ResolveError(`branch ${cfgRef} of the config project ${config.project} is not protected; protect it with push and merge for Maintainers only`)
+    const maintainersOnly = (levels: Level[] | undefined) => Array.isArray(levels) && levels.length > 0 && levels.every(l =>
       l.user_id == null && l.group_id == null && l.deploy_key_id == null && typeof l.access_level === 'number' && (l.access_level === 0 || l.access_level >= 40))
-    if (prot.allow_force_push === true || !maintainersOnly(prot.push_access_levels) || !maintainersOnly(prot.merge_access_levels)) {
-      throw new ResolveError(`branch ${pipelineRef} of the reviewer project must be protected for Maintainers only (push and merge), with force push off and no per-user or per-group grants`)
+    if (!matching.every(r => r.allow_force_push === false && maintainersOnly(r.push_access_levels) && maintainersOnly(r.merge_access_levels))) {
+      throw new ResolveError(`branch ${cfgRef} of the config project ${config.project} must be protected for Maintainers only (push and merge) by every rule that matches it, wildcards included, with force push off and no per-user or per-group grants`)
     }
 
     const shadowing = new Set<string>()
@@ -119,7 +175,7 @@ export async function runResolve(env: Record<string, string | undefined>, deps: 
     const sourceId = gid(upstream?.project?.id)
     if (upstreamId === undefined || sourceId === undefined) {
       if (env.CI_PIPELINE_SOURCE === 'pipeline') {
-        throw new ResolveError('this pipeline was triggered by another one, but its upstream is not visible: MAESTRO_GITLAB_TOKEN needs at least Reporter on the reviewer project and on the source project')
+        throw new ResolveError('this pipeline was triggered by another one, but its upstream is not visible: REVIEW_GITLAB_TOKEN needs at least Reporter on the reviewer project and on the source project')
       }
       deps.log('[review] not triggered by a source pipeline, nothing to review')
       await write(noopChildYaml('not triggered by a source pipeline, nothing to review', image))
@@ -134,7 +190,7 @@ export async function runResolve(env: Record<string, string | undefined>, deps: 
     }
 
     const pipeRes = await get(botToken, `/projects/${sourceId}/pipelines/${upstreamId}`)
-    if (!pipeRes.ok) throw new ResolveError(`cannot read upstream pipeline ${upstreamId} of project ${sourceId} (${pipeRes.status}): MAESTRO_GITLAB_TOKEN needs at least Reporter on the source project`)
+    if (!pipeRes.ok) throw new ResolveError(`cannot read upstream pipeline ${upstreamId} of project ${sourceId} (${pipeRes.status}): REVIEW_GITLAB_TOKEN needs at least Reporter on the source project`)
     const ref = (await pipeRes.json() as { ref?: string }).ref ?? ''
     const mrIid = parseMrRef(ref)
     if (mrIid === undefined) {
@@ -203,5 +259,5 @@ async function postUnconfiguredOnce(deps: ResolveDeps, api: string, botToken: st
   }
   const body = `AI review is not configured for this project: it requires its own provider key, and none is set. Ask a maintainer of the reviewer project to add one.\n\n${UNCONFIGURED_MARKER}`
   const posted = await deps.fetcher(notesUrl, { method: 'POST', headers: { ...gitlabAuthHeaders(botToken), 'content-type': 'application/json' }, body: JSON.stringify({ body }) })
-  if (!posted.ok) deps.log(`[review] warning: could not post the unconfigured note (${posted.status}); MAESTRO_GITLAB_TOKEN needs Developer on the source project`)
+  if (!posted.ok) deps.log(`[review] warning: could not post the unconfigured note (${posted.status}); REVIEW_GITLAB_TOKEN needs Developer on the source project`)
 }

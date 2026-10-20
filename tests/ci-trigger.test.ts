@@ -4,7 +4,7 @@ import { ciAccess, ciModel, parseCiEnvConfig, fetchMrSourceBranch, runCiTrigger 
 describe('parseCiEnvConfig', () => {
   it('parses required env vars and defaults mode/dryRun', () => {
     const cfg = parseCiEnvConfig({
-      GITLAB_HOST: 'gitlab.example.com', MAESTRO_GITLAB_TOKEN: 'glpat-xxx',
+      GITLAB_HOST: 'gitlab.example.com', REVIEW_GITLAB_TOKEN: 'glpat-xxx',
       SOURCE_PROJECT_ID: '123', MR_IID: '456',
     })
     expect(cfg).toEqual({
@@ -17,9 +17,13 @@ describe('parseCiEnvConfig', () => {
     expect(() => parseCiEnvConfig({ GITLAB_HOST: 'h', SOURCE_PROJECT_ID: '1', MR_IID: '2' })).toThrow()
   })
 
+  it('does not accept the pre-0.15 token name', () => {
+    expect(() => parseCiEnvConfig({ GITLAB_HOST: 'h', MAESTRO_GITLAB_TOKEN: 't', SOURCE_PROJECT_ID: '1', MR_IID: '2' })).toThrow(/missing REVIEW_GITLAB_TOKEN/)
+  })
+
   it('parses REVIEW_MODE=deep and REVIEW_DRY_RUN=1', () => {
     const cfg = parseCiEnvConfig({
-      GITLAB_HOST: 'h', MAESTRO_GITLAB_TOKEN: 't', SOURCE_PROJECT_ID: '1', MR_IID: '2',
+      GITLAB_HOST: 'h', REVIEW_GITLAB_TOKEN: 't', SOURCE_PROJECT_ID: '1', MR_IID: '2',
       REVIEW_MODE: 'deep', REVIEW_DRY_RUN: '1',
     })
     expect(cfg.mode).toBe('deep')
@@ -27,13 +31,13 @@ describe('parseCiEnvConfig', () => {
   })
 
   it('leaves reviewProfile undefined when REVIEW_PROFILE is absent (legacy diff-only)', () => {
-    const cfg = parseCiEnvConfig({ GITLAB_HOST: 'h', MAESTRO_GITLAB_TOKEN: 't', SOURCE_PROJECT_ID: '1', MR_IID: '2' })
+    const cfg = parseCiEnvConfig({ GITLAB_HOST: 'h', REVIEW_GITLAB_TOKEN: 't', SOURCE_PROJECT_ID: '1', MR_IID: '2' })
     expect(cfg.reviewProfile).toBeUndefined()
   })
 
   it('parses REVIEW_PROFILE=magento2', () => {
     const cfg = parseCiEnvConfig({
-      GITLAB_HOST: 'h', MAESTRO_GITLAB_TOKEN: 't', SOURCE_PROJECT_ID: '1', MR_IID: '2',
+      GITLAB_HOST: 'h', REVIEW_GITLAB_TOKEN: 't', SOURCE_PROJECT_ID: '1', MR_IID: '2',
       REVIEW_PROFILE: 'magento2',
     })
     expect(cfg.reviewProfile).toBe('magento2')
@@ -41,17 +45,17 @@ describe('parseCiEnvConfig', () => {
 
   it('parses REVIEW_ON_PUSH=1 into rereviewOnPush, default false', () => {
     const on = parseCiEnvConfig({
-      GITLAB_HOST: 'h', MAESTRO_GITLAB_TOKEN: 't', SOURCE_PROJECT_ID: '1', MR_IID: '2',
+      GITLAB_HOST: 'h', REVIEW_GITLAB_TOKEN: 't', SOURCE_PROJECT_ID: '1', MR_IID: '2',
       REVIEW_ON_PUSH: '1',
     })
     expect(on.rereviewOnPush).toBe(true)
-    const off = parseCiEnvConfig({ GITLAB_HOST: 'h', MAESTRO_GITLAB_TOKEN: 't', SOURCE_PROJECT_ID: '1', MR_IID: '2' })
+    const off = parseCiEnvConfig({ GITLAB_HOST: 'h', REVIEW_GITLAB_TOKEN: 't', SOURCE_PROJECT_ID: '1', MR_IID: '2' })
     expect(off.rereviewOnPush).toBe(false)
   })
 
   it('throws on unsupported REVIEW_PROFILE', () => {
     expect(() => parseCiEnvConfig({
-      GITLAB_HOST: 'h', MAESTRO_GITLAB_TOKEN: 't', SOURCE_PROJECT_ID: '1', MR_IID: '2',
+      GITLAB_HOST: 'h', REVIEW_GITLAB_TOKEN: 't', SOURCE_PROJECT_ID: '1', MR_IID: '2',
       REVIEW_PROFILE: 'drupal',
     })).toThrow(/unsupported REVIEW_PROFILE/)
   })
@@ -64,7 +68,7 @@ describe('fetchMrDetail', () => {
       source_branch: 'feat/x', sha: 'abc123', references: { full: 'g/sub/proj!2' },
     }), { status: 200 }))
     await expect(fetchMrDetail(
-      parseCiEnvConfig({ GITLAB_HOST: 'h', MAESTRO_GITLAB_TOKEN: 'tok', SOURCE_PROJECT_ID: '1', MR_IID: '2' }),
+      parseCiEnvConfig({ GITLAB_HOST: 'h', REVIEW_GITLAB_TOKEN: 'tok', SOURCE_PROJECT_ID: '1', MR_IID: '2' }),
       fetcher as unknown as typeof fetch,
     )).resolves.toEqual({ sourceBranch: 'feat/x', headSha: 'abc123', projectPath: 'g/sub/proj' })
   })
@@ -73,7 +77,7 @@ describe('fetchMrDetail', () => {
     const { fetchMrDetail } = await import('../src/host/providers/ci-trigger.js')
     const fetcher = vi.fn(async () => new Response(JSON.stringify({ source_branch: 'feat/x', sha: 'abc123' }), { status: 200 }))
     await expect(fetchMrDetail(
-      parseCiEnvConfig({ GITLAB_HOST: 'h', MAESTRO_GITLAB_TOKEN: 'tok', SOURCE_PROJECT_ID: '1', MR_IID: '2' }),
+      parseCiEnvConfig({ GITLAB_HOST: 'h', REVIEW_GITLAB_TOKEN: 'tok', SOURCE_PROJECT_ID: '1', MR_IID: '2' }),
       fetcher as unknown as typeof fetch,
     )).resolves.toEqual({ sourceBranch: 'feat/x', headSha: 'abc123', projectPath: 'project/1' })
   })
@@ -84,7 +88,7 @@ describe('fetchMrDetail', () => {
       const { fetchMrDetail } = await import('../src/host/providers/ci-trigger.js')
       const fetcher = vi.fn(async () => new Response(JSON.stringify({ source_branch: 'feat/x', sha: 'abc123' }), { status: 200 }))
       await fetchMrDetail(
-        parseCiEnvConfig({ GITLAB_HOST: 'h', MAESTRO_GITLAB_TOKEN: 'tok', SOURCE_PROJECT_ID: '1', MR_IID: '2' }),
+        parseCiEnvConfig({ GITLAB_HOST: 'h', REVIEW_GITLAB_TOKEN: 'tok', SOURCE_PROJECT_ID: '1', MR_IID: '2' }),
         fetcher as unknown as typeof fetch,
       )
       expect(fetcher).toHaveBeenCalledWith('https://h/api/v4/projects/1/merge_requests/2', { headers: { 'JOB-TOKEN': 'tok' } })
@@ -100,7 +104,7 @@ describe('runCiTrigger push-gate', () => {
   const fakeWriteFile = (async () => {}) as unknown as typeof import('node:fs/promises').writeFile
   async function runGate(env: Record<string, string | undefined>, sha: string, prior: { headSha?: string } | undefined) {
     const { parseCiEnvConfig, runCiTrigger } = await import('../src/host/providers/ci-trigger.js')
-    const cfg = parseCiEnvConfig({ GITLAB_HOST: 'h', MAESTRO_GITLAB_TOKEN: 'tok', SOURCE_PROJECT_ID: '1', MR_IID: '2', ...env })
+    const cfg = parseCiEnvConfig({ GITLAB_HOST: 'h', REVIEW_GITLAB_TOKEN: 'tok', SOURCE_PROJECT_ID: '1', MR_IID: '2', ...env })
     const fakeCtx = { reviewEngine: { run: vi.fn(async () => ({ ok: true, summary: 'done', failures: [], durationMs: 5 })) } }
     const history = { lastCompletedReview: vi.fn(async () => prior) }
     const result = await runCiTrigger(fakeCtx as any, cfg, {
@@ -140,7 +144,7 @@ describe('runCiTrigger coexistence yield', () => {
   const fakeWriteFile = (async () => {}) as unknown as typeof import('node:fs/promises').writeFile
   async function runYield(sha: string, notesBodies: string[], awards: Array<{ name: string }>) {
     const { parseCiEnvConfig, runCiTrigger } = await import('../src/host/providers/ci-trigger.js')
-    const cfg = parseCiEnvConfig({ GITLAB_HOST: 'h', MAESTRO_GITLAB_TOKEN: 'tok', SOURCE_PROJECT_ID: '1', MR_IID: '2' })
+    const cfg = parseCiEnvConfig({ GITLAB_HOST: 'h', REVIEW_GITLAB_TOKEN: 'tok', SOURCE_PROJECT_ID: '1', MR_IID: '2' })
     const fetcher = vi.fn(async (url: string) => {
       if (String(url).endsWith('/api/v4/user')) return new Response(JSON.stringify({ id: 42 }), { status: 200 })
       if (String(url).includes('/notes')) return new Response(JSON.stringify(notesBodies.map((body, i) => ({ id: i, author: { id: 42 }, body }))), { status: 200 })
@@ -165,7 +169,7 @@ describe('runCiTrigger coexistence yield', () => {
   it('skips when an eyes running marker is present', async () => {
     const { result, ran } = await runYield('abc123', [], [{ name: 'eyes' }])
     expect(ran).toBe(false)
-    expect(result.summary).toMatch(/another review is running/)
+    expect(result.summary).toMatch(/another review is running, skipping/)
   })
 
   it('runs when no marker and no eyes', async () => {
@@ -175,7 +179,7 @@ describe('runCiTrigger coexistence yield', () => {
 
   it('threads headSha into the review request', async () => {
     const { parseCiEnvConfig, runCiTrigger } = await import('../src/host/providers/ci-trigger.js')
-    const cfg = parseCiEnvConfig({ GITLAB_HOST: 'h', MAESTRO_GITLAB_TOKEN: 'tok', SOURCE_PROJECT_ID: '1', MR_IID: '2' })
+    const cfg = parseCiEnvConfig({ GITLAB_HOST: 'h', REVIEW_GITLAB_TOKEN: 'tok', SOURCE_PROJECT_ID: '1', MR_IID: '2' })
     const fetcher = vi.fn(async (url: string) => {
       if (String(url).includes('/notes')) return new Response('[]', { status: 200 })
       if (String(url).includes('/award_emoji')) return new Response('[]', { status: 200 })
@@ -194,7 +198,7 @@ describe('runCiTrigger coexistence yield', () => {
 describe('fetchMrSourceBranch', () => {
   it('calls /merge_requests/:iid with PRIVATE-TOKEN and returns source_branch', async () => {
     const fetcher = vi.fn(async () => new Response(JSON.stringify({ source_branch: 'feat/x', sha: 'abc123' }), { status: 200 }))
-    const cfg = parseCiEnvConfig({ GITLAB_HOST: 'h', MAESTRO_GITLAB_TOKEN: 'tok', SOURCE_PROJECT_ID: '1', MR_IID: '2' })
+    const cfg = parseCiEnvConfig({ GITLAB_HOST: 'h', REVIEW_GITLAB_TOKEN: 'tok', SOURCE_PROJECT_ID: '1', MR_IID: '2' })
     const branch = await fetchMrSourceBranch(cfg, fetcher as unknown as typeof fetch)
     expect(branch).toBe('feat/x')
     expect(fetcher).toHaveBeenCalledWith('https://h/api/v4/projects/1/merge_requests/2', { headers: { 'PRIVATE-TOKEN': 'tok' } })
@@ -202,14 +206,14 @@ describe('fetchMrSourceBranch', () => {
 
   it('throws on non-200', async () => {
     const fetcher = vi.fn(async () => new Response('not found', { status: 404 }))
-    const cfg = parseCiEnvConfig({ GITLAB_HOST: 'h', MAESTRO_GITLAB_TOKEN: 'tok', SOURCE_PROJECT_ID: '1', MR_IID: '2' })
+    const cfg = parseCiEnvConfig({ GITLAB_HOST: 'h', REVIEW_GITLAB_TOKEN: 'tok', SOURCE_PROJECT_ID: '1', MR_IID: '2' })
     await expect(fetchMrSourceBranch(cfg, fetcher as unknown as typeof fetch)).rejects.toThrow(/GitLab API error 404/)
   })
 })
 
 describe('runCiTrigger', () => {
   it('builds a ReviewRequest with trigger "mention" and calls ctx.reviewEngine.run, then writes report files', async () => {
-    const cfg = parseCiEnvConfig({ GITLAB_HOST: 'h', MAESTRO_GITLAB_TOKEN: 'tok', SOURCE_PROJECT_ID: '1', MR_IID: '2' })
+    const cfg = parseCiEnvConfig({ GITLAB_HOST: 'h', REVIEW_GITLAB_TOKEN: 'tok', SOURCE_PROJECT_ID: '1', MR_IID: '2' })
     const fetcher = vi.fn(async () => new Response(JSON.stringify({
       source_branch: 'feat/x', sha: 'abc123', references: { full: 'g/sub/proj!2' },
     }), { status: 200 }))
@@ -228,7 +232,7 @@ describe('runCiTrigger', () => {
   })
 
   it('prefixes report paths with REVIEW_REPORT_DIR when set (entrypoint cds away)', async () => {
-    const cfg = parseCiEnvConfig({ GITLAB_HOST: 'h', MAESTRO_GITLAB_TOKEN: 'tok', SOURCE_PROJECT_ID: '1', MR_IID: '2' })
+    const cfg = parseCiEnvConfig({ GITLAB_HOST: 'h', REVIEW_GITLAB_TOKEN: 'tok', SOURCE_PROJECT_ID: '1', MR_IID: '2' })
     const fetcher = vi.fn(async () => new Response(JSON.stringify({ source_branch: 'feat/x', sha: 'abc123' }), { status: 200 }))
     const fakeCtx = { reviewEngine: { run: vi.fn(async () => ({ ok: true, summary: 'done', failures: [], durationMs: 5 })) } }
     const writes: Array<[string, string]> = []
@@ -244,7 +248,7 @@ describe('runCiTrigger', () => {
 
   it('carries REVIEW_PROFILE into the ReviewRequest', async () => {
     const cfg = parseCiEnvConfig({
-      GITLAB_HOST: 'h', MAESTRO_GITLAB_TOKEN: 'tok', SOURCE_PROJECT_ID: '1', MR_IID: '2',
+      GITLAB_HOST: 'h', REVIEW_GITLAB_TOKEN: 'tok', SOURCE_PROJECT_ID: '1', MR_IID: '2',
       REVIEW_PROFILE: 'magento2',
     })
     const fetcher = vi.fn(async () => new Response(JSON.stringify({ source_branch: 'feat/x', sha: 'abc123' }), { status: 200 }))
@@ -260,7 +264,7 @@ describe('runCiTrigger', () => {
 })
 
 describe('ci engine options', () => {
-  const env = (o: Record<string, string> = {}) => parseCiEnvConfig({ GITLAB_HOST: 'git.example.com', MAESTRO_GITLAB_TOKEN: 't', SOURCE_PROJECT_ID: '1', MR_IID: '2', ...o })
+  const env = (o: Record<string, string> = {}) => parseCiEnvConfig({ GITLAB_HOST: 'git.example.com', REVIEW_GITLAB_TOKEN: 't', SOURCE_PROJECT_ID: '1', MR_IID: '2', ...o })
 
   it('quick with no or the generic profile reads the diff only', () => {
     expect(ciAccess(env())).toEqual({ kind: 'diff' })

@@ -89,7 +89,7 @@ minute locally, with zero release steps:**
   projects/<group>%2Fci%2Freviewer_ci/variables/<NAME> --hostname
   <gitlab-host>`, piped through a variable and never printed) against a
   **disposable test branch + MR** on a real project, exactly like the CI
-  job would: `docker run --rm -e MAESTRO_GITLAB_TOKEN=... -e
+  job would: `docker run --rm -e REVIEW_GITLAB_TOKEN=... -e
   SOURCE_PROJECT_ID=... -e MR_IID=... -e GITLAB_HOST=<bare-hostname> ...
   --entrypoint /entrypoint.sh <tag>`. Close the MR and delete the branch
   immediately after — this is throwaway test traffic on someone else's
@@ -270,8 +270,8 @@ release, not after one goes wrong.
 
 - **One forge, behind `forge/types.ts`**: the engine reaches the forge only through `ReviewForge` (head and base SHA, compare, notes, findings, signals, the agents' read tools); GitLab is the one implementation, in `src/host/forge/gitlab/`. Only that directory and the `ci-*` modules (GitLab CI by definition) build `/api/v4/` URLs, pinned by `tests/forge-boundary.test.ts`. A second forge is a sibling directory, added together with a real user of it.
 - **Tool-only review subagents**: review/audit subagents run with tool-only presets; findings are written via the `report_review_findings` tool, not free text.
-- **Secrets**: never log or commit real tokens. In CI, `MAESTRO_GITLAB_TOKEN` must be a PAT/group token (`api` scope); `CI_JOB_TOKEN` is read-only for posting (probed on GitLab 18.11); redact it from clone URLs and errors.
-- **CI trust model**: never read identity or configuration from a trigger. The reviewer project forbids pipeline variables; `resolve` learns the MR from GitLab (GraphQL `pipeline.upstream`, the upstream ref, MR labels) and writes the child pipeline with literal values. Per-project settings are reviewer variables scoped `review/<source project id>`; a project route is all or nothing. Reviewer-project reads use `REVIEW_RESOLVE_TOKEN` (Maintainer, environment scope `resolve`, never present in the review job); source reads use `MAESTRO_GITLAB_TOKEN`. No backward compatibility shims.
+- **Secrets**: never log or commit real tokens. In CI, `REVIEW_GITLAB_TOKEN` must be a PAT/group token (`api` scope); `CI_JOB_TOKEN` is read-only for posting (probed on GitLab 18.11); redact it from clone URLs and errors.
+- **CI trust model**: never read identity or configuration from a trigger. The reviewer project forbids pipeline variables, and its pipeline file lives in a separate config project protected for Maintainers only (Custom CI config path `<file>@<project>`), because GitLab requires anyone triggering a protected downstream branch to be able to merge it, so the reviewer branch itself must let Developers merge; `resolve` learns the MR from GitLab (GraphQL `pipeline.upstream`, the upstream ref, MR labels) and writes the child pipeline with literal values. Per-project settings are reviewer variables scoped `review/<source project id>`; a project route is all or nothing. Reviewer-project reads use `REVIEW_RESOLVE_TOKEN` (Maintainer, environment scope `resolve`, never present in the review job); source reads use `REVIEW_GITLAB_TOKEN`. No backward compatibility shims.
 - **CI flow**: `providers/ci-trigger.ts` owns the push-gate and coexistence yield and calls the engine with an explicit access: quick with no or the generic profile is `diff`, a framework profile and deep are `clone` (a plain worktree, no vendor or govard linking, static-only auditor). The engine never reads CI variables. CI yields to the webhook flow, never the reverse.
 - **Engine exports are a contract**: `dsh-maestro-review` imports `lib/` modules by path; rename or move one only together with the plugin, and keep `tests/engine-exports.test.ts` in step.
 

@@ -61,7 +61,7 @@ describe('runCiTrigger push-gate from GitLab state', () => {
   const fakeWriteFile = (async () => {}) as unknown as typeof import('node:fs/promises').writeFile
   async function gate(env: Record<string, string>, pages: Array<Array<ReturnType<typeof note>>>, g: Parameters<typeof gitlab>[1] = {}, cache?: { headSha?: string }) {
     const { parseCiEnvConfig, runCiTrigger } = await import('../src/host/providers/ci-trigger.js')
-    const cfg = parseCiEnvConfig({ GITLAB_HOST: 'h', MAESTRO_GITLAB_TOKEN: 'tok', SOURCE_PROJECT_ID: '1', MR_IID: '2', ...env })
+    const cfg = parseCiEnvConfig({ GITLAB_HOST: 'h', REVIEW_GITLAB_TOKEN: 'tok', SOURCE_PROJECT_ID: '1', MR_IID: '2', ...env })
     const ctx = { reviewEngine: { run: vi.fn(async () => ({ ok: true, summary: 'done', failures: [], durationMs: 5 })) } }
     const history = { lastCompletedReview: vi.fn(async () => cache) }
     const result = await runCiTrigger(ctx as never, cfg, { fetcher: gitlab(pages, g).fetcher, writeFile: fakeWriteFile, history })
@@ -116,7 +116,7 @@ describe('runCiTrigger push-gate from GitLab state', () => {
 
   it('yields to the bot user\'s own eyes marker', async () => {
     const { result, ctx } = await gate({}, [[]], { mrSha: 'cafe01', awards: [{ name: 'eyes', user: { id: BOT } }] })
-    expect(result.summary).toMatch(/another review is running/)
+    expect(result.summary).toMatch(/another review is running, skipping/)
     expect(ctx.reviewEngine.run).not.toHaveBeenCalled()
   })
 })

@@ -46,6 +46,36 @@ export function namespaceAllowed(projectPath: string, entries: readonly string[]
   return entries.some(e => projectPath === e || projectPath.startsWith(`${e}/`))
 }
 
+/**
+ * The file in another project that GitLab loads for a CI config path
+ * (`<file>@<namespace>/<project>[:<ref>]`), else undefined. Mirrors GitLab's
+ * own resolution (lib/gitlab/ci/project_config, 17.11 to 18.11): any value
+ * with an http(s) scheme is a remote file, the external-project rule is the
+ * case-sensitive `.+(yml|yaml)@.+`, and the value splits on the first `@`
+ * and then the first `:`; nothing is trimmed. Anything else GitLab reads
+ * from the reviewer repository itself, so it is refused.
+ */
+export function parseCiConfigPath(value: string | null | undefined): { file: string; project: string; ref?: string } | undefined {
+  const v = value ?? ''
+  if (v === '' || v !== v.trim() || /https?:/i.test(v) || !/^.+(yml|yaml)@.+$/.test(v)) return undefined
+  const at = v.indexOf('@')
+  const file = v.slice(0, at)
+  const rest = v.slice(at + 1)
+  const colon = rest.indexOf(':')
+  const project = colon === -1 ? rest : rest.slice(0, colon)
+  const ref = colon === -1 ? undefined : rest.slice(colon + 1)
+  if (!/^[A-Za-z0-9_.-]+(\/[A-Za-z0-9_.-]+)+$/.test(project)) return undefined
+  if (ref !== undefined && !/^\S+$/.test(ref)) return undefined
+  return ref === undefined ? { file, project } : { file, project, ref }
+}
+
+/** Whether a protected-branch rule name (exact, or with `*` wildcards) covers a branch, as GitLab matches it. */
+export function protectionMatches(rule: string, branch: string): boolean {
+  if (!rule.includes('*')) return rule === branch
+  const re = new RegExp(`^${rule.split('*').map(part => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('.*')}$`)
+  return re.test(branch)
+}
+
 /** MR iid of a merge request pipeline ref (head, merge or train), else undefined. */
 export function parseMrRef(ref: string): number | undefined {
   const m = /^refs\/merge-requests\/(\d+)\/(?:head|merge|train)$/.exec(ref)

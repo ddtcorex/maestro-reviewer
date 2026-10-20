@@ -21,7 +21,7 @@ function gitlab(notes: unknown[]) {
 
 async function gate(env: Record<string, string>, notes: unknown[], ok = true) {
   const { parseCiEnvConfig, runCiTrigger } = await import('../src/host/providers/ci-trigger.js')
-  const cfg = parseCiEnvConfig({ GITLAB_HOST: 'h', MAESTRO_GITLAB_TOKEN: 'tok', SOURCE_PROJECT_ID: '1', MR_IID: '2', ...env })
+  const cfg = parseCiEnvConfig({ GITLAB_HOST: 'h', REVIEW_GITLAB_TOKEN: 'tok', SOURCE_PROJECT_ID: '1', MR_IID: '2', ...env })
   const ctx = { reviewEngine: { run: vi.fn(async () => ({ ok, summary: 'done', failures: [], durationMs: 5 })) } }
   const g = gitlab(notes)
   const result = await runCiTrigger(ctx as never, cfg, { fetcher: g.fetcher, writeFile: (async () => {}) as never, history: { lastCompletedReview: async () => undefined } })
@@ -77,7 +77,7 @@ describe('deep review on request, once per head SHA', () => {
 describe('a deep request cannot be downgraded by a project variable', () => {
   it('forces deep mode when the resolve job asked for it, whatever REVIEW_MODE says', async () => {
     const { parseCiEnvConfig } = await import('../src/host/providers/ci-trigger.js')
-    const cfg = parseCiEnvConfig({ GITLAB_HOST: 'h', MAESTRO_GITLAB_TOKEN: 't', SOURCE_PROJECT_ID: '1', MR_IID: '2', REVIEW_MODE: 'quick', REVIEW_DEEP_REQUESTED: '1' })
+    const cfg = parseCiEnvConfig({ GITLAB_HOST: 'h', REVIEW_GITLAB_TOKEN: 't', SOURCE_PROJECT_ID: '1', MR_IID: '2', REVIEW_MODE: 'quick', REVIEW_DEEP_REQUESTED: '1' })
     expect(cfg.mode).toBe('deep')
   })
 })

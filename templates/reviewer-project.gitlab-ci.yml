@@ -1,15 +1,25 @@
-# ddtcorex/maestro-reviewer: dedicated reviewer project
+# ddtcorex/maestro-reviewer: reviewer pipeline
 #
-# Trust model (read docs/ci-reviewer-setup.md before changing anything here):
-# a trigger can override every variable of a downstream job, the image
-# included. So this project MUST forbid pipeline variables:
+# Read docs/ci-reviewer-setup.md before changing anything here.
+#
+# Where this file lives: in a separate CONFIG PROJECT whose branch is
+# protected for Maintainers only, never in the reviewer project itself. The
+# reviewer project points at it with Settings > CI/CD > General pipelines >
+# Custom CI config path = maestro-reviewer.yml@<group>/<config project>.
+# GitLab only lets a user trigger a protected downstream branch when they
+# can merge it, so the reviewer branch must let Developers merge; this file
+# receives every key, so it must sit where they cannot. Everyone who
+# triggers the reviewer, and the bot, needs Reporter on the config project.
+# resolve refuses to run otherwise.
+#
+# Trust model: a trigger can override every variable of a downstream job,
+# the image included. So the reviewer project MUST forbid pipeline variables:
 #   Settings > CI/CD > Variables > "Minimum role to use pipeline variables"
 #   = no_one_allowed   (API: ci_pipeline_variables_minimum_override_role)
-# The resolve job refuses to run otherwise. Source bridges therefore pass no
-# variables; resolve asks GitLab which MR triggered this pipeline (GraphQL
-# upstream), decides the provider route, and writes review-child.yml, whose
-# review job carries `environment: review/<source project id>` and the
-# identity as literals. The child runs /entrypoint.sh as before.
+# Source bridges therefore pass no variables; resolve asks GitLab which MR
+# triggered this pipeline (GraphQL upstream), decides the provider route, and
+# writes review-child.yml, whose review job carries
+# `environment: review/<source project id>` and the identity as literals.
 stages: [resolve, review]
 
 variables:
@@ -51,11 +61,13 @@ review:
 # CI/CD variables of this project (Settings > CI/CD > Variables).
 #
 # Tokens, both masked and protected:
-# - MAESTRO_GITLAB_TOKEN (environment scope *): bot user or group/project
+# - REVIEW_GITLAB_TOKEN (environment scope *): bot user or group/project
 #   access token, api scope, Developer on every source project (posts the
-#   review, clones for deep) and at least Reporter on this project (resolve
-#   reads its own upstream through it). CI_JOB_TOKEN is not enough: proven
-#   2026-09-04 on GitLab 18.11, reads work but POST /notes answers 401.
+#   review, clones for deep), Reporter on this project (resolve reads its own
+#   upstream through it; Maintainer is refused) and exactly Reporter on the
+#   config project (Developer or above is refused). CI_JOB_TOKEN is not
+#   enough: proven 2026-09-04 on GitLab 18.11, reads work but POST /notes
+#   answers 401.
 # - REVIEW_RESOLVE_TOKEN (environment scope "resolve"): project access token
 #   of THIS project, Maintainer, read_api. It reads the restriction setting
 #   and the per-project variable scopes, which a Maintainer can see for every
@@ -90,5 +102,3 @@ review:
 # On demand: the MR label maestro-review::deep runs one deep review of the
 # current head (retry the bridge job or push); the bot removes the label once
 # the deep review is posted.
-#
-# Optional notifications: TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID.

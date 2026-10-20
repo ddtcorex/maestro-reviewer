@@ -31,7 +31,7 @@ describe('profiles/reviewer-ci/cordis.patch.yml', () => {
     // unawardOwn() (clearing the running "eyes" marker) and gitlab-client.ts's
     // selectOwnThreads() (dedup/reply detection) — both filter GitLab objects
     // by `author.username === botUsername`. A hardcoded "maestro-bot" that
-    // doesn't match the real identity behind MAESTRO_GITLAB_TOKEN (a personal
+    // doesn't match the real identity behind REVIEW_GITLAB_TOKEN (a personal
     // PAT posts as its owner's username, not "maestro-bot") means neither
     // check ever recognizes the reviewer's own objects: stale "eyes" markers
     // never get cleared, and re-reviews can't tell their own prior threads
