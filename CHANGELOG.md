@@ -1,6 +1,9 @@
 # Changelog
 
-## [Unreleased]
+## [0.15.0] - 2026-10-20
+
+External pipeline config so Developers can trigger reviews, the
+`REVIEW_GITLAB_TOKEN` rename, and a full setup guide (#171).
 
 ### Fixed
 
