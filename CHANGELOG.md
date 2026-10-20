@@ -1,6 +1,8 @@
 # Changelog
 
-## [Unreleased]
+## [0.15.1] - 2026-10-20
+
+Temporary opt-out for installations without a dedicated bot user (#174).
 
 ### Added
 
