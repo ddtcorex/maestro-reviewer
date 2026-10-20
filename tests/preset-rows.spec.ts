@@ -1,16 +1,17 @@
 import { describe, expect, it } from 'vitest'
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const PRESETS = join(fileURLToPath(new URL('..', import.meta.url)), 'presets')
 
 /**
- * Preset names asserted below. The reviewer and auditor are declared as bundle
- * patch rows (`presets/<name>.patch.yml`) because that is what DSH 0.1.7 reads;
- * maestro-coder is still a directory preset, materialized by its consumer.
+ * Preset names asserted below, declared as bundle patch rows
+ * (`presets/<name>.patch.yml`), which is what DSH reads. The legacy
+ * maestro-coder directory preset was removed: DSH stopped reading directory
+ * presets on 2026-09-29 and no row shipped it.
  */
-const PRESET_DIRS = ['maestro-reviewer', 'maestro-auditor', 'maestro-coder'] as const
+const PRESET_DIRS = ['maestro-reviewer', 'maestro-auditor'] as const
 
 /** The `- id: <id>` row block, ended by the next row at any indentation. */
 function rowBlock(yml: string, id: string): string {
@@ -25,10 +26,11 @@ function rowBlock(yml: string, id: string): string {
   return block.join('\n')
 }
 
-const read = (name: string): string =>
-  name === 'maestro-coder'
-    ? readFileSync(join(PRESETS, name, 'agent.cordis.yml'), 'utf8')
-    : readFileSync(join(PRESETS, `${name}.patch.yml`), 'utf8')
+const read = (name: string): string => readFileSync(join(PRESETS, `${name}.patch.yml`), 'utf8')
+
+it('ships no legacy directory preset', () => {
+  expect(existsSync(join(PRESETS, 'maestro-coder'))).toBe(false)
+})
 
 describe.each(PRESET_DIRS)('%s persona row', (dir) => {
   const block = rowBlock(read(dir), 'persona')
@@ -81,24 +83,6 @@ describe('maestro-reviewer persona row scopes the profile-loading step', () => {
 
   it('tells the model to skip profile loading for a diff-only review', () => {
     expect(block).toMatch(/diff-only review.*skip/is)
-  })
-})
-
-describe('maestro-coder parity with the shipped standard preset', () => {
-  const yml = read('maestro-coder')
-
-  it('registers the /goal command into the preset scope', () => {
-    expect(rowBlock(yml, 'command-goal')).toMatch(/^\s+name: '@deepseek-ai\/dsh-command-goal'$/m)
-  })
-
-  it('registers the present tool', () => {
-    expect(rowBlock(yml, 'present')).toMatch(/^\s+name: '@deepseek-ai\/dsh-tool-present'$/m)
-  })
-
-  it('lets a delegating session choose the child model', () => {
-    const block = rowBlock(yml, 'tool-subagent')
-    expect(block).toMatch(/^\s+toolName: subagent$/m)
-    expect(block).toMatch(/modelSelectionSettings: true/)
   })
 })
 
@@ -180,10 +164,3 @@ describe('maestro-auditor persona drives the environment through the govard CLI'
   })
 })
 
-describe('maestro-coder persona runs unit tests through the govard CLI', () => {
-  const yml = read('maestro-coder')
-  it('names the in-environment shell command, not a retired tool', () => {
-    expect(yml).toContain('govard shell -c')
-    expect(yml).toMatch(/bash tool/)
-  })
-})

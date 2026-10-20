@@ -25,9 +25,9 @@ Host code lives in `src/host/` (flat `rootDir`, emits `lib/index.js`); there is 
 - `review-findings-tool.ts` (registers `report_review_findings`) / `review-history.ts` / `severity.ts` / `incremental.ts`.
 - `govard-lint-detection.ts`: whether the govard CLI lint run may be demanded: the `bash` tool resolves for the agent AND `govard` is executable on PATH.
 - `events.ts`: `ReviewRequest` / `ReviewResult` types; `index.ts`: host `apply()` (row `maestro-review-host`); `source.ts`: the source kind stamped on injected review messages; `skill-provider.ts` / `skills-tool.ts`: the bundled `skills/` dir and profile loading; `tool-policy.ts`: deny-list of host tools a review agent must not call.
-- Review-run tools: `search-tool.ts`, `hyva-theme-inspect-tool.ts`, `hyva-csp-scan-tool.ts`, `layout-xml-tool.ts`, `module-check-tool.ts`, `phtml-escape-scan-tool.ts`, `scope-split-tool.ts`, `perf-log-stats-tool.ts`.
+- Review-run tools: `hyva-theme-inspect-tool.ts`, `hyva-csp-scan-tool.ts`, `layout-xml-tool.ts`, `module-check-tool.ts`, `phtml-escape-scan-tool.ts`, `scope-split-tool.ts`, `perf-log-stats-tool.ts`.
 - `augment.d.ts` / `dsh-skill.d.ts`: ambient type declarations.
-- `presets/`: agent presets (`maestro-reviewer`, `maestro-auditor` as bundle patch rows; `maestro-coder` as a directory preset, legacy, no patch row ships it); `skills/dsh-native-tools/`: the capability to tool and CLI command map.
+- `presets/`: agent presets (`maestro-reviewer`, `maestro-auditor` as bundle patch rows); `skills/dsh-native-tools/`: the capability to tool and CLI command map.
 - `profiles/reviewer-ci/`: headless DSH profile for the CI image (the engine rows plus the CI trigger; no web connection).
 - `docker/`: reviewer image (`Dockerfile`, `entrypoint.sh`, `route.sh` provider route selection sourced by the entrypoint, `resolve.sh` for the resolve job, `ci-settings.*.yaml` model variants).
 - `templates/`: `reviewer-project.gitlab-ci.yml` (secrets holder) + `source-project.gitlab-ci.yml` (bridge).

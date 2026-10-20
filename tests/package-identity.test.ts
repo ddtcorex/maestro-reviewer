@@ -42,7 +42,7 @@ describe('package identity after the maestro-reviewer rename', () => {
   })
 
   it('points every shipped Cordis row at the new module path and keeps row ids', () => {
-    const files = ['cordis.patch.yml', 'presets/maestro-reviewer.patch.yml', 'presets/maestro-auditor.patch.yml', 'presets/maestro-coder/agent.cordis.yml', 'profiles/reviewer-ci/cordis.patch.yml']
+    const files = ['cordis.patch.yml', 'presets/maestro-reviewer.patch.yml', 'presets/maestro-auditor.patch.yml', 'profiles/reviewer-ci/cordis.patch.yml']
     const docs = files.map(f => parse(read(f)))
     const names = docs.flatMap(d => moduleNames(d))
     expect(names.length).toBeGreaterThan(0)

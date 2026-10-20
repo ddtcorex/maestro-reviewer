@@ -1,2 +1,0 @@
-name: Maestro Coder
-description: Strictly-compliant pair programming assistant. Reads project skills before writing code, edits files in the current workspace, and runs tests through the govard CLI. Select this in the DSH Web GUI agent picker for interactive coding sessions.

@@ -11,8 +11,7 @@ describe('review tool policy', () => {
     for (const tool of REVIEW_DENIED_TOOLS) {
       expect(deniedToolForReview(tool)).toContain('not available to Maestro review agents')
     }
-    expect(deniedToolForReview('maestro_read_file')).toBeUndefined()
-    expect(deniedToolForReview('maestro_search_files')).toBeUndefined()
+    expect(deniedToolForReview('grep')).toBeUndefined()
     expect(deniedToolForReview('gitlab_list_mr_diffs')).toBeUndefined()
     expect(deniedToolForReview('report_review_findings')).toBeUndefined()
   })
@@ -31,12 +30,25 @@ describe('review tool policy', () => {
   it('handler delegates to next for allowed tools', async () => {
     const handler = createReviewToolPolicyHandler()
     let nextCalled = false
-    const decision = await handler({ name: 'maestro_search_files' }, async () => {
+    const decision = await handler({ name: 'grep' }, async () => {
       nextCalled = true
       return { kind: 'allow' as const }
     })
     expect(decision.kind).toBe('allow')
     expect(nextCalled).toBe(true)
+  })
+
+  it('names no tool that nothing registers any more', () => {
+    expect(REVIEW_DENIED_TOOLS).not.toContain('maestro_write_file')
+  })
+
+  it('reports every attempted tool call, allowed or denied, to the counter', async () => {
+    const seen: string[] = []
+    const handler = createReviewToolPolicyHandler((name) => seen.push(name))
+    await handler({ name: 'grep' }, async () => ({ kind: 'allow' as const }))
+    await handler({ name: 'memory' }, async () => ({ kind: 'allow' as const }))
+    await handler({ name: 'grep' }, async () => ({ kind: 'allow' as const }))
+    expect(seen).toEqual(['grep', 'memory', 'grep'])
   })
 
   it('is a registerable plugin whose apply wires the pre-execute listener', () => {

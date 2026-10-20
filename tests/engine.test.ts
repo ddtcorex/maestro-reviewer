@@ -100,6 +100,22 @@ describe('review engine', () => {
     expect(notify).toHaveBeenCalledWith('failed', 'boom', expect.any(Number))
   })
 
+  it('returns the tool calls the agents made, counted per tool, on success and on failure', async () => {
+    const counting = {
+      reviewer: vi.fn(async (_w: unknown, _p: unknown, run: any) => {
+        for (const t of ['grep', 'read', 'grep', 'report_review_findings']) run.onToolCall(t)
+        return { summary: 'ok', failures: [] }
+      }),
+      auditor: vi.fn(),
+    }
+    const ok = await (await engineWith(counting)).run(payload(), { gitlab, access: { kind: 'diff' }, model, agentTimeoutMs: 1000 })
+    expect(ok.toolCalls).toEqual({ grep: 2, read: 1, report_review_findings: 1 })
+    const failing = { reviewer: vi.fn(async (_w: unknown, _p: unknown, run: any) => { run.onToolCall('read'); throw new Error('boom') }), auditor: vi.fn() }
+    const bad = await (await engineWith(failing)).run(payload(), { gitlab, access: { kind: 'diff' }, model, agentTimeoutMs: 1000 })
+    expect(bad.ok).toBe(false)
+    expect(bad.toolCalls).toEqual({ read: 1 })
+  })
+
   it('passes the explicit model to the agent runners', async () => {
     const { agents } = fakeAgents()
     const engine = await engineWith(agents)

@@ -11,7 +11,6 @@ import { installModelSelection } from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-agent-preset-registry'
 import type {} from '@deepseek-ai/dsh-session-title'
 import * as ReviewFindingsTool from './review-findings-tool.js'
-import * as SearchTool from './search-tool.js'
 import * as HyvaThemeInspectTool from './hyva-theme-inspect-tool.js'
 import * as HyvaCspScanTool from './hyva-csp-scan-tool.js'
 import * as LayoutXmlTool from './layout-xml-tool.js'
@@ -103,7 +102,14 @@ export function toModelSelection(raw: { provider: string; model: string; reasoni
 
 export interface ReviewEngine { run(payload: ReviewRequest, opts: EngineRunOptions): Promise<ReviewResult> }
 
-export interface AgentRunConfig { gitlab: EngineGitlab; forge: ReviewForge; model: ModelSelection; agentTimeoutMs: number }
+export interface AgentRunConfig {
+  gitlab: EngineGitlab
+  forge: ReviewForge
+  model: ModelSelection
+  agentTimeoutMs: number
+  /** Counts every tool call the run's agents attempt; the totals land in ReviewResult.toolCalls. */
+  onToolCall: (toolName: string) => void
+}
 
 /** The reviewer and auditor agent runs; separate so the run flow can be tested without agents. */
 export interface EngineAgents {
@@ -162,13 +168,12 @@ export function createEngineAgents(ctx: Context): EngineAgents {
           agentOptions,
           setup: async (agentCtx) => {
             installModelSelection(agentCtx, { current: agentOptions, assembled: undefined })
-            await agentCtx.plugin(ReviewToolPolicy)
+            await agentCtx.plugin(ReviewToolPolicy, { onToolCall: run.onToolCall })
             await mountAgentPreset(ctx.agentPresets, agentCtx, 'dsh-maestro-reviewer')
             await run.forge.mountAgentTools(agentCtx, { onDiffTruncated: () => { diffTruncated = true } })
             await agentCtx.plugin(ReviewFindingsTool, { onReport: (findings) => { capturedFindings = findings } })
             // Diff-only runs have no worktree; nothing to search there.
             if (worktreePath !== undefined) {
-              await agentCtx.plugin(SearchTool, { rootPath: worktreePath })
               await agentCtx.plugin(HyvaThemeInspectTool, { rootPath: worktreePath })
               await agentCtx.plugin(HyvaCspScanTool, { rootPath: worktreePath })
               await agentCtx.plugin(LayoutXmlTool, { rootPath: worktreePath })
@@ -276,7 +281,7 @@ export function createEngineAgents(ctx: Context): EngineAgents {
         agentOptions,
         setup: async (agentCtx) => {
           installModelSelection(agentCtx, { current: agentOptions, assembled: undefined })
-          await agentCtx.plugin(ReviewToolPolicy)
+          await agentCtx.plugin(ReviewToolPolicy, { onToolCall: run.onToolCall })
           await mountAgentPreset(ctx.agentPresets, agentCtx, 'dsh-maestro-auditor')
           await run.forge.mountAgentTools(agentCtx, {})
         },
@@ -306,7 +311,12 @@ export function createReviewEngine(ctx: Context, agents: EngineAgents = createEn
     const t0 = Date.now()
     const { gitlab, access } = opts
     const forge = opts.forge ?? gitlabForge(gitlab, payload)
-    const agentRun: AgentRunConfig = { gitlab, forge, model: opts.model, agentTimeoutMs: opts.agentTimeoutMs }
+    const toolCallCounts = new Map<string, number>()
+    const toolCalls = () => Object.fromEntries([...toolCallCounts].sort(([a], [b]) => a.localeCompare(b)))
+    const agentRun: AgentRunConfig = {
+      gitlab, forge, model: opts.model, agentTimeoutMs: opts.agentTimeoutMs,
+      onToolCall: (toolName) => { toolCallCounts.set(toolName, (toolCallCounts.get(toolName) ?? 0) + 1) },
+    }
     let reviewStart = Date.now()
     const notify = (status: 'completed' | 'failed', summary?: string) => opts.notify?.(status, summary, Date.now() - reviewStart)
     try {
@@ -352,7 +362,7 @@ export function createReviewEngine(ctx: Context, agents: EngineAgents = createEn
         await recordReviewFinish(historyId, { status: 'completed', summary })
         notify('completed', summary)
         await signals?.finish('completed')
-        return { ok: true, summary, failures: [], durationMs: Date.now() - t0 }
+        return { ok: true, summary, failures: [], durationMs: Date.now() - t0, toolCalls: toolCalls() }
       }
       const diffOnly = () => runDiffOnlyReview(payload, {
         runReviewer: (p) => agents.reviewer(undefined, p, agentRun, payload.reviewProfile, incrementalBlock),
@@ -435,7 +445,7 @@ export function createReviewEngine(ctx: Context, agents: EngineAgents = createEn
         await recordReviewFinish(historyId, { status: 'failed', error: message }).catch(() => {})
         notify('failed', message)
         await signals?.finish('failed')
-        return { ok: false, summary: undefined, failures: [message], durationMs: Date.now() - t0 }
+        return { ok: false, summary: undefined, failures: [message], durationMs: Date.now() - t0, toolCalls: toolCalls() }
       }
     } catch (err) {
       // Surface failures as a result instead of an unhandled rejection, so both
@@ -443,7 +453,7 @@ export function createReviewEngine(ctx: Context, agents: EngineAgents = createEn
       // same outcome.
       const message = err instanceof Error ? err.message : String(err)
       console.error(`maestro-orchestrator: review run failed for MR !${String(payload.mrIid)}:`, err)
-      return { ok: false, summary: undefined, failures: [message], durationMs: Date.now() - t0 }
+      return { ok: false, summary: undefined, failures: [message], durationMs: Date.now() - t0, toolCalls: toolCalls() }
     }
   }
   return { run }
