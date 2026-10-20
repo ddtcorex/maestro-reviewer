@@ -94,7 +94,7 @@ reruns the probes after every GitLab version change.
 | Who | Project | Minimum role | Why |
 |---|---|---|---|
 | Every user whose MR should be reviewed (the bridge runs as the user who started the source pipeline) | reviewer project | Developer, and allowed to merge its pipeline branch | GitLab refuses to create the downstream pipeline otherwise (`insufficient_bridge_permissions`) |
-| the same users | config project | Reporter | GitLab must read the pipeline file as them (`downstream_pipeline_creation_failed` otherwise) |
+| the same users | config project | Reporter | GitLab must read the pipeline file as them (the bridge fails otherwise) |
 | the bot (owner of `REVIEW_GITLAB_TOKEN`) | every source project | Developer | posts the comment and threads, sets and clears award markers, removes the deep label, clones the source for profile and deep reviews |
 | the bot | reviewer project | Reporter, **below Maintainer** | `resolve` reads its own upstream pipeline through GraphQL; a Maintainer could read every key through the API, so `resolve` refuses Maintainer or above |
 | the bot | config project | exactly Reporter | `resolve` reads the config branch protection; the review job holds this token while an agent reads untrusted MR content, so the bot must not be able to change the pipeline file or create refs there (`resolve` refuses Developer or above, counting group memberships and shared groups) |
@@ -459,7 +459,7 @@ works by design; test it on a separate reviewer project.
 | Symptom | Cause and fix |
 |---|---|
 | bridge fails with `insufficient_bridge_permissions` | the MR author cannot merge the reviewer project's pipeline branch: make them Developer there and allow Developers to merge it (3.2 step 4) |
-| bridge fails with `downstream_pipeline_creation_failed` | the bridge passes or forwards variables (use the current source template), or the MR author has no Reporter on the config project |
+| bridge fails with `downstream_pipeline_creation_failed` or `unknown_failure` | the MR author has no Reporter on the config project (both reasons were seen for this on GitLab 18.11), or the bridge passes or forwards variables (use the current source template) |
 | bridge fails with `downstream_bridge_project_not_found` | `trigger.project` is wrong or the MR author is not a member of the reviewer project |
 | `resolve failed: pipeline variables are not restricted` | set **Minimum role to use pipeline variables = No one allowed** |
 | `the reviewer project's CI config path (...) must name a file in a separate config project` | set the Custom CI config path to `<file>@<config project>` (3.2 step 2) |
