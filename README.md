@@ -34,7 +34,10 @@ through a small bridge job, with no DSH host and no project mapping.
 
 - **Trusted trigger.** The reviewer project forbids pipeline variables, and a
   `resolve` job asks GitLab which MR triggered it, so a source project can
-  never change what the reviewer runs or where its secrets go.
+  never change what the reviewer runs or where its secrets go. The pipeline
+  file lives in a separate Maintainer-only config project, so every developer
+  can trigger a review while only Maintainers can change what receives the
+  keys.
 - **Per-project providers.** Each source project can bring its own AI provider
   and key (`openai`, `anthropic`, `gemini`, `openrouter`, `deepseek` presets or
   any OpenAI-compatible endpoint), set as reviewer variables scoped
@@ -44,8 +47,8 @@ through a small bridge job, with no DSH host and no project mapping.
   framework); **deep** runs once per head SHA on the `maestro-review::deep`
   label, cloning the MR head with a static-only audit.
 
-Full setup, per-case trigger workflows (quick and deep, CI and webhook), model
-selection, and troubleshooting: [`docs/ci-reviewer-setup.md`](docs/ci-reviewer-setup.md).
+Step-by-step GitLab setup, the access each user and token needs, every
+variable with its scope and flags, daily use, and troubleshooting: [`docs/ci-reviewer-setup.md`](docs/ci-reviewer-setup.md).
 Templates live in `templates/`, the image in `docker/`.
 
 ## Settings

@@ -61,6 +61,12 @@ describe('reviewer template: trusted trigger', () => {
     }
     expect(yml).not.toMatch(/REVIEW_ALLOW_UNRESTRICTED_TRIGGER/)
   })
+
+  it('says it lives in a separate Maintainer-only config project, and names no variable the flow never reads', () => {
+    const yml = reviewerYml()
+    for (const s of ['config project', 'Custom CI config path', 'Maintainers only', 'Reporter']) expect(yml).toContain(s)
+    expect(yml).not.toMatch(/TELEGRAM|MAESTRO_GITLAB_TOKEN/)
+  })
 })
 
 describe('source template: clean bridge', () => {

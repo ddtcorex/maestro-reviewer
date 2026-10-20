@@ -1,5 +1,35 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+
+- **Developers could not trigger a review.** GitLab only lets a user trigger
+  a protected downstream branch when they can push or merge it, and 0.14
+  required the reviewer branch to be Maintainers only, so a Developer's MR
+  bridge failed with `insufficient_bridge_permissions` and got no review.
+
+### Changed
+
+- **BREAKING: the reviewer pipeline file lives in a separate config project.**
+  The reviewer project's Custom CI config path must name
+  `<file>@<group>/<config project>[:<branch>]`; `resolve` checks that the
+  config branch is protected for Maintainers only (push and merge, no force
+  push, no per-user or per-group grants) and that the bot is below Maintainer
+  there, and no longer requires the reviewer branch to be Maintainers only, so
+  Developers may merge it and therefore trigger it. Everyone who triggers the
+  reviewer, and the bot, needs Reporter on the config project.
+- **BREAKING: `MAESTRO_GITLAB_TOKEN` is now `REVIEW_GITLAB_TOKEN`**, so every
+  reviewer project variable shares the `REVIEW_` prefix. The old name is not
+  read.
+
+### Docs
+
+- `docs/ci-reviewer-setup.md` rewritten: GitLab setup in click order, an
+  access matrix, and a reference of every variable with its scope, flags,
+  default and effect. Removed the Telegram variables, which the CI flow never
+  read.
+
 ## [0.14.0] - 2026-10-20
 
 Trusted CI trigger, per-project AI providers, and the split into the review
