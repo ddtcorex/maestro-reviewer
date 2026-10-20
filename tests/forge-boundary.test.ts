@@ -39,7 +39,13 @@ describe('forge boundary', () => {
     expect(r.ok).toBe(true)
     expect(fetchSpy).not.toHaveBeenCalled()
     expect(calls).toEqual(['mrHeadSha', 'compare old..new', 'signals.start', 'postNote', 'signals.finish completed'])
-    expect(((reviewer.mock.calls[0] as unknown[])[2] as { forge: unknown }).forge).toBe(forge)
+    // The agents get a timing wrapper of this forge, never a forge of their own.
+    const agentForge = ((reviewer.mock.calls[0] as unknown[])[2] as { forge: typeof forge }).forge
+    calls.length = 0
+    await agentForge.postFindings([] as any)
+    await agentForge.mountAgentTools({} as any, {})
+    expect(calls).toEqual(['postFindings'])
+    expect(forge.mountAgentTools).toHaveBeenCalledTimes(1)
   })
 
   it('only the forge and the CI modules build GitLab REST URLs', () => {

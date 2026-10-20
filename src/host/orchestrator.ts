@@ -163,7 +163,7 @@ export function isUnsupportedReasoningError(err: unknown): boolean {
  * ran outside of unit tests that happened to mock the same wrong shape.
  * Returns `[]` — never throws — when no event source exists.
  */
-function readSessionEvents(session: unknown): unknown[] {
+export function readSessionEvents(session: unknown): unknown[] {
   const candidate = session as {
     ownEvents?: unknown
     snapshotEvents?: unknown
@@ -259,9 +259,13 @@ export function reviewerSummary(postedNew: number, postedReplies: number, diffTr
   return `${postedNew} new inline comment(s), ${postedReplies} thread(s) updated.${diffTruncated ? ` Diff truncated at ${GitlabClient.MAX_DIFF_FILES} files: files beyond the cap were not reviewed.` : ''}`
 }
 
-function metaFor(payload: ReviewRequest, outcome: Pick<ReviewOutcome, 'findings' | 'models'>): ReviewMeta | undefined {
+/** Token usage of the run so far, for the metadata; optional on every deps object. */
+interface UsageDeps { usageTotal?(): { input: number; output: number; cached: number } | null }
+
+function metaFor(payload: ReviewRequest, outcome: Pick<ReviewOutcome, 'findings' | 'models'>, deps: UsageDeps): ReviewMeta | undefined {
   if (payload.headSha === undefined) return undefined
-  return buildReviewMeta({ headSha: payload.headSha, mode: payload.mode, models: outcome.models ?? [], findings: outcome.findings ?? [] })
+  const usage = deps.usageTotal?.() ?? undefined
+  return buildReviewMeta({ headSha: payload.headSha, mode: payload.mode, models: outcome.models ?? [], findings: outcome.findings ?? [], ...(usage !== undefined ? { usage } : {}) })
 }
 
 /**
@@ -468,7 +472,7 @@ export async function runReviewAndAudit(payload: ReviewRequest, deps: ReviewAndA
       const labels = ['Reviewer', 'Auditor']
       if (settled[0].status === 'fulfilled') {
         const { summary, failures, severityCounts } = settled[0].value
-        const meta = metaFor(payload, settled[0].value)
+        const meta = metaFor(payload, settled[0].value, deps as UsageDeps)
         // Try to parse findings counts from summary like "2 new inline comment(s), 1 thread(s) updated."
         const summaryText = summary ?? ''
         const newMatch = /(\d+)\s+new inline/.exec(summaryText)
@@ -552,7 +556,7 @@ export async function runDiffOnlyReview(payload: ReviewRequest, deps: DiffOnlyRe
           failures,
           isDiffOnly: true,
           marker: commentMarker(payload),
-          meta: metaFor(payload, outcome),
+          meta: metaFor(payload, outcome, deps as UsageDeps),
         })
       : `## 🤖 Maestro Review — Diff-only\n\n> **Scope:** Diff-only — reviewed the GitLab diff without a local checkout, Magento environment, static analysis, or tests. For a full review, add this project in Settings → Maestro and mention again.\n\n${summary}${failures.length > 0 ? `\n\n<details>\n<summary>⚠️ Failed to post (${failures.length})</summary>\n\n${failures.map((f) => `- \`${f}\``).join('\n')}\n\n</details>` : ''}`
     const body = diffBody

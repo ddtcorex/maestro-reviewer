@@ -134,6 +134,10 @@ export async function runCiTrigger(
     history?: { lastCompletedReview(projectId: number, mrIid: number): Promise<{ headSha?: string } | undefined> }
   } = {},
 ): Promise<ReviewResult> {
+  // Boot: process start (dsh launch, profile load) up to this plugin's run.
+  const bootMs = Math.round(performance.now())
+  const gateStart = Date.now()
+  let gateMs: number | undefined
   const { sourceBranch, headSha, projectPath } = await fetchMrDetail(config, deps.fetcher)
   // Push-gate (mirror of the webhook autoRereviewOnPush semantics): the bridge fires
   // on every MR pipeline, so skip when this exact head SHA already completed — and
@@ -163,7 +167,7 @@ export async function runCiTrigger(
     model: ciModel(ctx, config),
     agentTimeoutMs: config.agentTimeoutMs,
   }
-  const runReview = () => ctx.reviewEngine.run({
+  const runReview = () => { gateMs = Date.now() - gateStart; return ctx.reviewEngine.run({
     projectPath,
     projectId: config.sourceProjectId,
     mrIid: config.mrIid,
@@ -174,7 +178,7 @@ export async function runCiTrigger(
     mode: config.mode,
     scope: { kind: 'mr' },
     reviewProfile: config.reviewProfile,
-  } satisfies ReviewRequest, options)
+  } satisfies ReviewRequest, options) }
   const coFetcher = deps.fetcher ?? fetch
   let result: ReviewResult
   if (config.deepRequested) {
@@ -214,7 +218,8 @@ export async function runCiTrigger(
   // entrypoint exports REVIEW_REPORT_DIR=$PWD captured before the cd, so reports land
   // in the CI job's working directory where `artifacts:` picks them up.
   const reportDir = process.env.REVIEW_REPORT_DIR?.trim() || '.'
-  const report = { ...result, projectId: config.sourceProjectId, mrIid: config.mrIid, mode: config.mode, generatedAt: new Date().toISOString() }
+  const stages = { ...result.stages, boot: bootMs, fetch: (result.stages?.fetch ?? 0) + (gateMs ?? Date.now() - gateStart) }
+  const report = { ...result, stages, projectId: config.sourceProjectId, mrIid: config.mrIid, mode: config.mode, generatedAt: new Date().toISOString() }
   await writeFile(join(reportDir, 'review-report.json'), JSON.stringify(report, null, 2), 'utf-8')
   const md = `# Review Report\n\n**Project:** ${config.sourceProjectId} !${config.mrIid}\n**Mode:** ${config.mode}\n**Duration:** ${result.durationMs}ms\n\n${result.summary ?? '(no summary)'}\n${result.failures.length > 0 ? `\nFailures:\n${result.failures.map(f => `- ${f}`).join('\n')}\n` : ''}`
   await writeFile(join(reportDir, 'review-report.md'), md, 'utf-8')

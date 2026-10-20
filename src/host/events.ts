@@ -1,3 +1,4 @@
+import type { AgentUsage, Stage } from './telemetry.js'
 export interface MrOpenedPayload {
   projectPath: string
   projectId: number
@@ -50,4 +51,8 @@ export interface ReviewResult {
   durationMs: number
   /** Tool calls the review's agents attempted, per tool name (absent when no agent ran). */
   toolCalls?: Record<string, number>
+  /** Wall clock per stage in ms (boot is added by the CI trigger). */
+  stages?: Partial<Record<Stage, number>>
+  /** Token usage per agent run; `usage` is null when the session reported none. */
+  usage?: AgentUsage[]
 }

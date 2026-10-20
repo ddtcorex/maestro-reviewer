@@ -30,6 +30,7 @@ import { buildIncrementalBlock } from './incremental.js'
 import { loadedReviewProfile, type ReviewSkillProfile } from './skills-tool.js'
 import { REVIEW_SOURCE_KIND } from './source.js'
 import { cloneSourceRepo, defaultRun } from './ci-clone.js'
+import { createStageTimer, sumUsage, usageFromSession, type AgentUsage, type TokenUsage } from './telemetry.js'
 import {
   agentOptionsForModel, assertSafeBranchName, assertTurnSucceededOrSalvage, auditorOutputFromSession, buildAuditorPrompt,
   buildReviewerScopePrompt, getTurnErrorMessage, isBranchNotFoundError,
@@ -109,6 +110,8 @@ export interface AgentRunConfig {
   agentTimeoutMs: number
   /** Counts every tool call the run's agents attempt; the totals land in ReviewResult.toolCalls. */
   onToolCall: (toolName: string) => void
+  /** Records one agent session's token usage (null when the session reported none). */
+  onUsage: (agent: AgentUsage['agent'], model: string, usage: TokenUsage | null) => void
 }
 
 /** The reviewer and auditor agent runs; separate so the run flow can be tested without agents. */
@@ -240,6 +243,7 @@ export function createEngineAgents(ctx: Context): EngineAgents {
         }
         return { summary: reviewerSummary(postedNew, postedReplies, diffTruncated), failures, severityCounts: countFindingSeverities(capturedFindings), findings: capturedFindings, models: [primaryOptions.model] }
       } finally {
+        run.onUsage('reviewer', agentOptions.model, usageFromSession(handle.agent.session))
         await handle.dispose()
       }
     }
@@ -299,6 +303,7 @@ export function createEngineAgents(ctx: Context): EngineAgents {
       assertTurnSucceededOrSalvage(handle, text.trim() !== '', 'auditor')
       return `## Maestro Performance Audit\n\n${text}`
     } finally {
+      run.onUsage('auditor', agentOptions.model, usageFromSession(handle.agent.session))
       await handle.dispose()
     }
   }
@@ -310,13 +315,44 @@ export function createReviewEngine(ctx: Context, agents: EngineAgents = createEn
   async function run(payload: ReviewRequest, opts: EngineRunOptions): Promise<ReviewResult> {
     const t0 = Date.now()
     const { gitlab, access } = opts
-    const forge = opts.forge ?? gitlabForge(gitlab, payload)
+    const timer = createStageTimer()
+    // Posting runs inside the agent stage (findings after each reviewer turn,
+    // the comment after all agents), so it is timed per call and moved to post.
+    let postMs = 0
+    const timedPost = async <T>(call: () => Promise<T>): Promise<T> => {
+      const start = Date.now()
+      try { return await call() } finally { postMs += Date.now() - start }
+    }
+    const rawForge = opts.forge ?? gitlabForge(gitlab, payload)
+    const forge: ReviewForge = {
+      mrHeadSha: () => rawForge.mrHeadSha(),
+      mrBaseSha: () => rawForge.mrBaseSha(),
+      compare: (from, to) => rawForge.compare(from, to),
+      postNote: (body) => timedPost(() => rawForge.postNote(body)),
+      replyToDiscussion: (id, body) => timedPost(() => rawForge.replyToDiscussion(id, body)),
+      postFindings: (findings) => timedPost(() => rawForge.postFindings(findings)),
+      signals: () => rawForge.signals(),
+      mountAgentTools: (agentCtx, o) => rawForge.mountAgentTools(agentCtx, o),
+    }
     const toolCallCounts = new Map<string, number>()
     const toolCalls = () => Object.fromEntries([...toolCallCounts].sort(([a], [b]) => a.localeCompare(b)))
+    const usages: AgentUsage[] = []
     const agentRun: AgentRunConfig = {
       gitlab, forge, model: opts.model, agentTimeoutMs: opts.agentTimeoutMs,
       onToolCall: (toolName) => { toolCallCounts.set(toolName, (toolCallCounts.get(toolName) ?? 0) + 1) },
+      onUsage: (agent, model, usage) => { usages.push({ agent, model, usage }) },
     }
+    let agentsStarted = false
+    /** Closes the stage timeline once and returns the run's telemetry. */
+    const telemetry = () => {
+      if (agentsStarted) {
+        agentsStarted = false
+        timer.mark('agent', postMs)
+        timer.add('post', postMs)
+      }
+      return { toolCalls: toolCalls(), stages: timer.toJSON(), usage: [...usages] }
+    }
+    const usageTotal = () => sumUsage(usages.map((u) => u.usage))
     let reviewStart = Date.now()
     const notify = (status: 'completed' | 'failed', summary?: string) => opts.notify?.(status, summary, Date.now() - reviewStart)
     try {
@@ -350,19 +386,21 @@ export function createReviewEngine(ctx: Context, agents: EngineAgents = createEn
       const signals = payload.scope.kind === 'mr' ? forge.signals() : undefined
       reviewStart = Date.now()
       await signals?.start()
+      timer.mark('fetch')
+      agentsStarted = true
       const postComment = (body: string) => forge.postNote(body)
       const replyToDiscussion = (discussionId: string, body: string) => forge.replyToDiscussion(discussionId, body)
       const deduped = async (): Promise<ReviewResult> => {
         console.error(`maestro-orchestrator: deduped duplicate in-flight review project=${payload.projectPath} mr=!${payload.mrIid} trigger=${payload.trigger}`)
         await recordReviewFinish(historyId, { status: 'completed', summary: DEDUPED_SUMMARY })
         await signals?.finish('completed')
-        return { ok: true, summary: DEDUPED_SUMMARY, failures: [], durationMs: Date.now() - t0 }
+        return { ok: true, summary: DEDUPED_SUMMARY, failures: [], durationMs: Date.now() - t0, ...telemetry() }
       }
       const completed = async (summary: string | undefined): Promise<ReviewResult> => {
         await recordReviewFinish(historyId, { status: 'completed', summary })
         notify('completed', summary)
         await signals?.finish('completed')
-        return { ok: true, summary, failures: [], durationMs: Date.now() - t0, toolCalls: toolCalls() }
+        return { ok: true, summary, failures: [], durationMs: Date.now() - t0, ...telemetry() }
       }
       const diffOnly = () => runDiffOnlyReview(payload, {
         runReviewer: (p) => agents.reviewer(undefined, p, agentRun, payload.reviewProfile, incrementalBlock),
@@ -370,6 +408,7 @@ export function createReviewEngine(ctx: Context, agents: EngineAgents = createEn
         replyToDiscussion,
         writeFailedReport,
         gitlabBaseUrl: gitlab.baseUrl,
+        usageTotal,
       } as unknown as DiffOnlyReviewDeps)
       try {
         if (access.kind === 'diff') {
@@ -386,7 +425,9 @@ export function createReviewEngine(ctx: Context, agents: EngineAgents = createEn
           const cloneDir = join('/tmp', `maestro-ci-src-${payload.projectId}-${payload.mrIid}`)
           // D3: make the MR merge base reachable from the head in the shallow clone.
           const baseSha = await forge.mrBaseSha()
+          timer.mark('fetch')
           await cloneSourceRepo({ fetcher: fetch, run: defaultRun, host: access.host, projectId: payload.projectId, sourceBranch: payload.sourceBranch, headSha: payload.headSha as string, token: gitlab.token, dir: cloneDir, ...(baseSha ? { baseSha } : {}) })
+          timer.mark('clone')
           try {
             const ciEnsureWorktree = async (repoPath: string, branch: string, pid: number, iid: number, suffix?: string): Promise<string> => {
               assertSafeBranchName(branch)
@@ -408,6 +449,7 @@ export function createReviewEngine(ctx: Context, agents: EngineAgents = createEn
               writeFailedReport,
               gitlabBaseUrl: gitlab.baseUrl,
               reviewProfile: profile,
+              usageTotal,
             } as unknown as ReviewAndAuditDeps)
           } finally {
             await defaultRun('rm', ['-rf', cloneDir]).catch(() => {})
@@ -428,6 +470,7 @@ export function createReviewEngine(ctx: Context, agents: EngineAgents = createEn
               writeFailedReport,
               gitlabBaseUrl: gitlab.baseUrl,
               reviewProfile: profile,
+              usageTotal,
             } as unknown as ReviewAndAuditDeps)
           } catch (err) {
             const isBranchNotFound = (err as { code?: string })?.code === 'BRANCH_NOT_FOUND' || isBranchNotFoundError(err)
@@ -445,7 +488,7 @@ export function createReviewEngine(ctx: Context, agents: EngineAgents = createEn
         await recordReviewFinish(historyId, { status: 'failed', error: message }).catch(() => {})
         notify('failed', message)
         await signals?.finish('failed')
-        return { ok: false, summary: undefined, failures: [message], durationMs: Date.now() - t0, toolCalls: toolCalls() }
+        return { ok: false, summary: undefined, failures: [message], durationMs: Date.now() - t0, ...telemetry() }
       }
     } catch (err) {
       // Surface failures as a result instead of an unhandled rejection, so both
@@ -453,7 +496,7 @@ export function createReviewEngine(ctx: Context, agents: EngineAgents = createEn
       // same outcome.
       const message = err instanceof Error ? err.message : String(err)
       console.error(`maestro-orchestrator: review run failed for MR !${String(payload.mrIid)}:`, err)
-      return { ok: false, summary: undefined, failures: [message], durationMs: Date.now() - t0, toolCalls: toolCalls() }
+      return { ok: false, summary: undefined, failures: [message], durationMs: Date.now() - t0, ...telemetry() }
     }
   }
   return { run }

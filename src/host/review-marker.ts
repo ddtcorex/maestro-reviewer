@@ -109,6 +109,7 @@ export function buildReviewMeta(opts: {
   mode: 'quick' | 'deep'
   models: string[]
   findings: ReviewFinding[]
+  usage?: { input: number; output: number; cached: number }
   now?: () => Date
 }): ReviewMeta {
   return {
@@ -117,6 +118,7 @@ export function buildReviewMeta(opts: {
     ...(opts.baseSha !== undefined ? { baseSha: opts.baseSha } : {}),
     mode: opts.mode,
     models: opts.models,
+    ...(opts.usage !== undefined ? { usage: opts.usage } : {}),
     findings: opts.findings.map(f => ({ code: f.code ?? 'none', fingerprint: findingFingerprint(f), severity: f.severity ?? 'minor' })),
     at: (opts.now ?? (() => new Date()))().toISOString(),
   }
