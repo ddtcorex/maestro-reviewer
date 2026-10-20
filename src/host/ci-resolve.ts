@@ -46,6 +46,25 @@ export function namespaceAllowed(projectPath: string, entries: readonly string[]
   return entries.some(e => projectPath === e || projectPath.startsWith(`${e}/`))
 }
 
+/**
+ * A CI config path that names a file in another project
+ * (`<file>@<namespace>/<project>[:<ref>]`), else undefined: a local path,
+ * an empty value or a malformed project.
+ */
+export function parseCiConfigPath(value: string | null | undefined): { file: string; project: string; ref?: string } | undefined {
+  const v = (value ?? '').trim()
+  const at = v.lastIndexOf('@')
+  if (at <= 0) return undefined
+  const file = v.slice(0, at)
+  const rest = v.slice(at + 1)
+  const colon = rest.indexOf(':')
+  const project = colon === -1 ? rest : rest.slice(0, colon)
+  const ref = colon === -1 ? undefined : rest.slice(colon + 1)
+  if (!/^[A-Za-z0-9_.-]+(\/[A-Za-z0-9_.-]+)+$/.test(project)) return undefined
+  if (ref !== undefined && !/^[^\s:]+$/.test(ref)) return undefined
+  return ref === undefined ? { file, project } : { file, project, ref }
+}
+
 /** MR iid of a merge request pipeline ref (head, merge or train), else undefined. */
 export function parseMrRef(ref: string): number | undefined {
   const m = /^refs\/merge-requests\/(\d+)\/(?:head|merge|train)$/.exec(ref)

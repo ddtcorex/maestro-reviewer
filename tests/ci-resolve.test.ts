@@ -1,6 +1,19 @@
 import { describe, expect, it } from 'vitest'
 import { parse } from 'yaml'
-import { childPipelineYaml, decideRoute, noopChildYaml, parseMrRef, PROVIDER_PRESETS } from '../src/host/ci-resolve.js'
+import { childPipelineYaml, decideRoute, noopChildYaml, parseCiConfigPath, parseMrRef, PROVIDER_PRESETS } from '../src/host/ci-resolve.js'
+
+describe('parseCiConfigPath', () => {
+  it('parses a file in another project, with an optional ref', () => {
+    expect(parseCiConfigPath('maestro-reviewer.yml@my-group/reviewer-config')).toEqual({ file: 'maestro-reviewer.yml', project: 'my-group/reviewer-config' })
+    expect(parseCiConfigPath(' ci/review.yml@a/b.c/d_e:stable ')).toEqual({ file: 'ci/review.yml', project: 'a/b.c/d_e', ref: 'stable' })
+  })
+
+  it('returns undefined for a local file, an empty value or a malformed project', () => {
+    for (const v of [undefined, null, '', '  ', '.gitlab-ci.yml', 'ci/review.yml', '@g/p', 'f.yml@', 'f.yml@noslash', 'f.yml@g/p:', 'f.yml@g//p', 'f.yml@g/p x']) {
+      expect(parseCiConfigPath(v)).toBeUndefined()
+    }
+  })
+})
 
 describe('parseMrRef', () => {
   it('reads the MR iid from head, merge and train refs', () => {

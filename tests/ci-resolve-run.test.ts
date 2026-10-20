@@ -5,6 +5,7 @@ import { runResolve, UNCONFIGURED_MARKER } from '../src/host/ci-resolve-run.js'
 const RESOLVE = 'resolve-tok-SECRET'
 const BOT = 'bot-tok-SECRET'
 const REVIEWER = 900
+const CONFIG = 901
 const SOURCE = 42
 const MR = 7
 
@@ -18,6 +19,10 @@ interface World {
   scopedStatus?: number
   projectVars?: string[]
   protection?: Record<string, unknown> | null
+  configPath?: string | null
+  configStatus?: number
+  configProject?: Record<string, unknown>
+  protectionRef?: string
   notes?: Array<{ author: { id: number }; body: string }>
   notesPages?: Array<Array<{ author: { id: number }; body: string }>>
   noteStatus?: number
@@ -42,10 +47,16 @@ function gitlab(w: World) {
     if (p === `/projects/${REVIEWER}`) {
       if (tok !== RESOLVE) return json(401, {})
       if (w.settingStatus) return json(w.settingStatus, {})
-      return json(200, w.setting === null ? { id: REVIEWER } : { id: REVIEWER, ci_pipeline_variables_minimum_override_role: w.setting ?? 'no_one_allowed' })
+      const ci_config_path = w.configPath === undefined ? 'maestro-reviewer.yml@ci/reviewer-config' : w.configPath
+      return json(200, w.setting === null ? { id: REVIEWER, ci_config_path } : { id: REVIEWER, ci_config_path, ci_pipeline_variables_minimum_override_role: w.setting ?? 'no_one_allowed' })
     }
-    if (p === `/projects/${REVIEWER}/protected_branches/main`) {
-      if (tok !== RESOLVE) return json(403, {})
+    if (p === `/projects/${encodeURIComponent('ci/reviewer-config')}`) {
+      if (tok !== BOT) return json(404, {})
+      if (w.configStatus) return json(w.configStatus, {})
+      return json(200, w.configProject ?? { id: CONFIG, default_branch: 'main', permissions: { project_access: { access_level: 20 }, group_access: null } })
+    }
+    if (p === `/projects/${CONFIG}/protected_branches/${encodeURIComponent(w.protectionRef ?? 'main')}`) {
+      if (tok !== BOT) return json(403, {})
       if (w.protection === null) return json(404, { message: '404 Not found' })
       return json(200, w.protection ?? { name: 'main', allow_force_push: false, push_access_levels: [{ access_level: 40 }], merge_access_levels: [{ access_level: 40 }] })
     }
@@ -171,7 +182,38 @@ describe('runResolve', () => {
     }
   })
 
-  it('refuses to run unless the pipeline branch only lets Maintainers change it', async () => {
+  it('refuses to run unless the pipeline file lives in a separate project', async () => {
+    for (const configPath of [null, '', '.gitlab-ci.yml', 'maestro-reviewer.yml', 'maestro-reviewer.yml@ci/reviewer', 'maestro-reviewer.yml@CI/Reviewer']) {
+      const r = await run({ configPath })
+      expect(r.exitCode).toBe(1)
+      expect(r.logs.join('\n')).toMatch(/CI config path/)
+      expect(r.child).toBeUndefined()
+    }
+  })
+
+  it('refuses to run when the config project resolves to the reviewer project itself', async () => {
+    const r = await run({ configProject: { id: REVIEWER, default_branch: 'main', permissions: { project_access: { access_level: 20 } } } })
+    expect(r.exitCode).toBe(1)
+    expect(r.logs.join('\n')).toMatch(/separate/)
+  })
+
+  it('fails naming Reporter when the bot cannot read the config project', async () => {
+    for (const configStatus of [403, 404]) {
+      const r = await run({ configStatus })
+      expect(r.exitCode).toBe(1)
+      expect(r.logs.join('\n')).toMatch(/REVIEW_GITLAB_TOKEN.*Reporter/)
+    }
+  })
+
+  it('refuses to run when the bot could change the config project', async () => {
+    for (const permissions of [{ project_access: { access_level: 40 } }, { project_access: null, group_access: { access_level: 50 } }]) {
+      const r = await run({ configProject: { id: CONFIG, default_branch: 'main', permissions } })
+      expect(r.exitCode).toBe(1)
+      expect(r.logs.join('\n')).toMatch(/Reporter/)
+    }
+  })
+
+  it('refuses to run unless the config branch only lets Maintainers change it', async () => {
     const lv = (n: number) => [{ access_level: n }]
     for (const protection of [
       null,
@@ -186,6 +228,19 @@ describe('runResolve', () => {
       expect(r.child).toBeUndefined()
     }
     expect((await run({ protection: { allow_force_push: false, push_access_levels: lv(0), merge_access_levels: lv(40) } })).exitCode).toBe(0)
+  })
+
+  it('checks the explicit ref of the config path, not the default branch', async () => {
+    expect((await run({ configPath: 'maestro-reviewer.yml@ci/reviewer-config:stable', protectionRef: 'stable' })).exitCode).toBe(0)
+    const tag = await run({ configPath: 'maestro-reviewer.yml@ci/reviewer-config:v1.0.0', protectionRef: 'main' })
+    expect(tag.exitCode).toBe(1)
+    expect(tag.logs.join('\n')).toMatch(/v1\.0\.0.*not protected/)
+  })
+
+  it('no longer requires the reviewer branch itself to be Maintainers only', async () => {
+    const r = await run({})
+    expect(r.exitCode).toBe(0)
+    expect(r.seenTokens.some(t => t.includes(`/projects/${REVIEWER}/protected_branches`))).toBe(false)
   })
 
   it('refuses to run without an allowlist of source namespaces', async () => {
