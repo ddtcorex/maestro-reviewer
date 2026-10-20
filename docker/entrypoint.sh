@@ -1,13 +1,13 @@
 #!/bin/sh
 set -eu
-# Auth: MAESTRO_GITLAB_TOKEN must be a PAT/Project/Group token (api scope).
+# Auth: REVIEW_GITLAB_TOKEN must be a PAT/Project/Group token (api scope).
 # CI_JOB_TOKEN is deliberately NOT accepted: proven 2026-09-04 on GitLab 18.11
 # (GET=200 but POST /notes=401 even with the source allowlisting this project),
 # so falling back would "complete" reviews without ever posting the comment.
 # The JOB-TOKEN header path (GITLAB_TOKEN_KIND, gitlab-auth.ts) stays for
 # future use; it just must not be wired here until writes work.
-if [ -z "${MAESTRO_GITLAB_TOKEN:-}" ] || [ -z "${SOURCE_PROJECT_ID:-}" ] || [ -z "${MR_IID:-}" ]; then
-  echo "[review] missing required env (MAESTRO_GITLAB_TOKEN as a user/project token, SOURCE_PROJECT_ID, MR_IID)" >&2
+if [ -z "${REVIEW_GITLAB_TOKEN:-}" ] || [ -z "${SOURCE_PROJECT_ID:-}" ] || [ -z "${MR_IID:-}" ]; then
+  echo "[review] missing required env (REVIEW_GITLAB_TOKEN as a user/project token, SOURCE_PROJECT_ID, MR_IID)" >&2
   exit 1
 fi
 if [ -n "${CI_PROJECT_DIR:-}" ]; then cd "$CI_PROJECT_DIR"; fi

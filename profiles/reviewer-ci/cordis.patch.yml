@@ -10,7 +10,7 @@
 # throws "duplicate loader entry id" at boot (verified 2026-09-03).
 #
 # The CI trigger calls the engine with its configuration read from the job
-# environment (GITLAB_HOST, MAESTRO_GITLAB_TOKEN, REVIEW_BOT_USERNAME,
+# environment (GITLAB_HOST, REVIEW_GITLAB_TOKEN, REVIEW_BOT_USERNAME,
 # REVIEW_MODEL_PROVIDER and REVIEW_MODEL; see src/host/providers/ci-trigger.ts).
 
 # New rows this profile needs that dsh-base/maestro-reviewer don't already provide.

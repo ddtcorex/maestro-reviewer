@@ -49,7 +49,7 @@ describe('decideRoute', () => {
     expect(decideRoute({ REVIEW_LLM_MODEL: 'm' })).toEqual({ route: 'invalid', missing: ['REVIEW_LLM_API_KEY'] })
   })
   it('rejects a base URL or model GitLab would expand or the settings file could not hold', () => {
-    expect(decideRoute({ ...key, REVIEW_LLM_MODEL: 'm', REVIEW_LLM_BASE_URL: 'https://x.example.com/$MAESTRO_GITLAB_TOKEN' })).toEqual({ route: 'invalid', missing: ['REVIEW_LLM_BASE_URL (unsafe value)'] })
+    expect(decideRoute({ ...key, REVIEW_LLM_MODEL: 'm', REVIEW_LLM_BASE_URL: 'https://x.example.com/$REVIEW_GITLAB_TOKEN' })).toEqual({ route: 'invalid', missing: ['REVIEW_LLM_BASE_URL (unsafe value)'] })
     expect(decideRoute({ ...key, REVIEW_LLM_MODEL: 'm', REVIEW_LLM_BASE_URL: 'ftp://x.example.com' })).toEqual({ route: 'invalid', missing: ['REVIEW_LLM_BASE_URL (unsafe value)'] })
     expect(decideRoute({ ...key, REVIEW_LLM_MODEL: 'gpt $X', REVIEW_LLM_PROVIDER: 'openai' })).toEqual({ route: 'invalid', missing: ['REVIEW_LLM_MODEL (unsafe value)'] })
   })

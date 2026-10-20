@@ -56,7 +56,7 @@ describe('reviewer template: trusted trigger', () => {
 
   it('documents the restriction, both tokens with their scopes, the scoped variables and the label', () => {
     const yml = reviewerYml()
-    for (const s of ['no_one_allowed', 'REVIEW_RESOLVE_TOKEN', 'MAESTRO_GITLAB_TOKEN', 'review/<source project id>', 'REVIEW_LLM_PROVIDER', 'REVIEW_REQUIRE_PROJECT_KEY', 'maestro-review::deep', 'environment scope', 'REVIEW_ALLOWED_NAMESPACES']) {
+    for (const s of ['no_one_allowed', 'REVIEW_RESOLVE_TOKEN', 'REVIEW_GITLAB_TOKEN', 'review/<source project id>', 'REVIEW_LLM_PROVIDER', 'REVIEW_REQUIRE_PROJECT_KEY', 'maestro-review::deep', 'environment scope', 'REVIEW_ALLOWED_NAMESPACES']) {
       expect(yml).toContain(s)
     }
     expect(yml).not.toMatch(/REVIEW_ALLOW_UNRESTRICTED_TRIGGER/)
@@ -77,6 +77,6 @@ describe('source template: clean bridge', () => {
 
   it('fires on merge request pipelines and holds no secrets', () => {
     expect(bridge().rules).toEqual([{ if: '$CI_PIPELINE_SOURCE == "merge_request_event"' }])
-    expect(sourceYml()).not.toMatch(/MAESTRO_GITLAB_TOKEN:|DEEPSEEK_API_KEY:|REVIEW_LLM_API_KEY:/)
+    expect(sourceYml()).not.toMatch(/REVIEW_GITLAB_TOKEN:|DEEPSEEK_API_KEY:|REVIEW_LLM_API_KEY:/)
   })
 })

@@ -51,7 +51,7 @@ review:
 # CI/CD variables of this project (Settings > CI/CD > Variables).
 #
 # Tokens, both masked and protected:
-# - MAESTRO_GITLAB_TOKEN (environment scope *): bot user or group/project
+# - REVIEW_GITLAB_TOKEN (environment scope *): bot user or group/project
 #   access token, api scope, Developer on every source project (posts the
 #   review, clones for deep) and at least Reporter on this project (resolve
 #   reads its own upstream through it). CI_JOB_TOKEN is not enough: proven

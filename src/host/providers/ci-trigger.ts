@@ -58,19 +58,19 @@ export const CiEnvConfig: z<CiEnvConfig> = z.object({
 /**
  * Reads the CI contract env vars (spec §5.2) — not Cordis-supplied config, since these are
  * per-run values a static profile config cannot hold. schemastery's `.required()` only rejects
- * `undefined`, not an empty string, so GITLAB_HOST/MAESTRO_GITLAB_TOKEN presence is checked here
+ * `undefined`, not an empty string, so GITLAB_HOST/REVIEW_GITLAB_TOKEN presence is checked here
  * before defaulting to `''` — otherwise a missing env var would silently pass validation.
  */
 export function parseCiEnvConfig(env: Record<string, string | undefined>): CiEnvConfig {
   if (env.GITLAB_HOST === undefined) throw new Error('missing GITLAB_HOST')
-  if (env.MAESTRO_GITLAB_TOKEN === undefined) throw new Error('missing MAESTRO_GITLAB_TOKEN')
+  if (env.REVIEW_GITLAB_TOKEN === undefined) throw new Error('missing REVIEW_GITLAB_TOKEN')
   if (env.REVIEW_PROFILE !== undefined && !(REVIEW_PROFILES as readonly string[]).includes(env.REVIEW_PROFILE)) {
     throw new Error(`unsupported REVIEW_PROFILE "${env.REVIEW_PROFILE}" (supported: ${REVIEW_PROFILES.join(', ')})`)
   }
   return CiEnvConfig({
     gitlabBaseUrl: `https://${env.GITLAB_HOST}`,
     gitlabHost: env.GITLAB_HOST.trim(),
-    gitlabToken: env.MAESTRO_GITLAB_TOKEN,
+    gitlabToken: env.REVIEW_GITLAB_TOKEN,
     // A personal or project token posts as its own username, not "maestro-bot".
     botUsername: env.REVIEW_BOT_USERNAME || 'maestro-bot',
     agentTimeoutMs: CI_AGENT_TIMEOUT_MS,

@@ -83,7 +83,7 @@ function gitlab(w: World) {
 const env = (o: Record<string, string | undefined> = {}) => ({
   CI_PROJECT_ID: String(REVIEWER), CI_PROJECT_PATH: 'ci/reviewer', CI_COMMIT_REF_NAME: 'main', CI_PIPELINE_ID: '77', CI_PIPELINE_SOURCE: 'pipeline',
   CI_SERVER_HOST: 'git.example.com', CI_SERVER_URL: 'https://git.example.com', CI_PROJECT_DIR: '/builds/ci/reviewer',
-  REVIEWER_IMAGE: 'ddtcorex/maestro-reviewer:0.14.0', REVIEW_RESOLVE_TOKEN: RESOLVE, MAESTRO_GITLAB_TOKEN: BOT,
+  REVIEWER_IMAGE: 'ddtcorex/maestro-reviewer:0.14.0', REVIEW_RESOLVE_TOKEN: RESOLVE, REVIEW_GITLAB_TOKEN: BOT,
   REVIEW_ALLOWED_NAMESPACES: 'internal/, clients/acme', ...o,
 })
 
@@ -139,6 +139,12 @@ describe('runResolve', () => {
     const r = await run({ setting: 'developer' }, env({ REVIEW_ALLOW_UNRESTRICTED_TRIGGER: '1' }))
     expect(r.exitCode).toBe(1)
     expect(r.child).toBeUndefined()
+  })
+
+  it('fails naming REVIEW_GITLAB_TOKEN when only the pre-0.15 name is set', async () => {
+    const r = await run({}, env({ REVIEW_GITLAB_TOKEN: undefined, MAESTRO_GITLAB_TOKEN: BOT }))
+    expect(r.exitCode).not.toBe(0)
+    expect(r.logs.join('\n')).toMatch(/missing REVIEW_GITLAB_TOKEN/)
   })
 
   it('fails closed naming the Maintainer role when the resolve token is missing, weak or unable to see the setting', async () => {

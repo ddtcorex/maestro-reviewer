@@ -52,14 +52,14 @@ describe('docker', () => {
 
   it('entrypoint.sh validates required env then execs dsh --profile reviewer-ci with no task text', () => {
     const sh = readFileSync('docker/entrypoint.sh', 'utf-8') + readFileSync('docker/route.sh', 'utf-8') // route selection lives in route.sh
-    expect(sh).toMatch(/MAESTRO_GITLAB_TOKEN/)
+    expect(sh).toMatch(/REVIEW_GITLAB_TOKEN/)
     expect(sh).toMatch(/SOURCE_PROJECT_ID/)
     expect(sh).toMatch(/MR_IID/)
     expect(sh).toMatch(/--profile reviewer-ci"?\s*$/m)
     expect(sh).not.toMatch(/cli\.js/)
     expect(sh).toMatch(/REVIEW_REPORT_DIR/)
     expect(sh).toMatch(/CI_PROJECT_DIR/)
-    expect(sh).toMatch(/MAESTRO_GITLAB_TOKEN as a user\/project token/)
+    expect(sh).toMatch(/REVIEW_GITLAB_TOKEN as a user\/project token/)
     expect(sh).toMatch(/GITLAB_TOKEN_KIND/)
     expect(sh).toMatch(/__CI_MANAGED__/)
     expect(sh).toMatch(/\.maestro-history/)

@@ -11,7 +11,7 @@ import { childPipelineYaml, decideRoute, namespaceAllowed, noopChildYaml, parseA
  * trigger variables, decides the provider route, and writes the child
  * pipeline. Reviewer-project reads use REVIEW_RESOLVE_TOKEN (Maintainer, scoped
  * to the `resolve` environment so the review job never receives it); source
- * reads use MAESTRO_GITLAB_TOKEN. Tokens are never logged or written.
+ * reads use REVIEW_GITLAB_TOKEN. Tokens are never logged or written.
  */
 
 export const DEEP_LABEL = 'maestro-review::deep'
@@ -58,7 +58,7 @@ export async function runResolve(env: Record<string, string | undefined>, deps: 
     const host = need('CI_SERVER_HOST')
     const image = need('REVIEWER_IMAGE')
     const resolveToken = need('REVIEW_RESOLVE_TOKEN')
-    const botToken = need('MAESTRO_GITLAB_TOKEN')
+    const botToken = need('REVIEW_GITLAB_TOKEN')
     // Only allowlisted namespaces may spend the reviewer's keys or expose its
     // bot token to an agent reading their content.
     const allowed = parseAllowedNamespaces(env.REVIEW_ALLOWED_NAMESPACES)
@@ -119,7 +119,7 @@ export async function runResolve(env: Record<string, string | undefined>, deps: 
     const sourceId = gid(upstream?.project?.id)
     if (upstreamId === undefined || sourceId === undefined) {
       if (env.CI_PIPELINE_SOURCE === 'pipeline') {
-        throw new ResolveError('this pipeline was triggered by another one, but its upstream is not visible: MAESTRO_GITLAB_TOKEN needs at least Reporter on the reviewer project and on the source project')
+        throw new ResolveError('this pipeline was triggered by another one, but its upstream is not visible: REVIEW_GITLAB_TOKEN needs at least Reporter on the reviewer project and on the source project')
       }
       deps.log('[review] not triggered by a source pipeline, nothing to review')
       await write(noopChildYaml('not triggered by a source pipeline, nothing to review', image))
@@ -134,7 +134,7 @@ export async function runResolve(env: Record<string, string | undefined>, deps: 
     }
 
     const pipeRes = await get(botToken, `/projects/${sourceId}/pipelines/${upstreamId}`)
-    if (!pipeRes.ok) throw new ResolveError(`cannot read upstream pipeline ${upstreamId} of project ${sourceId} (${pipeRes.status}): MAESTRO_GITLAB_TOKEN needs at least Reporter on the source project`)
+    if (!pipeRes.ok) throw new ResolveError(`cannot read upstream pipeline ${upstreamId} of project ${sourceId} (${pipeRes.status}): REVIEW_GITLAB_TOKEN needs at least Reporter on the source project`)
     const ref = (await pipeRes.json() as { ref?: string }).ref ?? ''
     const mrIid = parseMrRef(ref)
     if (mrIid === undefined) {
@@ -203,5 +203,5 @@ async function postUnconfiguredOnce(deps: ResolveDeps, api: string, botToken: st
   }
   const body = `AI review is not configured for this project: it requires its own provider key, and none is set. Ask a maintainer of the reviewer project to add one.\n\n${UNCONFIGURED_MARKER}`
   const posted = await deps.fetcher(notesUrl, { method: 'POST', headers: { ...gitlabAuthHeaders(botToken), 'content-type': 'application/json' }, body: JSON.stringify({ body }) })
-  if (!posted.ok) deps.log(`[review] warning: could not post the unconfigured note (${posted.status}); MAESTRO_GITLAB_TOKEN needs Developer on the source project`)
+  if (!posted.ok) deps.log(`[review] warning: could not post the unconfigured note (${posted.status}); REVIEW_GITLAB_TOKEN needs Developer on the source project`)
 }
