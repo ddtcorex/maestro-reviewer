@@ -1,5 +1,15 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- `REVIEW_ACCEPT_PRIVILEGED_BOT=1` (reviewer project variable): the two bot
+  role checks of 0.15 (Developer or above on the config project, Maintainer
+  or above on the reviewer project) only log a warning. For installations
+  that cannot create a dedicated bot user yet; it accepts the risk those
+  checks guard against. Administrators stay refused; every other check stays.
+
 ## [0.15.0] - 2026-10-20
 
 External pipeline config so Developers can trigger reviews, the
