@@ -23,6 +23,10 @@ interface World {
   configStatus?: number
   configProject?: Record<string, unknown>
   protectionRef?: string
+  protections?: Array<Record<string, unknown>>
+  me?: Record<string, unknown>
+  memberLevels?: Record<string, number>
+  repoFileStatus?: number
   notes?: Array<{ author: { id: number }; body: string }>
   notesPages?: Array<Array<{ author: { id: number }; body: string }>>
   noteStatus?: number
@@ -55,10 +59,22 @@ function gitlab(w: World) {
       if (w.configStatus) return json(w.configStatus, {})
       return json(200, w.configProject ?? { id: CONFIG, default_branch: 'main', permissions: { project_access: { access_level: 20 }, group_access: null } })
     }
-    if (p === `/projects/${CONFIG}/protected_branches/${encodeURIComponent(w.protectionRef ?? 'main')}`) {
+    if (p === `/projects/${CONFIG}/protected_branches`) {
       if (tok !== BOT) return json(403, {})
-      if (w.protection === null) return json(404, { message: '404 Not found' })
-      return json(200, w.protection ?? { name: 'main', allow_force_push: false, push_access_levels: [{ access_level: 40 }], merge_access_levels: [{ access_level: 40 }] })
+      if (w.protections) return json(200, w.protections)
+      if (w.protection === null) return json(200, [])
+      return json(200, [{ name: w.protectionRef ?? 'main', ...(w.protection ?? { allow_force_push: false, push_access_levels: [{ access_level: 40 }], merge_access_levels: [{ access_level: 40 }] }) }])
+    }
+    const mem = /^\/projects\/(\d+)\/members\/all\/5$/.exec(p)
+    if (mem) {
+      if (tok !== BOT) return json(403, {})
+      const lvl = w.memberLevels?.[mem[1]] ?? (mem[1] === String(CONFIG) ? 20 : 20)
+      return lvl === 0 ? json(404, {}) : json(200, { id: 5, access_level: lvl })
+    }
+    if (p.startsWith(`/projects/${REVIEWER}/repository/files/`)) {
+      if (tok !== RESOLVE) return json(403, {})
+      expect(u.searchParams.get('ref')).toBe('c0ffee')
+      return json(w.repoFileStatus ?? 404, {})
     }
     if (p === `/projects/${REVIEWER}/variables`) {
       if (tok !== RESOLVE) return json(403, {})
@@ -74,7 +90,7 @@ function gitlab(w: World) {
     }
     if (p === `/projects/${SOURCE}/pipelines/31`) return json(200, { id: 31, ref: w.ref ?? `refs/merge-requests/${MR}/head` })
     if (p === `/projects/${SOURCE}/merge_requests/${MR}`) return json(200, { iid: MR, labels: w.labels ?? [] })
-    if (p === '/user') return json(200, { id: 5 })
+    if (p === '/user') return json(200, w.me ?? { id: 5, username: 'bot' })
     if (p === `/projects/${SOURCE}/merge_requests/${MR}/notes`) {
       if ((init.method ?? 'GET') === 'POST') { posted.push({ url, body: JSON.parse(String(init.body)) }); return json(w.noteStatus ?? 201, {}) }
       if (w.notesListStatus) return json(w.notesListStatus, {})
@@ -92,7 +108,7 @@ function gitlab(w: World) {
 }
 
 const env = (o: Record<string, string | undefined> = {}) => ({
-  CI_PROJECT_ID: String(REVIEWER), CI_PROJECT_PATH: 'ci/reviewer', CI_COMMIT_REF_NAME: 'main', CI_PIPELINE_ID: '77', CI_PIPELINE_SOURCE: 'pipeline',
+  CI_PROJECT_ID: String(REVIEWER), CI_PROJECT_PATH: 'ci/reviewer', CI_COMMIT_REF_NAME: 'main', CI_COMMIT_SHA: 'c0ffee', CI_PIPELINE_ID: '77', CI_PIPELINE_SOURCE: 'pipeline',
   CI_SERVER_HOST: 'git.example.com', CI_SERVER_URL: 'https://git.example.com', CI_PROJECT_DIR: '/builds/ci/reviewer',
   REVIEWER_IMAGE: 'ddtcorex/maestro-reviewer:0.14.0', REVIEW_RESOLVE_TOKEN: RESOLVE, REVIEW_GITLAB_TOKEN: BOT,
   REVIEW_ALLOWED_NAMESPACES: 'internal/, clients/acme', ...o,
@@ -117,7 +133,9 @@ describe('runResolve', () => {
 
   it('uses the resolve token for reviewer reads and the bot token for source reads', async () => {
     const r = await run({})
-    expect(r.seenTokens.filter(s => s.includes('/projects/900')).every(s => s.endsWith(RESOLVE))).toBe(true)
+    expect(r.seenTokens.filter(s => s.includes('/projects/900') && !s.includes('/members/all/')).every(s => s.endsWith(RESOLVE))).toBe(true)
+    // The bot reads only its own role there, never settings or variables.
+    expect(r.seenTokens.filter(s => s.includes('/projects/900') && s.endsWith(BOT)).every(s => s.includes('/members/all/'))).toBe(true)
     expect(r.seenTokens.filter(s => s.includes('/projects/42/')).every(s => s.endsWith(BOT))).toBe(true)
   })
 
@@ -206,7 +224,7 @@ describe('runResolve', () => {
   })
 
   it('refuses to run when the bot could change the config project', async () => {
-    for (const permissions of [{ project_access: { access_level: 40 } }, { project_access: null, group_access: { access_level: 50 } }]) {
+    for (const permissions of [{ project_access: { access_level: 30 } }, { project_access: { access_level: 40 } }, { project_access: null, group_access: { access_level: 50 } }]) {
       const r = await run({ configProject: { id: CONFIG, default_branch: 'main', permissions } })
       expect(r.exitCode).toBe(1)
       expect(r.logs.join('\n')).toMatch(/Reporter/)
@@ -235,6 +253,54 @@ describe('runResolve', () => {
     const tag = await run({ configPath: 'maestro-reviewer.yml@ci/reviewer-config:v1.0.0', protectionRef: 'main' })
     expect(tag.exitCode).toBe(1)
     expect(tag.logs.join('\n')).toMatch(/v1\.0\.0.*not protected/)
+  })
+
+  it('applies every protection rule that matches the config branch, wildcards included', async () => {
+    const lv = (n: number) => [{ access_level: n }]
+    const strict = { allow_force_push: false, push_access_levels: lv(40), merge_access_levels: lv(40) }
+    const loose = { allow_force_push: false, push_access_levels: lv(30), merge_access_levels: lv(30) }
+    for (const wildcard of ['*', 'ma*', '*n']) {
+      const r = await run({ protections: [{ name: 'main', ...strict }, { name: wildcard, ...loose }] })
+      expect(r.exitCode, wildcard).toBe(1)
+      expect(r.logs.join('\n')).toMatch(/Maintainers only/)
+    }
+    expect((await run({ protections: [{ name: 'main', ...strict }, { name: 'release/*', ...loose }] })).exitCode).toBe(0)
+    expect((await run({ protections: [{ name: 'ma*', ...strict }] })).exitCode).toBe(0)
+  })
+
+  it('fails closed on a protection rule with missing or empty fields, and on an empty ref', async () => {
+    for (const rule of [
+      { name: 'main', allow_force_push: false, push_access_levels: [], merge_access_levels: [{ access_level: 40 }] },
+      { name: 'main', allow_force_push: false, merge_access_levels: [{ access_level: 40 }] },
+      { name: 'main', push_access_levels: [{ access_level: 40 }], merge_access_levels: [{ access_level: 40 }] },
+    ]) {
+      expect((await run({ protections: [rule] })).exitCode).toBe(1)
+    }
+    const noBranch = await run({ configProject: { id: CONFIG, default_branch: null, permissions: { project_access: { access_level: 20 } } } })
+    expect(noBranch.exitCode).toBe(1)
+    expect(noBranch.logs.join('\n')).toMatch(/branch/)
+  })
+
+  it('refuses when the reviewer repository holds a file at the literal CI config path, and fails closed when it cannot tell', async () => {
+    const shadow = await run({ repoFileStatus: 200 })
+    expect(shadow.exitCode).toBe(1)
+    expect(shadow.logs.join('\n')).toMatch(/reviewer repository/)
+    expect((await run({ repoFileStatus: 403 })).exitCode).toBe(1)
+  })
+
+  it('counts access the bot holds through shared groups, and refuses an admin bot', async () => {
+    const shared = await run({ memberLevels: { [CONFIG]: 30 } })
+    expect(shared.exitCode).toBe(1)
+    expect(shared.logs.join('\n')).toMatch(/config project.*Reporter/)
+    const admin = await run({ me: { id: 5, username: 'bot', is_admin: true } })
+    expect(admin.exitCode).toBe(1)
+    expect(admin.logs.join('\n')).toMatch(/administrator/)
+  })
+
+  it('refuses a bot that is Maintainer on the reviewer project, which can read every key', async () => {
+    const r = await run({ memberLevels: { [REVIEWER]: 40 } })
+    expect(r.exitCode).toBe(1)
+    expect(r.logs.join('\n')).toMatch(/reviewer project/)
   })
 
   it('no longer requires the reviewer branch itself to be Maintainers only', async () => {

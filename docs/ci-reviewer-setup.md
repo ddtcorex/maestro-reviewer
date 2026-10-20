@@ -96,10 +96,14 @@ reruns the probes after every GitLab version change.
 | Every user whose MR should be reviewed (the bridge runs as the user who started the source pipeline) | reviewer project | Developer, and allowed to merge its pipeline branch | GitLab refuses to create the downstream pipeline otherwise (`insufficient_bridge_permissions`) |
 | the same users | config project | Reporter | GitLab must read the pipeline file as them (`downstream_pipeline_creation_failed` otherwise) |
 | the bot (owner of `REVIEW_GITLAB_TOKEN`) | every source project | Developer | posts the comment and threads, sets and clears award markers, removes the deep label, clones the source for profile and deep reviews |
-| the bot | reviewer project | Reporter | `resolve` reads its own upstream pipeline through GraphQL |
-| the bot | config project | Reporter, **never Maintainer** | `resolve` reads the config branch protection; the review job holds this token while an agent reads untrusted MR content, so the bot must not be able to change the pipeline file (`resolve` refuses Maintainer or above) |
+| the bot | reviewer project | Reporter, **below Maintainer** | `resolve` reads its own upstream pipeline through GraphQL; a Maintainer could read every key through the API, so `resolve` refuses Maintainer or above |
+| the bot | config project | exactly Reporter | `resolve` reads the config branch protection; the review job holds this token while an agent reads untrusted MR content, so the bot must not be able to change the pipeline file or create refs there (`resolve` refuses Developer or above, counting group memberships and shared groups) |
 | `REVIEW_RESOLVE_TOKEN` (a project access token) | reviewer project | Maintainer, scope `read_api` | reads the pipeline-variables setting, the CI config path and the variable scopes |
 | people who change the pipeline file or the reviewer's variables | config project and reviewer project | Maintainer | keep this list short: a reviewer Maintainer can read every key |
+
+The bot must be a dedicated, non-admin account: `resolve` refuses a token
+that belongs to a GitLab administrator, and a person's own token is usually
+Maintainer on the reviewer project, which it refuses too.
 
 **Confidentiality.** Every member of the reviewer project can read every
 review job log and every review artifact (`review-report.json`,
@@ -119,18 +123,29 @@ with outside contributors get a reviewer project of their own.
 3. **Settings > Repository > Protected branches**: protect the default branch
    with **Allowed to merge = Maintainers**, **Allowed to push and merge =
    Maintainers**, force push off, and no per-user or per-group entries.
+   GitLab applies the most permissive of all rules matching a branch, so
+   every rule that matches it, wildcards such as `*` included, must be the
+   same; `resolve` checks them all.
 4. **Manage > Members**: add the bot as **Reporter**, and give **Reporter** to
-   everyone who opens MRs in the source projects (inviting the same groups as
-   the reviewer project is the simplest way).
+   everyone who opens MRs in the source projects. Inviting groups is fine at
+   Reporter, but the bot's role here must stay Reporter through every path:
+   direct, inherited from a parent group, or through a shared group.
 
 ### 3.2 Reviewer project
 
 1. Create a **private** project, for example `my-group/ci/reviewer`. Its
    repository can stay empty apart from a README: GitLab does not read it.
+   It must not contain a file at the literal config path from step 2
+   (`resolve` refuses, because Developers can now merge into it).
 2. **Settings > CI/CD > General pipelines > CI/CD configuration file**
    (Custom CI config path): `maestro-reviewer.yml@my-group/ci/reviewer-config`.
    An explicit branch is allowed (`...@my-group/ci/reviewer-config:stable`);
-   it must then be the protected branch from 3.1, never a tag or a SHA.
+   it must then be the protected branch from 3.1, never a tag or a SHA. The
+   file name must end in lowercase `.yml` or `.yaml` and the value must not
+   contain `http:` or `https:`: GitLab reads anything else from the reviewer
+   repository or a remote URL, and `resolve` refuses it. These rules follow
+   GitLab 17.11 to 18.11; on older versions the literal-file check in step 1
+   still applies.
 3. **Settings > CI/CD > Variables > Minimum role to use pipeline variables:
    No one allowed** (API field
    `ci_pipeline_variables_minimum_override_role: no_one_allowed`).
@@ -153,8 +168,10 @@ that person can do.
   user such as `maestro-bot`, give it the roles from section 2, and create a
   personal access token with scope `api` as that user.
 - **Group access token** (`api`, role Developer) on a group containing every
-  source project: GitLab creates a bot user for it. Give that bot Reporter on
-  the reviewer and config projects.
+  source project: GitLab creates a bot user for it. Use it only when the
+  reviewer and config projects sit **outside** that group: inside it, the bot
+  would inherit Developer on the config project, which `resolve` refuses, and
+  GitLab cannot lower an inherited role. Then give the bot Reporter on both.
 
 Then:
 
@@ -412,14 +429,16 @@ fallback, and deep is declined there (use the CI label instead).
 
 0.15 has no compatibility path. In one maintenance window:
 
-1. Create the config project (3.1) with the 0.15 pipeline file, and give the
+1. Make sure the bot is a dedicated, non-admin user that is at most Reporter
+   on the reviewer project (3.3): a reviewer Maintainer's personal token is
+   refused from 0.15 on.
+2. Create the config project (3.1) with the 0.15 pipeline file, and give the
    bot and every MR author Reporter on it.
-2. Add `REVIEW_GITLAB_TOKEN` with the value and flags of
-   `MAESTRO_GITLAB_TOKEN`.
-3. Point the reviewer project's CI config path at the config project (3.2
+3. Add `REVIEW_GITLAB_TOKEN` with the bot's token, flags as in 4.2.
+4. Point the reviewer project's CI config path at the config project (3.2
    step 2), then let Developers merge its branch (3.2 step 4). Until both are
    done, `resolve` of 0.15 refuses to run and Developers' bridges fail.
-4. Verify an MR opened by a Developer (3.5), then delete
+5. Verify an MR opened by a Developer (3.5), then delete
    `MAESTRO_GITLAB_TOKEN` and the old pipeline file from the reviewer
    repository.
 
@@ -444,9 +463,13 @@ works by design; test it on a separate reviewer project.
 | bridge fails with `downstream_bridge_project_not_found` | `trigger.project` is wrong or the MR author is not a member of the reviewer project |
 | `resolve failed: pipeline variables are not restricted` | set **Minimum role to use pipeline variables = No one allowed** |
 | `the reviewer project's CI config path (...) must name a file in a separate config project` | set the Custom CI config path to `<file>@<config project>` (3.2 step 2) |
+| `the reviewer repository holds a file at the literal CI config path` | delete that file from the reviewer repository (3.2 step 1) |
 | `cannot read the config project ...: REVIEW_GITLAB_TOKEN's user needs Reporter on it` | add the bot as Reporter on the config project |
-| `REVIEW_GITLAB_TOKEN's user is Maintainer or above on the config project` | lower the bot to Reporter there |
-| `branch ... of the config project ... is not protected` / `must be protected for Maintainers only` | protect the config branch as in 3.1 step 3; an explicit ref in the config path must be that branch |
+| `REVIEW_GITLAB_TOKEN's user is Developer or above on the config project` | the bot must be exactly Reporter there; check parent groups and groups the project is shared with |
+| `REVIEW_GITLAB_TOKEN's user is Maintainer or above on the reviewer project` | lower the bot to Reporter on the reviewer project; never use a reviewer Maintainer's own token |
+| `REVIEW_GITLAB_TOKEN belongs to a GitLab administrator` | use a dedicated, non-admin bot user (3.3) |
+| `branch ... of the config project ... is not protected` / `must be protected for Maintainers only ... by every rule that matches it` | protect the config branch as in 3.1 step 3, including any wildcard rule that matches it; an explicit ref in the config path must be that branch |
+| `the config project ... has no default branch` | push the pipeline file to a branch, or name the branch in the config path |
 | `missing REVIEW_RESOLVE_TOKEN` / `cannot read the reviewer project's pipeline-variables setting` | the resolve token is missing, not Maintainer, lacks `read_api`, or is not scoped to `resolve` |
 | `missing REVIEW_GITLAB_TOKEN` | the variable is missing, still named `MAESTRO_GITLAB_TOKEN`, or protected while the reviewer branch is not |
 | `its upstream is not visible` | the bot needs at least Reporter on the reviewer project and on the source project |

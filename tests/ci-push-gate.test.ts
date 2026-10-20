@@ -116,7 +116,7 @@ describe('runCiTrigger push-gate from GitLab state', () => {
 
   it('yields to the bot user\'s own eyes marker', async () => {
     const { result, ctx } = await gate({}, [[]], { mrSha: 'cafe01', awards: [{ name: 'eyes', user: { id: BOT } }] })
-    expect(result.summary).toMatch(/another review is running/)
+    expect(result.summary).toMatch(/another review is running, skipping/)
     expect(ctx.reviewEngine.run).not.toHaveBeenCalled()
   })
 })

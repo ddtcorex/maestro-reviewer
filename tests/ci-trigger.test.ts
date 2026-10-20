@@ -169,7 +169,7 @@ describe('runCiTrigger coexistence yield', () => {
   it('skips when an eyes running marker is present', async () => {
     const { result, ran } = await runYield('abc123', [], [{ name: 'eyes' }])
     expect(ran).toBe(false)
-    expect(result.summary).toMatch(/another review is running/)
+    expect(result.summary).toMatch(/another review is running, skipping/)
   })
 
   it('runs when no marker and no eyes', async () => {

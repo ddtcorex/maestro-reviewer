@@ -18,7 +18,18 @@
   push, no per-user or per-group grants) and that the bot is below Maintainer
   there, and no longer requires the reviewer branch to be Maintainers only, so
   Developers may merge it and therefore trigger it. Everyone who triggers the
-  reviewer, and the bot, needs Reporter on the config project.
+  reviewer, and the bot, needs Reporter on the config project. The config
+  path is parsed the way GitLab resolves it (remote URLs and anything that is
+  not a lowercase `.yml`/`.yaml` file in another project are refused), the
+  reviewer repository may not hold a file at that literal path, and every
+  protection rule matching the config branch, wildcards included, must be
+  Maintainers only.
+- **BREAKING: the bot's roles are checked.** `resolve` refuses a bot that is
+  Developer or above on the config project or Maintainer or above on the
+  reviewer project (counting inherited and shared-group access), or a GitLab
+  administrator, so a reviewer Maintainer's personal token no longer works.
+- CI skip messages use a comma instead of a dash
+  (`another review is running, skipping`).
 - **BREAKING: `MAESTRO_GITLAB_TOKEN` is now `REVIEW_GITLAB_TOKEN`**, so every
   reviewer project variable shares the `REVIEW_` prefix. The old name is not
   read.

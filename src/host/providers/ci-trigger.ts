@@ -185,7 +185,7 @@ export async function runCiTrigger(
       result = { ok: true, summary: `deep review already completed at ${headSha}, skipping`, failures: [], durationMs: 0 }
       met = true
     } else if (await hasRunningEyes(coFetcher, config.gitlabBaseUrl, config.gitlabToken, config.sourceProjectId, config.mrIid, botUserId)) {
-      result = { ok: true, summary: 'another review is running — skipping', failures: [], durationMs: 0 }
+      result = { ok: true, summary: 'another review is running, skipping', failures: [], durationMs: 0 }
     } else {
       result = await runReview()
       met = result.ok
@@ -202,9 +202,9 @@ export async function runCiTrigger(
     // Coexistence (CI yields to webhook): the CI history store is invisible to
     // the webhook flow and vice versa, so check the MR itself for a completed
     // review marker of this SHA or an in-flight eyes marker before booting.
-    result = { ok: true, summary: `webhook already reviewed ${headSha} — skipping`, failures: [], durationMs: 0 }
+    result = { ok: true, summary: `webhook already reviewed ${headSha}, skipping`, failures: [], durationMs: 0 }
   } else if (await hasRunningEyes(coFetcher, config.gitlabBaseUrl, config.gitlabToken, config.sourceProjectId, config.mrIid, botUserId)) {
-    result = { ok: true, summary: 'another review is running — skipping', failures: [], durationMs: 0 }
+    result = { ok: true, summary: 'another review is running, skipping', failures: [], durationMs: 0 }
   } else {
     result = await runReview()
   }

@@ -3,15 +3,30 @@ import { parse } from 'yaml'
 import { childPipelineYaml, decideRoute, noopChildYaml, parseCiConfigPath, parseMrRef, PROVIDER_PRESETS } from '../src/host/ci-resolve.js'
 
 describe('parseCiConfigPath', () => {
-  it('parses a file in another project, with an optional ref', () => {
+  it('parses a file in another project, with an optional ref, the way GitLab splits it', () => {
     expect(parseCiConfigPath('maestro-reviewer.yml@my-group/reviewer-config')).toEqual({ file: 'maestro-reviewer.yml', project: 'my-group/reviewer-config' })
-    expect(parseCiConfigPath(' ci/review.yml@a/b.c/d_e:stable ')).toEqual({ file: 'ci/review.yml', project: 'a/b.c/d_e', ref: 'stable' })
+    expect(parseCiConfigPath('ci/review.yaml@a/b.c/d_e:stable')).toEqual({ file: 'ci/review.yaml', project: 'a/b.c/d_e', ref: 'stable' })
+    expect(parseCiConfigPath('f.yml@g/p:release/1.0')).toEqual({ file: 'f.yml', project: 'g/p', ref: 'release/1.0' })
   })
 
-  it('returns undefined for a local file, an empty value or a malformed project', () => {
-    for (const v of [undefined, null, '', '  ', '.gitlab-ci.yml', 'ci/review.yml', '@g/p', 'f.yml@', 'f.yml@noslash', 'f.yml@g/p:', 'f.yml@g//p', 'f.yml@g/p x']) {
-      expect(parseCiConfigPath(v)).toBeUndefined()
+  it('returns undefined for anything GitLab would not load from another project', () => {
+    for (const v of [
+      undefined, null, '', '  ', '.gitlab-ci.yml', 'ci/review.yml', '@g/p', 'f.yml@', 'f.yml@noslash', 'f.yml@g/p:', 'f.yml@g//p', 'f.yml@g/p x',
+      // GitLab's external-project rule is case-sensitive and needs yml or yaml right before the @
+      'maestro-reviewer.YML@g/p', 'maestro-reviewer@g/p', 'f.json@g/p',
+      // GitLab loads any value with an http(s) scheme as a remote file, first
+      'http://evil.example/p.yml@g/p', 'f.yml@g/p:https://x', 'HTTPS://x.yml@g/p',
+      // GitLab splits on the first @: the project part must then be a plain path
+      'a@b.yml@g/p',
+      // GitLab does not trim
+      ' f.yml@g/p', 'f.yml@g/p ',
+    ]) {
+      expect(parseCiConfigPath(v), String(v)).toBeUndefined()
     }
+  })
+
+  it('validates the project and ref GitLab would use when the ref holds an @', () => {
+    expect(parseCiConfigPath('f.yml@dev/proj:x@grp/cfg')).toEqual({ file: 'f.yml', project: 'dev/proj', ref: 'x@grp/cfg' })
   })
 })
 

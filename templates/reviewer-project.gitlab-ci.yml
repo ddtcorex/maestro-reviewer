@@ -64,8 +64,10 @@ review:
 # - REVIEW_GITLAB_TOKEN (environment scope *): bot user or group/project
 #   access token, api scope, Developer on every source project (posts the
 #   review, clones for deep), Reporter on this project (resolve reads its own
-#   upstream through it) and Reporter, never more, on the config project. CI_JOB_TOKEN is not enough: proven
-#   2026-09-04 on GitLab 18.11, reads work but POST /notes answers 401.
+#   upstream through it; Maintainer is refused) and exactly Reporter on the
+#   config project (Developer or above is refused). CI_JOB_TOKEN is not
+#   enough: proven 2026-09-04 on GitLab 18.11, reads work but POST /notes
+#   answers 401.
 # - REVIEW_RESOLVE_TOKEN (environment scope "resolve"): project access token
 #   of THIS project, Maintainer, read_api. It reads the restriction setting
 #   and the per-project variable scopes, which a Maintainer can see for every
