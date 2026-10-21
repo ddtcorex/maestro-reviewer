@@ -194,3 +194,10 @@ describe('engine', () => {
     expect(r.partial).toBe(true)
   })
 })
+
+describe('gate pagination', () => {
+  it('fails closed when the discussions do not fit in the pages it reads', async () => {
+    const fetcher = vi.fn(async () => new Response(JSON.stringify([{ notes: [{ author: { id: 30 }, body: 'spam' }] }]), { status: 200, headers: { 'x-next-page': '2' } }))
+    await expect(openBlockingThreads(fetcher as any, { baseUrl: 'https://g', token: 't', projectId: 1, mrIid: 2, botUserId: BOT })).rejects.toThrow(/too many discussions/)
+  })
+})
