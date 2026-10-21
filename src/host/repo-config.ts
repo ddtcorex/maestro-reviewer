@@ -80,7 +80,8 @@ export interface EnvReviewOverrides {
 export interface EffectiveReviewConfig {
   profile?: ReviewSkillProfile
   ignoreGlobs: string[]
-  fanout: FanoutSettings
+  /** Set only when the environment or the file sets a fan-out value: a single agent reviews otherwise. */
+  fanout?: FanoutSettings
   minSeverity?: FindingSeverity
   rules: string[]
   language?: string
@@ -92,7 +93,7 @@ export function effectiveConfig(env: EnvReviewOverrides, file: RepoReviewConfig)
   return {
     ...(profile !== undefined ? { profile } : {}),
     ignoreGlobs: resolveIgnoreGlobs({ REVIEW_IGNORE_GLOBS: env.ignoreGlobs.join(',') }, file.ignore ?? []),
-    fanout: { ...DEFAULT_FANOUT, ...file.fanout, ...env.fanout },
+    ...(file.fanout !== undefined || Object.keys(env.fanout).length > 0 ? { fanout: { ...DEFAULT_FANOUT, ...file.fanout, ...env.fanout } } : {}),
     ...(file.minSeverity !== undefined ? { minSeverity: file.minSeverity } : {}),
     rules: file.rules ?? [],
     ...(file.language !== undefined ? { language: file.language } : {}),

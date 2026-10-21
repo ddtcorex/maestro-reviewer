@@ -5,6 +5,7 @@ import { mkdirSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { gitlabAuthHeaders } from './gitlab-auth.js'
 import { redact, type DiffHit } from '../../redact.js'
+import { ENGINE_FINDING_CODES, findingCodeOf } from '../../review-feedback.js'
 
 export const name = 'maestro-gitlab-client'
 export const inject = ['tools']
@@ -208,6 +209,8 @@ export function selectOwnThreads(
 ): { threads: OwnThread[]; totalDiscussions: number } {
   const threads = discussions
     .filter(d => d.notes.length > 0 && d.notes[0].author.username === botUsername && d.notes[0].position !== undefined)
+    // The engine's own findings are not the model's to answer or regrade.
+    .filter(d => !ENGINE_FINDING_CODES.has(findingCodeOf(d.notes[0].body) ?? ''))
     .map(d => ({
       discussionId: d.id,
       path: d.notes[0].position!.new_path,

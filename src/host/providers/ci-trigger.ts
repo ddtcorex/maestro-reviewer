@@ -47,8 +47,8 @@ export interface CiEnvConfig {
   deepRequested: boolean
   /** Paths kept from the model: the defaults plus REVIEW_IGNORE_GLOBS. */
   ignoreGlobs: string[]
-  /** REVIEW_FANOUT_FILES / _BYTES / _CONCURRENCY over DEFAULT_FANOUT. */
-  fanout: FanoutSettings
+  /** REVIEW_FANOUT_FILES / _BYTES / _CONCURRENCY over DEFAULT_FANOUT; unset (one agent) when none is set. */
+  fanout?: FanoutSettings
   /** Only the REVIEW_IGNORE_GLOBS entries and fan-out values the environment sets, to layer over the repo file. */
   envIgnoreGlobs: string[]
   envFanout: Partial<FanoutSettings>
@@ -73,7 +73,7 @@ export const CiEnvConfig: z<CiEnvConfig> = z.object({
   rereviewOnPush: z.boolean().default(false),
   deepRequested: z.boolean().default(false),
   ignoreGlobs: z.array(z.string()).required(),
-  fanout: z.object({ files: z.natural().required(), bytes: z.natural().required(), concurrency: z.natural().required() }).required(),
+  fanout: z.union([z.object({ files: z.natural().required(), bytes: z.natural().required(), concurrency: z.natural().required() }), z.const(undefined)]),
   deepModel: z.union([z.object({ provider: z.string(), model: z.string() }), z.const(undefined)]),
   gate: z.union([z.const('off'), z.const('blocking')]).default('off'),
   envIgnoreGlobs: z.array(z.string()).required(),
@@ -105,6 +105,11 @@ export function parseCiEnvConfig(env: Record<string, string | undefined>): CiEnv
   if (env.REVIEW_PROFILE !== undefined && !(REVIEW_PROFILES as readonly string[]).includes(env.REVIEW_PROFILE)) {
     throw new Error(`unsupported REVIEW_PROFILE "${env.REVIEW_PROFILE}" (supported: ${REVIEW_PROFILES.join(', ')})`)
   }
+  // Fan-out is opt-in: on a checkout every part explores the codebase again, which
+  // measured slower and costlier than one agent on a real 90 file MR.
+  const envFanout: Partial<FanoutSettings> = Object.fromEntries(([['files', 'REVIEW_FANOUT_FILES'], ['bytes', 'REVIEW_FANOUT_BYTES'], ['concurrency', 'REVIEW_FANOUT_CONCURRENCY']] as const)
+    .filter(([, name]) => (env[name] ?? '').trim() !== '')
+    .map(([key, name]) => [key, positiveInt(env, name, DEFAULT_FANOUT[key])]))
   return CiEnvConfig({
     gitlabBaseUrl: `https://${env.GITLAB_HOST}`,
     gitlabHost: env.GITLAB_HOST.trim(),
@@ -125,16 +130,10 @@ export function parseCiEnvConfig(env: Record<string, string | undefined>): CiEnv
     rereviewOnPush: env.REVIEW_ON_PUSH === '1',
     deepRequested: env.REVIEW_DEEP_REQUESTED === '1',
     ignoreGlobs: resolveIgnoreGlobs(env),
-    fanout: {
-      files: positiveInt(env, 'REVIEW_FANOUT_FILES', DEFAULT_FANOUT.files),
-      bytes: positiveInt(env, 'REVIEW_FANOUT_BYTES', DEFAULT_FANOUT.bytes),
-      concurrency: positiveInt(env, 'REVIEW_FANOUT_CONCURRENCY', DEFAULT_FANOUT.concurrency),
-    },
     gate: env.REVIEW_GATE === 'blocking' ? 'blocking' : 'off',
     envIgnoreGlobs: (env.REVIEW_IGNORE_GLOBS ?? '').split(',').map((g) => g.trim()).filter((g) => g !== ''),
-    envFanout: Object.fromEntries(([['files', 'REVIEW_FANOUT_FILES'], ['bytes', 'REVIEW_FANOUT_BYTES'], ['concurrency', 'REVIEW_FANOUT_CONCURRENCY']] as const)
-      .filter(([, name]) => (env[name] ?? '').trim() !== '')
-      .map(([key, name]) => [key, positiveInt(env, name, DEFAULT_FANOUT[key])])),
+    envFanout,
+    ...(Object.keys(envFanout).length > 0 ? { fanout: { ...DEFAULT_FANOUT, ...envFanout } } : {}),
     ...(env.REVIEW_DEEP_MODEL ? { deepModel: { provider: env.REVIEW_DEEP_MODEL_PROVIDER as string, model: env.REVIEW_DEEP_MODEL } } : {}),
   })
 }
@@ -171,7 +170,7 @@ export function ciAccess(config: CiEnvConfig): CodeAccess {
 
 /** The fan-out engine options of the job. */
 export function ciFanout(config: CiEnvConfig): Pick<EngineRunOptions, 'fanout' | 'deepModel'> {
-  return { fanout: config.fanout, ...(config.deepModel !== undefined ? { deepModel: config.deepModel } : {}) }
+  return { ...(config.fanout !== undefined ? { fanout: config.fanout } : {}), ...(config.deepModel !== undefined ? { deepModel: config.deepModel } : {}) }
 }
 
 /** The pinned model, else the host default (no Settings UI in CI). */
@@ -198,7 +197,8 @@ export async function runCiTrigger(
   // so a target branch they pushed could carry settings that relax their own review.
   const { file, warnings } = await loadRepoSettings(timedFetcher(deps.fetcher ?? fetch), { baseUrl: config.gitlabBaseUrl, token: config.gitlabToken, projectId: config.sourceProjectId })
   const eff = effectiveConfig({ ...(config.reviewProfile !== undefined ? { profile: config.reviewProfile } : {}), ignoreGlobs: config.envIgnoreGlobs, fanout: config.envFanout }, file)
-  const effConfig: CiEnvConfig = { ...config, reviewProfile: eff.profile, ignoreGlobs: eff.ignoreGlobs, fanout: eff.fanout }
+  const { fanout: _envOnly, ...rest } = config
+  const effConfig: CiEnvConfig = { ...rest, reviewProfile: eff.profile, ignoreGlobs: eff.ignoreGlobs, ...(eff.fanout !== undefined ? { fanout: eff.fanout } : {}) }
   // Push-gate (mirror of the webhook autoRereviewOnPush semantics): the bridge fires
   // on every MR pipeline, so skip when this exact head SHA already completed — and
   // skip new pushes too unless REVIEW_ON_PUSH=1. A re-run then gets the H6 incremental

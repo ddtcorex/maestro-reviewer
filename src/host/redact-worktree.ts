@@ -1,12 +1,15 @@
 import { lstat, readFile, readdir, writeFile } from 'node:fs/promises'
 import { join, resolve, sep } from 'node:path'
-import { redact } from './redact.js'
+import { SECRET_KINDS, redact } from './redact.js'
 
 /**
  * Redacts the files of an ephemeral review checkout in place, so the agents'
  * file tools never read a raw secret. Only ever run on the CI clone under
  * /tmp/maestro-*: anything else is refused. Text files up to `maxBytes`;
  * `.git` and symlinks are skipped (a symlink may point outside the root).
+ * Secrets only: personal data in files the MR does not touch is not the
+ * review's to mask (the diff itself is still redacted in full), and masking
+ * every email and phone number of a large codebase only fed the model noise.
  */
 export async function redactWorktree(root: string, opts: { maxBytes?: number } = {}): Promise<{ files: number; hits: number }> {
   const abs = resolve(root)
@@ -25,7 +28,7 @@ export async function redactWorktree(root: string, opts: { maxBytes?: number } =
       if (!st.isFile() || st.size > maxBytes) continue
       const buf = await readFile(p)
       if (buf.subarray(0, 8192).includes(0)) continue
-      const r = redact(buf.toString('utf8'))
+      const r = redact(buf.toString('utf8'), { only: SECRET_KINDS })
       if (r.hits.length === 0) continue
       await writeFile(p, r.text)
       files++

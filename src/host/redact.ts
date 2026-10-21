@@ -66,7 +66,7 @@ function lineAt(text: string, offset: number): number {
  * line breaks (and, with `diff`, each line's diff prefix) so later lines do
  * not move.
  */
-export function redact(text: string, opts: { diff?: boolean } = {}): { text: string; hits: RedactionHit[] } {
+export function redact(text: string, opts: { diff?: boolean; only?: ReadonlySet<RedactionKind> } = {}): { text: string; hits: RedactionHit[] } {
   const hits: RedactionHit[] = []
   let out = text.replace(PRIVATE_KEY, (block: string, offset: number) => {
     hits.push({ kind: 'private-key', line: lineAt(text, offset) })
@@ -74,6 +74,7 @@ export function redact(text: string, opts: { diff?: boolean } = {}): { text: str
     return [placeholder('private-key'), ...rest.map((l) => (opts.diff === true && /^[+\- ]/.test(l) ? l[0] : ''))].join('\n')
   })
   for (const rule of RULES) {
+    if (opts.only !== undefined && !opts.only.has(rule.kind)) continue
     const source = out
     let rebuilt = ''
     let last = 0

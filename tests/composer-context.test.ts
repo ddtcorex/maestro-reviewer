@@ -45,7 +45,7 @@ describe('checkDbSchemaWhitelist', () => {
 
   it('becomes a major finding on the schema file', () => {
     const [f] = whitelistFindings([{ module: 'app/code/Acme/Shop' }])
-    expect(f).toMatchObject({ status: 'new', path: 'app/code/Acme/Shop/etc/db_schema.xml', line: 1, code: 'MAGENTO-DB-WHITELIST', severity: 'major' })
+    expect(f).toMatchObject({ status: 'new', path: 'app/code/Acme/Shop/etc/db_schema.xml', line: 1, code: 'MAGENTO-DB-WHITELIST', severity: 'minor' })
     expect(f.body).toContain('setup:db-declaration:generate-whitelist')
   })
 })

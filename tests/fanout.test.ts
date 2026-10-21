@@ -157,7 +157,7 @@ describe('ci fan-out settings', () => {
     const { parseCiEnvConfig, ciFanout } = await import('../src/host/providers/ci-trigger.js')
     const cfg = parseCiEnvConfig({ GITLAB_HOST: 'h', REVIEW_GITLAB_TOKEN: 't', SOURCE_PROJECT_ID: '1', MR_IID: '2', REVIEW_FANOUT_FILES: '40', REVIEW_DEEP_MODEL_PROVIDER: 'p', REVIEW_DEEP_MODEL: 'strong' })
     expect(ciFanout(cfg)).toEqual({ fanout: { files: 40, bytes: 150_000, concurrency: 3 }, deepModel: { provider: 'p', model: 'strong' } })
-    expect(ciFanout(parseCiEnvConfig({ GITLAB_HOST: 'h', REVIEW_GITLAB_TOKEN: 't', SOURCE_PROJECT_ID: '1', MR_IID: '2' }))).toEqual({ fanout: { files: 25, bytes: 150_000, concurrency: 3 } })
+    expect(ciFanout(parseCiEnvConfig({ GITLAB_HOST: 'h', REVIEW_GITLAB_TOKEN: 't', SOURCE_PROJECT_ID: '1', MR_IID: '2' }))).toEqual({})
     expect(() => parseCiEnvConfig({ GITLAB_HOST: 'h', REVIEW_GITLAB_TOKEN: 't', SOURCE_PROJECT_ID: '1', MR_IID: '2', REVIEW_FANOUT_FILES: '0' })).toThrow(/REVIEW_FANOUT_FILES/)
   })
 })

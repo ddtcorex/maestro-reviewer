@@ -574,7 +574,7 @@ export function createReviewEngine(ctx: Context, agents: EngineAgents = createEn
           findings,
           postedFindings: posted.posted,
           models: [...new Set(done.flatMap((o) => o.models ?? []))],
-          ...(failed.length > 0 ? { partial: true } : {}),
+          ...(failed.length > 0 ? { partial: true, unreviewed: failed.reduce((n, f) => n + f.chunk.files.length, 0) } : {}),
         }
       }
       const diffOnly = () => runDiffOnlyReview(payload, {
