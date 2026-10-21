@@ -115,6 +115,8 @@ export function buildReviewMeta(opts: {
   usage?: { input: number; output: number; cached: number }
   partial?: boolean
   muted?: string[]
+  /** Findings of an earlier review of this head that this (narrower) review must not drop. */
+  carried?: ReviewMeta['findings']
   now?: () => Date
 }): ReviewMeta {
   return {
@@ -126,7 +128,10 @@ export function buildReviewMeta(opts: {
     ...(opts.usage !== undefined ? { usage: opts.usage } : {}),
     ...(opts.partial === true ? { partial: true } : {}),
     ...(opts.muted !== undefined && opts.muted.length > 0 ? { muted: opts.muted } : {}),
-    findings: opts.findings.map(f => ({ code: f.code ?? 'none', fingerprint: findingFingerprint(f), severity: f.severity ?? 'minor' })),
+    findings: [
+      ...opts.findings.map(f => ({ code: f.code ?? 'none', fingerprint: findingFingerprint(f), severity: f.severity ?? 'minor' })),
+      ...(opts.carried ?? []).filter(c => !opts.findings.some(f => findingFingerprint(f) === c.fingerprint)),
+    ],
     at: (opts.now ?? (() => new Date()))().toISOString(),
   }
 }
