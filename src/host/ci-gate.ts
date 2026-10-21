@@ -21,7 +21,9 @@ export async function openBlockingThreads(
   const headers = gitlabAuthHeaders(opts.token)
   let open = 0
   let page = '1'
-  for (let i = 0; page !== '' && i < MAX_PAGES; i++) {
+  for (let i = 0; page !== ''; i++) {
+    // Never fail open: discussions beyond what is read could hide a blocking thread.
+    if (i >= MAX_PAGES) throw new Error(`too many discussions to evaluate the gate (more than ${MAX_PAGES * 100})`)
     const res = await fetcher(`${opts.baseUrl}/api/v4/projects/${opts.projectId}/merge_requests/${opts.mrIid}/discussions?per_page=100&page=${page}`, { headers })
     if (!res.ok) throw new Error(`GitLab API error ${res.status} reading discussions`)
     const batch = await res.json() as Array<{ notes?: Note[] }>
