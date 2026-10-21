@@ -1,4 +1,4 @@
-import type { CompareResult } from './forge/types.js'
+import type { CompareResult, InterdiffFile } from './forge/types.js'
 const COMMIT_LIST_CAP = 20
 
 /**
@@ -11,6 +11,7 @@ export function buildIncrementalBlock(
   compare: CompareResult | undefined,
   sinceSha: string | undefined,
   nowSha: string | undefined,
+  opts: { interdiff?: boolean } = {},
 ): string | undefined {
   if (sinceSha === undefined || nowSha === undefined || sinceSha === nowSha) return undefined
   if (compare === undefined) return undefined
@@ -19,7 +20,9 @@ export function buildIncrementalBlock(
   if (commits.length === 0 && diffs.length === 0) return undefined
 
   const lines: string[] = [
-    `This MR was reviewed before (at ${sinceSha.slice(0, 12)}). The following is what changed since then — focus your review on these files and commits, and re-check only open threads whose location falls inside them:`,
+    opts.interdiff === true
+      ? `This MR was reviewed before (at ${sinceSha.slice(0, 12)}). The diff tools now show only what changed since then: review those changes, and re-check only open threads whose location falls inside them. Commits since then:`
+      : `This MR was reviewed before (at ${sinceSha.slice(0, 12)}). The following is what changed since then — focus your review on these files and commits, and re-check only open threads whose location falls inside them:`,
   ]
   const shown = commits.slice(0, COMMIT_LIST_CAP)
   for (const commit of shown) {
@@ -30,4 +33,30 @@ export function buildIncrementalBlock(
   if (hidden > 0) lines.push(`- and ${hidden} more commit(s)`)
   lines.push(`Changed files since last review: ${diffs.length}`)
   return lines.join('\n')
+}
+
+export type IncrementalPlan =
+  | { kind: 'interdiff'; files: InterdiffFile[] }
+  | { kind: 'full'; reason: 'base changed' | 'prior base unknown' | 'prior head unreachable' | 'interdiff too large' }
+
+/**
+ * Whether a re-review can look at the interdiff alone (spec section 6, P6):
+ * only when the MR base is the one the prior review recorded (a rebase moves
+ * it, and a compare across a rebase mixes in the target's changes), the prior
+ * head is still reachable, and GitLab sent every file's text. Pure.
+ */
+export function planIncremental(
+  prior: { headSha: string; baseSha?: string },
+  current: { headSha: string; baseSha?: string },
+  compare: CompareResult | undefined,
+): IncrementalPlan {
+  if (prior.baseSha === undefined || current.baseSha === undefined) return { kind: 'full', reason: 'prior base unknown' }
+  if (prior.baseSha !== current.baseSha) return { kind: 'full', reason: 'base changed' }
+  if (compare === undefined) return { kind: 'full', reason: 'prior head unreachable' }
+  const files: InterdiffFile[] = []
+  for (const d of compare.diffs ?? []) {
+    if (d.too_large === true || d.collapsed === true || typeof d.diff !== 'string' || typeof d.new_path !== 'string') return { kind: 'full', reason: 'interdiff too large' }
+    files.push(d as InterdiffFile)
+  }
+  return { kind: 'interdiff', files }
 }

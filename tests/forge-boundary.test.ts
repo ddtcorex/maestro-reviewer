@@ -13,6 +13,7 @@ function fakeForge() {
     mrHeadSha: vi.fn(async () => { calls.push('mrHeadSha'); return 'new' }),
     mrBaseSha: vi.fn(async () => { calls.push('mrBaseSha'); return 'base' }),
     reviewScope: vi.fn(async () => { calls.push('reviewScope'); return { files: 1, skipped: [] } }),
+    restrictToInterdiff: vi.fn(() => { calls.push('restrictToInterdiff') }),
     compare: vi.fn(async (from: string, to: string) => { calls.push(`compare ${from}..${to}`); return { commits: [{ short_id: 'c1', title: 'x' }], diffs: [{ new_path: 'a.php' }] } }),
     postNote: vi.fn(async () => { calls.push('postNote') }),
     replyToDiscussion: vi.fn(async () => { calls.push('replyToDiscussion') }),
@@ -39,7 +40,7 @@ describe('forge boundary', () => {
     )
     expect(r.ok).toBe(true)
     expect(fetchSpy).not.toHaveBeenCalled()
-    expect(calls).toEqual(['mrHeadSha', 'compare old..new', 'signals.start', 'reviewScope', 'postNote', 'signals.finish completed'])
+    expect(calls).toEqual(['mrHeadSha', 'mrBaseSha', 'compare old..new', 'signals.start', 'reviewScope', 'postNote', 'signals.finish completed'])
     // The agents get a timing wrapper of this forge, never a forge of their own.
     const agentForge = ((reviewer.mock.calls[0] as unknown[])[2] as { forge: typeof forge }).forge
     calls.length = 0

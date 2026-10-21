@@ -14,7 +14,16 @@ export interface CompareCommit {
 
 export interface CompareDiff {
   new_path?: string
+  old_path?: string
+  diff?: string
+  deleted_file?: boolean
+  /** GitLab collapses a file whose diff exceeds its limits and sends no text. */
+  too_large?: boolean
+  collapsed?: boolean
 }
+
+/** One file of an interdiff the agent tools can serve. */
+export interface InterdiffFile { old_path: string; new_path: string; diff: string; deleted_file?: boolean }
 
 /** Shape of GitLab's `GET /repository/compare?from=&to=` response (reduced). */
 export interface CompareResult {
@@ -34,6 +43,8 @@ export interface ReviewForge {
   mrBaseSha(): Promise<string | undefined>
   /** Files the review may see after the ignore globs, and the paths they removed; throws when the diff cannot be read. */
   reviewScope(): Promise<{ files: number; skipped: string[] }>
+  /** From now on the agent tools and reviewScope serve these files (an interdiff) instead of the MR diff. */
+  restrictToInterdiff(files: InterdiffFile[]): void
   /** What changed between two SHAs, or undefined when it cannot be read (never throws). */
   compare(from: string, to: string): Promise<CompareResult | undefined>
   postNote(body: string): Promise<void>

@@ -360,8 +360,17 @@ the head SHA (no runtime environment exists in the container).
 ### 5.3 Re-review after a push
 
 With `REVIEW_ON_PUSH=1` (project scope or `*`) every push with new commits is
-reviewed again, with an incremental-changes block. Without it, only the first
-review runs; the same head SHA never runs twice either way.
+reviewed again. Without it, only the first review runs; the same head SHA never
+runs twice either way.
+
+A re-review looks at the interdiff only (what changed since the last reviewed
+head) when the MR base is the one that review recorded and GitLab returns every
+changed file's text. After a rebase (the base moved), when the prior head is
+unreachable, when GitLab collapsed a large file, or when the prior review
+predates 0.17 (no recorded base), it reviews the whole MR; the job log says
+which (`full review: base changed since <sha>`). Existing threads stay visible
+to the reviewer either way, so it replies to them instead of posting
+duplicates.
 
 ## 6. Onboarding another source project
 

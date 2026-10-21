@@ -26,7 +26,7 @@ import { gitlabForge } from './forge/gitlab/index.js'
 import { countFindingSeverities } from './severity.js'
 import type { ReviewRequest, ReviewResult } from './events.js'
 import { lastCompletedReview, recordReviewFinish, recordReviewStart } from './review-history.js'
-import { buildIncrementalBlock } from './incremental.js'
+import { buildIncrementalBlock, planIncremental } from './incremental.js'
 import { loadedReviewProfile, type ReviewSkillProfile } from './skills-tool.js'
 import { REVIEW_SOURCE_KIND } from './source.js'
 import { cloneSourceRepo, defaultRun } from './ci-clone.js'
@@ -336,6 +336,7 @@ export function createReviewEngine(ctx: Context, agents: EngineAgents = createEn
       mrHeadSha: () => rawForge.mrHeadSha(),
       mrBaseSha: () => rawForge.mrBaseSha(),
       reviewScope: () => rawForge.reviewScope(),
+      restrictToInterdiff: (files) => rawForge.restrictToInterdiff(files),
       compare: (from, to) => rawForge.compare(from, to),
       postNote: (body) => timedPost(() => rawForge.postNote(body)),
       replyToDiscussion: (id, body) => timedPost(() => rawForge.replyToDiscussion(id, body)),
@@ -367,6 +368,7 @@ export function createReviewEngine(ctx: Context, agents: EngineAgents = createEn
     try {
       const historyId = `${payload.projectId}-${payload.mrIid}-${Date.now()}`
       const currentHeadSha = await forge.mrHeadSha().catch(() => undefined)
+      const currentBaseSha = await forge.mrBaseSha().catch(() => undefined)
       await recordReviewStart({
         id: historyId,
         projectId: payload.projectId,
@@ -385,7 +387,19 @@ export function createReviewEngine(ctx: Context, agents: EngineAgents = createEn
         const priorHeadSha = payload.priorHeadSha ?? (await lastCompletedReview(payload.projectId, payload.mrIid))?.headSha
         if (priorHeadSha !== undefined && currentHeadSha !== undefined && priorHeadSha !== currentHeadSha) {
           const compare = await forge.compare(priorHeadSha, currentHeadSha)
-          incrementalBlock = buildIncrementalBlock(compare, priorHeadSha, currentHeadSha)
+          const plan = payload.scope.kind === 'mr'
+            ? planIncremental({ headSha: priorHeadSha, ...(payload.priorBaseSha !== undefined ? { baseSha: payload.priorBaseSha } : {}) }, { headSha: currentHeadSha, ...(currentBaseSha !== undefined ? { baseSha: currentBaseSha } : {}) }, compare)
+            : undefined
+          if (plan?.kind === 'interdiff') {
+            forge.restrictToInterdiff(plan.files)
+            incrementalBlock = buildIncrementalBlock(compare, priorHeadSha, currentHeadSha, { interdiff: true })
+          } else if (plan?.kind === 'full' && plan.reason === 'base changed') {
+            // A compare across a rebase mixes in the target's changes: review it all, no hint.
+            console.log(`[review] full review: ${plan.reason} since ${priorHeadSha.slice(0, 12)}`)
+          } else {
+            if (plan !== undefined) console.log(`[review] full review: ${plan.reason} since ${priorHeadSha.slice(0, 12)}`)
+            incrementalBlock = buildIncrementalBlock(compare, priorHeadSha, currentHeadSha)
+          }
         }
       } catch {
         // Optional optimization only — never fail the review for it.
@@ -419,6 +433,7 @@ export function createReviewEngine(ctx: Context, agents: EngineAgents = createEn
         gitlabBaseUrl: gitlab.baseUrl,
         usageTotal,
         skippedFiles,
+        baseSha: currentBaseSha,
       } as unknown as DiffOnlyReviewDeps)
       let skippedFiles: string[] | undefined
       try {
@@ -427,7 +442,7 @@ export function createReviewEngine(ctx: Context, agents: EngineAgents = createEn
           const scope = await forge.reviewScope().catch(() => undefined)
           timer.mark('fetch')
           if (scope !== undefined && scope.files === 0) {
-            const body = buildNothingReviewableComment(payload, { gitlabBaseUrl: gitlab.baseUrl, skipped: scope.skipped })
+            const body = buildNothingReviewableComment(payload, { gitlabBaseUrl: gitlab.baseUrl, skipped: scope.skipped, ...(currentBaseSha !== undefined ? { baseSha: currentBaseSha } : {}) })
             agentsStarted = false
             await forge.postNote(body)
             timer.add('post', postMs)
@@ -448,7 +463,7 @@ export function createReviewEngine(ctx: Context, agents: EngineAgents = createEn
           const profile = opts.reviewProfile ?? 'generic'
           const cloneDir = join('/tmp', `maestro-ci-src-${payload.projectId}-${payload.mrIid}`)
           // D3: make the MR merge base reachable from the head in the shallow clone.
-          const baseSha = await forge.mrBaseSha()
+          const baseSha = currentBaseSha
           timer.mark('fetch')
           await cloneSourceRepo({ fetcher: fetch, run: defaultRun, host: access.host, projectId: payload.projectId, sourceBranch: payload.sourceBranch, headSha: payload.headSha as string, token: gitlab.token, dir: cloneDir, ...(baseSha ? { baseSha } : {}) })
           timer.mark('clone')
@@ -475,6 +490,7 @@ export function createReviewEngine(ctx: Context, agents: EngineAgents = createEn
               reviewProfile: profile,
               usageTotal,
               skippedFiles,
+              baseSha: currentBaseSha,
             } as unknown as ReviewAndAuditDeps)
           } finally {
             await defaultRun('rm', ['-rf', cloneDir]).catch(() => {})
@@ -497,6 +513,7 @@ export function createReviewEngine(ctx: Context, agents: EngineAgents = createEn
               reviewProfile: profile,
               usageTotal,
               skippedFiles,
+              baseSha: currentBaseSha,
             } as unknown as ReviewAndAuditDeps)
           } catch (err) {
             const isBranchNotFound = (err as { code?: string })?.code === 'BRANCH_NOT_FOUND' || isBranchNotFoundError(err)

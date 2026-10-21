@@ -140,17 +140,19 @@ function skippedFilesBlock(skipped: string[]): string {
 }
 
 /** Every changed file matched the ignore globs: one comment, marker included so the push-gate counts it. */
-export function buildNothingReviewableComment(payload: ReviewRequest, opts: { gitlabBaseUrl: string; skipped: string[] }): string {
+export function buildNothingReviewableComment(payload: ReviewRequest, opts: { gitlabBaseUrl: string; skipped: string[]; baseSha?: string }): string {
   return buildReviewComment({
     projectPath: payload.projectPath,
     mrIid: payload.mrIid,
     gitlabBaseUrl: opts.gitlabBaseUrl,
     mode: payload.mode,
-    summary: 'Nothing reviewable: every changed file matches the ignore globs (generated, vendored or lock files).',
+    summary: opts.skipped.length > 0
+      ? 'Nothing reviewable: every changed file matches the ignore globs (generated, vendored or lock files).'
+      : 'Nothing reviewable: no file changed.',
     failures: [],
     skipped: opts.skipped,
     marker: commentMarker(payload),
-    meta: metaFor(payload, { findings: [], models: [] }, {}),
+    meta: metaFor(payload, { findings: [], models: [] }, opts.baseSha !== undefined ? { baseSha: opts.baseSha } : {}),
   })
 }
 
@@ -303,12 +305,12 @@ export function reviewerSummary(postedNew: number, postedReplies: number, diffTr
 }
 
 /** Token usage of the run so far, for the metadata; optional on every deps object. */
-interface UsageDeps { usageTotal?(): { input: number; output: number; cached: number } | null }
+interface UsageDeps { usageTotal?(): { input: number; output: number; cached: number } | null; baseSha?: string }
 
 function metaFor(payload: ReviewRequest, outcome: Pick<ReviewOutcome, 'findings' | 'models'>, deps: UsageDeps): ReviewMeta | undefined {
   if (payload.headSha === undefined) return undefined
   const usage = deps.usageTotal?.() ?? undefined
-  return buildReviewMeta({ headSha: payload.headSha, mode: payload.mode, models: outcome.models ?? [], findings: outcome.findings ?? [], ...(usage !== undefined ? { usage } : {}) })
+  return buildReviewMeta({ headSha: payload.headSha, ...(deps.baseSha !== undefined ? { baseSha: deps.baseSha } : {}), mode: payload.mode, models: outcome.models ?? [], findings: outcome.findings ?? [], ...(usage !== undefined ? { usage } : {}) })
 }
 
 /**

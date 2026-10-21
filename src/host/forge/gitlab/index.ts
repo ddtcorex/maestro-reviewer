@@ -17,7 +17,12 @@ export function gitlabForge(
   // One diff load per run, shared by the scope check and every agent's tools;
   // a failed load is not cached.
   let diffsLoad: Promise<GitlabClient.ReviewDiffs> | undefined
+  let interdiff: GitlabClient.GitlabDiff[] | undefined
   const loadDiffs = (): Promise<GitlabClient.ReviewDiffs> => {
+    if (interdiff !== undefined) {
+      const { kept, skipped } = filterDiffs(interdiff, globs)
+      return Promise.resolve({ diffs: kept, skipped, truncated: false })
+    }
     diffsLoad ??= GitlabClient.fetchAllDiffs(fetch, mrApi, gitlabAuthHeaders(cfg.token))
       .then((all) => ({ ...filterDiffs(all.diffs, globs), truncated: all.truncated }))
       .then(({ kept, skipped, truncated }) => ({ diffs: kept, skipped, truncated }))
@@ -37,6 +42,7 @@ export function gitlabForge(
   return {
     mrHeadSha: () => fetchMrDetailHeadSha(cfg.baseUrl, cfg.token, mr.projectId, mr.mrIid),
     mrBaseSha: () => fetchMrBaseSha(cfg.baseUrl, cfg.token, mr.projectId, mr.mrIid),
+    restrictToInterdiff: (files) => { interdiff = files },
     reviewScope: async () => {
       const scope = await loadDiffs()
       return { files: scope.diffs.length, skipped: scope.skipped }
