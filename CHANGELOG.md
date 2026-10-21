@@ -1,5 +1,41 @@
 # Changelog
 
+## [0.17.0] - 2026-10-21
+
+CI review performance (#180): measured telemetry, less text to the model,
+better prefix caching, interdiff re-reviews and fan-out for large MRs.
+
+### Added
+
+- `review-report.json` carries `stages` (boot, fetch, clone, agent, post in
+  ms) and `usage` per agent run (input, output and cached tokens, from the
+  DSH session); the review metadata carries the summed usage and the MR
+  base SHA.
+- Pre-model diff filter: lock files, minified assets, source maps,
+  `generated/`, `pub/static/`, `var/`, snapshots and i18n CSVs are kept
+  from the diff tools; `REVIEW_IGNORE_GLOBS` adds globs. Skipped paths are
+  listed in the comment; an MR with nothing left gets one "Nothing
+  reviewable" note and no model call.
+- Fan-out: above `REVIEW_FANOUT_FILES` (25) or `REVIEW_FANOUT_BYTES`
+  (150000) the MR is reviewed in at most 6 parallel parts
+  (`REVIEW_FANOUT_CONCURRENCY`, 3), grouped by module with high risk files
+  apart, findings merged and posted once. `REVIEW_DEEP_MODEL_PROVIDER` and
+  `REVIEW_DEEP_MODEL` pick the model of high risk parts (dropped on a
+  project route).
+
+### Changed
+
+- With `REVIEW_ON_PUSH=1` a re-review sees only the interdiff when the MR
+  base is unchanged; a rebase, a partial prior review, a prior review
+  without a recorded base, a collapsed file or a deep request reviews the
+  whole MR. The first re-review after upgrading is therefore full.
+- The CI review worktree is one fixed path and the per-MR parts of the
+  reviewer prompt come last, so the provider's cached prefix covers the
+  runtime context and the skills reminder.
+- Engine: `ReviewForge` gains `reviewScope` and `restrictToInterdiff`;
+  `EngineRunOptions` gains `ignoreGlobs`, `fanout` and `deepModel` (fan-out
+  only runs when `fanout` is passed).
+
 ## [0.16.0] - 2026-10-20
 
 Lighter review tool surface and per-tool call counts in the report (#177).
