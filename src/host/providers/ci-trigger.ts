@@ -14,6 +14,7 @@ import { DEFAULT_FANOUT, type FanoutSettings } from '../chunking.js'
 import { REPO_CONFIG_PATH, effectiveConfig, parseRepoConfig, type RepoReviewConfig } from '../repo-config.js'
 import { fetchRepoFile } from '../forge/gitlab/mr-api.js'
 import { gateExitCode, toCodeQuality, type ReviewGate } from '../codequality.js'
+import { buildCommandPrompt, commandMarker, findPendingCommands, type PendingCommand } from '../ci-commands.js'
 import type { FindingSeverity } from '../review-findings-tool.js'
 import { fetchBotUserId, hasCompletedDeepReview, hasCompletedReviewForSha, hasRunningEyes, latestCompletedReview, removeDeepLabel } from '../ci-coexist.js'
 
@@ -238,7 +239,7 @@ export async function runCiTrigger(
     ...ciFanout(effConfig),
     repo: { rules: eff.rules, warnings, ...(eff.minSeverity !== undefined ? { minSeverity: eff.minSeverity } : {}), ...(eff.language !== undefined ? { language: eff.language } : {}) },
   }
-  const runReview = () => { gateMs = Date.now() - gateStart; return ctx.reviewEngine.run({
+  const request = (extra: Partial<ReviewRequest> = {}): ReviewRequest => ({
     projectPath,
     projectId: config.sourceProjectId,
     mrIid: config.mrIid,
@@ -251,8 +252,32 @@ export async function runCiTrigger(
     mode: config.mode,
     scope: { kind: 'mr' },
     reviewProfile: effConfig.reviewProfile,
-  } satisfies ReviewRequest, options) }
+    ...extra,
+  })
+  const runReview = (extra: Partial<ReviewRequest> = {}) => { gateMs = Date.now() - gateStart; return ctx.reviewEngine.run(request(extra), options) }
   const coFetcher = deps.fetcher ?? fetch
+  // MR commands wait for the next review job; answer them before the push-gate decides.
+  const reply = async (discussionId: string, body: string) => {
+    const res = await coFetcher(`${config.gitlabBaseUrl}/api/v4/projects/${config.sourceProjectId}/merge_requests/${config.mrIid}/discussions/${encodeURIComponent(discussionId)}/notes`, {
+      method: 'POST', headers: { ...gitlabAuthHeaders(config.gitlabToken), 'content-type': 'application/json' }, body: JSON.stringify({ body }),
+    })
+    if (!res.ok) throw new Error(`GitLab ${res.status} posting a command answer`)
+  }
+  let pending: PendingCommand[] = []
+  if (botUserId !== undefined) {
+    pending = await findPendingCommands(coFetcher, { baseUrl: config.gitlabBaseUrl, token: config.gitlabToken, projectId: config.sourceProjectId, mrIid: config.mrIid, botUserId })
+      .catch((err: unknown) => { console.warn(`[review] MR commands unreadable: ${err instanceof Error ? err.message : String(err)}`); return [] })
+  }
+  let answered = 0
+  for (const c of pending) {
+    if (c.command.kind === 'rereview') continue
+    const text = c.finding === undefined
+      ? '`/maestro explain` and `/maestro fix` work as a reply inside a review finding thread; `/maestro rereview [path]` works anywhere.'
+      : await ctx.reviewEngine.answer(request(), options, buildCommandPrompt(c.command, c.finding)).catch((err: unknown) => `Could not answer: ${err instanceof Error ? err.message : String(err)}`)
+    await reply(c.discussionId, `${text}\n\n${commandMarker(c.noteId)}`).then(() => { answered++ })
+      .catch((err: unknown) => console.warn(`[review] command answer not posted: ${err instanceof Error ? err.message : String(err)}`))
+  }
+  const rereview = pending.find((c) => c.command.kind === 'rereview')
   let result: ReviewResult
   if (config.deepRequested) {
     // A deep label is an explicit request: it bypasses the quick push-gate and
@@ -271,6 +296,13 @@ export async function runCiTrigger(
       await removeDeepLabel(coFetcher, { baseUrl: config.gitlabBaseUrl, token: config.gitlabToken, projectId: config.sourceProjectId, mrIid: config.mrIid })
         .catch((err: unknown) => console.warn(`[review] could not remove the deep label: ${err instanceof Error ? err.message : String(err)}`))
     }
+  } else if (rereview !== undefined) {
+    // An explicit request: past the push-gate, limited to its path.
+    const path = rereview.command.kind === 'rereview' ? rereview.command.path : undefined
+    result = await runReview(path !== undefined ? { pathPrefix: path } : {})
+    const note = result.ok ? `Re-reviewed ${path === undefined ? 'the whole MR' : `\`${path}\``} at ${headSha.slice(0, 8)}; see the review comment.` : `The re-review failed: ${result.failures[0] ?? 'unknown error'}`
+    await reply(rereview.discussionId, `${note}\n\n${commandMarker(rereview.noteId)}`).then(() => { answered++ })
+      .catch((err: unknown) => console.warn(`[review] rereview answer not posted: ${err instanceof Error ? err.message : String(err)}`))
   } else if (prior?.headSha === headSha) {
     // A rerun of a reviewed head must not slip past the gate: carry that review's severities.
     result = { ok: true, summary: `already reviewed at ${headSha}, skipping`, failures: [], durationMs: 0, ...(prior.findings !== undefined ? { gateSeverities: prior.findings.map((f) => f.severity) } : {}) }
@@ -286,6 +318,7 @@ export async function runCiTrigger(
   } else {
     result = await runReview()
   }
+  if (answered > 0) result = { ...result, summary: `${result.summary ?? ''} (answered ${answered} command(s))`.trim() }
   const { writeFile } = deps.writeFile !== undefined ? { writeFile: deps.writeFile } : await import('node:fs/promises')
   // entrypoint.sh cds into deepseek-harness before execing dsh, so a bare relative
   // path would land inside the harness checkout (lost with the container). The

@@ -10,7 +10,8 @@ import { countDismissals, dismissalAuthors } from '../../review-feedback.js'
 import { runWithConcurrency } from '../../chunking.js'
 
 /** Every diff the agents see passes through the redactor; the hits stay with the forge. */
-function redactAll(kept: GitlabClient.GitlabDiff[], skipped: string[], truncated: boolean): GitlabClient.ReviewDiffs {
+function redactAll(all: GitlabClient.GitlabDiff[], skipped: string[], truncated: boolean, prefix?: string): GitlabClient.ReviewDiffs {
+  const kept = prefix === undefined ? all : all.filter((d) => d.new_path.startsWith(prefix) || d.old_path.startsWith(prefix))
   const redacted: NonNullable<GitlabClient.ReviewDiffs['redacted']> = []
   const diffs = kept.map((d) => {
     const r = redactDiff(d.diff)
@@ -24,7 +25,7 @@ export interface GitlabForgeConfig { baseUrl: string; token: string; botUsername
 
 /** The GitLab forge, bound to one merge request. */
 export function gitlabForge(
-  cfg: GitlabForgeConfig, mr: { projectId: number; mrIid: number }, opts: { ignoreGlobs?: readonly string[] } = {},
+  cfg: GitlabForgeConfig, mr: { projectId: number; mrIid: number }, opts: { ignoreGlobs?: readonly string[]; pathPrefix?: string } = {},
 ): ReviewForge {
   const mrApi = `${cfg.baseUrl}/api/v4/projects/${mr.projectId}/merge_requests/${mr.mrIid}`
   const globs = opts.ignoreGlobs ?? DEFAULT_IGNORE_GLOBS
@@ -35,11 +36,11 @@ export function gitlabForge(
   const loadDiffs = (): Promise<GitlabClient.ReviewDiffs> => {
     if (interdiff !== undefined) {
       const { kept, skipped } = filterDiffs(interdiff, globs)
-      return Promise.resolve(redactAll(kept, skipped, false))
+      return Promise.resolve(redactAll(kept, skipped, false, opts.pathPrefix))
     }
     diffsLoad ??= GitlabClient.fetchAllDiffs(fetch, mrApi, gitlabAuthHeaders(cfg.token))
       .then((all) => ({ ...filterDiffs(all.diffs, globs), truncated: all.truncated }))
-      .then(({ kept, skipped, truncated }) => redactAll(kept, skipped, truncated))
+      .then(({ kept, skipped, truncated }) => redactAll(kept, skipped, truncated, opts.pathPrefix))
       .catch((err: unknown) => { diffsLoad = undefined; throw err })
     return diffsLoad
   }

@@ -123,7 +123,11 @@ export function toModelSelection(raw: { provider: string; model: string; reasoni
   }
 }
 
-export interface ReviewEngine { run(payload: ReviewRequest, opts: EngineRunOptions): Promise<ReviewResult> }
+export interface ReviewEngine {
+  run(payload: ReviewRequest, opts: EngineRunOptions): Promise<ReviewResult>
+  /** One reviewer-preset agent turn that answers `prompt` with text (MR commands); posts nothing. */
+  answer(payload: ReviewRequest, opts: EngineRunOptions, prompt: string): Promise<string>
+}
 
 export interface AgentRunConfig {
   gitlab: EngineGitlab
@@ -150,6 +154,7 @@ export interface ReviewChunk { label: string; files: string[] }
 export interface EngineAgents {
   reviewer(worktreePath: string | undefined, payload: ReviewRequest, run: AgentRunConfig, reviewProfile?: ReviewSkillProfile, incrementalBlock?: string, chunk?: ReviewChunk): Promise<ReviewOutcome>
   auditor(worktreePath: string, payload: ReviewRequest, run: AgentRunConfig, opts?: { staticOnly?: boolean }): Promise<string>
+  answer?(payload: ReviewRequest, run: AgentRunConfig, prompt: string): Promise<string>
 }
 
 export async function removeWorktree(worktreePath: string): Promise<void> {
@@ -357,7 +362,38 @@ export function createEngineAgents(ctx: Context): EngineAgents {
     }
   }
 
-  return { reviewer, auditor }
+  async function answer(payload: ReviewRequest, run: AgentRunConfig, prompt: string): Promise<string> {
+    const agentOptions = agentOptionsForModel(run.model)
+    let handle: AgentHandle
+    try {
+      handle = await ctx.agents.create({
+        sessionId: SessionId(`maestro-answer-${payload.mrIid}-${Date.now()}`),
+        meta: { cwd: tmpdir() },
+        agentOptions,
+        setup: async (agentCtx) => {
+          installModelSelection(agentCtx, { current: agentOptions, assembled: undefined })
+          await agentCtx.plugin(ReviewToolPolicy, { onToolCall: run.onToolCall })
+          await mountAgentPreset(ctx.agentPresets, agentCtx, 'dsh-maestro-reviewer')
+          await run.forge.mountAgentTools(agentCtx, {})
+        },
+      })
+    } catch (err) {
+      throw new Error(`failed to create the answer agent: ${err instanceof Error ? err.message : String(err)}`)
+    }
+    ctx.sessionTitle.rename(handle.agent.session, `Maestro Answer — MR !${payload.mrIid} (${payload.projectPath})`)
+    try {
+      handle.agent.followup(createUserMessage({ content: [{ type: 'text', text: prompt }], source: { kind: REVIEW_SOURCE_KIND } }))
+      await whenIdleWithTimeout(handle, run.agentTimeoutMs)
+      const text = auditorOutputFromSession(handle.agent.session).map((block) => ('text' in block ? block.text : '')).join('').trim()
+      assertTurnSucceededOrSalvage(handle, text !== '', 'answer')
+      return text
+    } finally {
+      run.onUsage('reviewer', agentOptions.model, usageFromSession(handle.agent.session))
+      await handle.dispose()
+    }
+  }
+
+  return { reviewer, auditor, answer }
 }
 
 export function createReviewEngine(ctx: Context, agents: EngineAgents = createEngineAgents(ctx)): ReviewEngine {
@@ -372,7 +408,7 @@ export function createReviewEngine(ctx: Context, agents: EngineAgents = createEn
       const start = Date.now()
       try { return await call() } finally { postMs += Date.now() - start }
     }
-    const rawForge = opts.forge ?? gitlabForge(gitlab, payload, opts.ignoreGlobs !== undefined ? { ignoreGlobs: opts.ignoreGlobs } : {})
+    const rawForge = opts.forge ?? gitlabForge(gitlab, payload, { ...(opts.ignoreGlobs !== undefined ? { ignoreGlobs: opts.ignoreGlobs } : {}), ...(payload.pathPrefix !== undefined ? { pathPrefix: payload.pathPrefix } : {}) })
     const forge: ReviewForge = {
       mrHeadSha: () => rawForge.mrHeadSha(),
       mrBaseSha: () => rawForge.mrBaseSha(),
@@ -651,5 +687,13 @@ export function createReviewEngine(ctx: Context, agents: EngineAgents = createEn
       return { ok: false, summary: undefined, failures: [message], durationMs: Date.now() - t0, ...telemetry() }
     }
   }
-  return { run }
+  async function answer(payload: ReviewRequest, opts: EngineRunOptions, prompt: string): Promise<string> {
+    if (agents.answer === undefined) throw new Error('this engine has no answer agent')
+    const forge = opts.forge ?? gitlabForge(opts.gitlab, payload, opts.ignoreGlobs !== undefined ? { ignoreGlobs: opts.ignoreGlobs } : {})
+    return agents.answer(payload, {
+      gitlab: opts.gitlab, forge, model: opts.model, agentTimeoutMs: opts.agentTimeoutMs,
+      onToolCall: () => {}, onUsage: () => {},
+    }, prompt)
+  }
+  return { run, answer }
 }

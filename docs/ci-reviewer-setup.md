@@ -413,7 +413,22 @@ with Developer access or above count, only for a code the bot raised in that
 same MR, once per MR; the bot's own notes never count. So a Guest, an outside
 commenter or a contributor cannot silence a finding.
 
-### 5.5 Code Quality report
+### 5.5 MR commands
+
+Write a command on the first line of a note; it is answered by the next review
+job of the MR, so push a commit or retry the `maestro:trigger-review` job
+after writing it (the same as the deep label):
+
+| Command | Where | Answer |
+|---|---|---|
+| `/maestro explain` | a reply in a review finding thread | what the problem is, why it matters, what a fix looks like |
+| `/maestro fix` | a reply in a review finding thread | a GitLab suggestion block for that line, applied only when a developer accepts it; the bot never pushes |
+| `/maestro rereview [path]` | anywhere on the MR | a new review now, past the push-gate, limited to files under `path` when given |
+
+Only authors with Developer access or above are answered; each command is
+answered once (the bot's reply carries a hidden marker), at most 5 per run.
+
+### 5.6 Code Quality report
 
 The review job keeps `gl-code-quality-report.json` (Code Climate format: one
 entry per new finding with a position) as an artifact and as a
@@ -425,7 +440,7 @@ reviewer project, which would expose every project's reviews to each other.
 So the widget stays empty by design; the findings are the MR threads and the
 artifact is for tooling.
 
-### 5.6 Secrets and personal data
+### 5.7 Secrets and personal data
 
 Before any model call the reviewer replaces private keys, cloud and forge
 tokens (AWS, GitLab, GitHub, OpenAI style), JWTs, `KEY=value` secrets
