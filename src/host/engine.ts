@@ -130,7 +130,7 @@ export function toModelSelection(raw: { provider: string; model: string; reasoni
 export interface ReviewEngine {
   run(payload: ReviewRequest, opts: EngineRunOptions): Promise<ReviewResult>
   /** One reviewer-preset agent turn that answers `prompt` with text (MR commands); posts nothing. */
-  answer(payload: ReviewRequest, opts: EngineRunOptions, prompt: string): Promise<string>
+  answer?(payload: ReviewRequest, opts: EngineRunOptions, prompt: string): Promise<string>
 }
 
 export interface AgentRunConfig {
@@ -703,7 +703,15 @@ export function createReviewEngine(ctx: Context, agents: EngineAgents = createEn
           try {
             fullBody = await runReviewAndAudit(payload, {
               localRepoPath: access.localRepoPath,
-              ensureWorktree: access.ensureWorktree,
+              // Redact the checkout the agents read, unless a runtime audit (env up, tests) needs the real files.
+              ensureWorktree: async (repoPath: string, branch: string, pid: number, iid: number, suffix?: string) => {
+                const wt = await access.ensureWorktree(repoPath, branch, pid, iid, suffix)
+                if (payload.mode === 'quick' || access.auditor === 'static') {
+                  const r = await redactWorktree(wt).catch((err: unknown) => { console.warn(`maestro-orchestrator: worktree not redacted: ${err instanceof Error ? err.message : String(err)}`); return undefined })
+                  if (r !== undefined && r.hits > 0) console.log(`[review] redacted ${r.hits} value(s) in ${r.files} file(s) of the worktree`)
+                }
+                return wt
+              },
               removeWorktree: access.removeWorktree,
               ...(access.teardownEnvironment !== undefined ? { teardownEnvironment: access.teardownEnvironment } : {}),
               runReviewer: (worktreePath, p) => review(worktreePath, p, profile),

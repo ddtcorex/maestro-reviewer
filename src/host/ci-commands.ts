@@ -1,5 +1,6 @@
 import { gitlabAuthHeaders } from './forge/gitlab/gitlab-auth.js'
 import { parseCommand, type MaestroCommand } from './commands.js'
+import { sanitizeAgentText } from './forge/gitlab/gitlab-client.js'
 
 /**
  * MR commands in CI (spec section 7, F6): `/maestro explain`, `/maestro fix`
@@ -92,4 +93,38 @@ export function buildCommandPrompt(command: { kind: 'explain' | 'fix' }, finding
     return `${context}\nA developer asked you to explain this finding. In at most 150 words, say what the problem is, why it matters here, and what a fix looks like. Reply with the answer text only.`
   }
   return `${context}\nA developer asked for a fix. Reply with one sentence on the change, then exactly one GitLab suggestion block that replaces line ${finding.line} of ${finding.path} (it is applied to that line):\n\`\`\`suggestion:-0+0\n<the corrected line or lines>\n\`\`\`\nIf a correct fix needs more than nearby lines, say so instead of a block. You never push, commit or edit files; GitLab applies the suggestion when a developer accepts it.`
+}
+
+export const COMMAND_USAGE = '`/maestro explain` and `/maestro fix` work as a reply inside a review finding thread; `/maestro rereview [path]` works anywhere.'
+
+/** Posts a reply in a discussion of the MR. */
+export async function replyToCommand(
+  fetcher: typeof fetch, opts: { baseUrl: string; token: string; projectId: number; mrIid: number }, discussionId: string, body: string,
+): Promise<void> {
+  const res = await fetcher(`${opts.baseUrl}/api/v4/projects/${opts.projectId}/merge_requests/${opts.mrIid}/discussions/${encodeURIComponent(discussionId)}/notes`, {
+    method: 'POST', headers: { ...gitlabAuthHeaders(opts.token), 'content-type': 'application/json' }, body: JSON.stringify({ body }),
+  })
+  if (!res.ok) throw new Error(`GitLab ${res.status} posting a command answer`)
+}
+
+/**
+ * Answers the explain and fix commands (rereview is the caller's: it runs a
+ * review). The agent's text is escaped, so it can carry no review marker,
+ * and each reply carries the answer marker of its command. Returns how many
+ * replies were posted; failures are logged, never thrown.
+ */
+export async function answerCommands(
+  pending: PendingCommand[],
+  deps: { answer(prompt: string): Promise<string>; reply(discussionId: string, body: string): Promise<void> },
+): Promise<number> {
+  let answered = 0
+  for (const c of pending) {
+    if (c.command.kind === 'rereview') continue
+    const text = c.finding === undefined
+      ? COMMAND_USAGE
+      : await deps.answer(buildCommandPrompt(c.command, c.finding)).catch((err: unknown) => `Could not answer: ${err instanceof Error ? err.message : String(err)}`)
+    await deps.reply(c.discussionId, `${sanitizeAgentText(text)}\n\n${commandMarker(c.noteId)}`).then(() => { answered++ })
+      .catch((err: unknown) => console.warn(`[review] command answer not posted: ${err instanceof Error ? err.message : String(err)}`))
+  }
+  return answered
 }

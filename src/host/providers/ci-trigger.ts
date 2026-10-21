@@ -11,12 +11,12 @@ import type {} from '../engine-row.js'
 import { gitlabAuthHeaders } from '../forge/gitlab/gitlab-auth.js'
 import { resolveIgnoreGlobs } from '../diff-filter.js'
 import { DEFAULT_FANOUT, type FanoutSettings } from '../chunking.js'
-import { REPO_CONFIG_PATH, effectiveConfig, parseRepoConfig, type RepoReviewConfig } from '../repo-config.js'
-import { fetchRepoFile } from '../forge/gitlab/mr-api.js'
+import { effectiveConfig } from '../repo-config.js'
 import { toCodeQuality, type ReviewGate } from '../codequality.js'
 import { openBlockingThreads } from '../ci-gate.js'
-import { sanitizeAgentText, timedFetcher } from '../forge/gitlab/gitlab-client.js'
-import { buildCommandPrompt, commandMarker, findPendingCommands, type PendingCommand } from '../ci-commands.js'
+import { timedFetcher } from '../forge/gitlab/gitlab-client.js'
+import { answerCommands, commandMarker, findPendingCommands, replyToCommand, type PendingCommand } from '../ci-commands.js'
+import { loadRepoSettings } from '../ci-repo-settings.js'
 import { fetchBotUserId, hasCompletedDeepReview, hasCompletedReviewForSha, hasRunningEyes, latestCompletedReview, removeDeepLabel } from '../ci-coexist.js'
 
 export const name = 'maestro-review-ci-trigger'
@@ -159,13 +159,6 @@ export async function fetchMrDetail(config: CiEnvConfig, fetcher: typeof fetch =
   return { sourceBranch: body.source_branch, headSha: body.sha, projectPath, ...(typeof body.target_branch === 'string' ? { targetBranch: body.target_branch } : {}) }
 }
 
-async function fetchDefaultBranch(config: CiEnvConfig, fetcher: typeof fetch): Promise<string | undefined> {
-  const res = await fetcher(`${config.gitlabBaseUrl}/api/v4/projects/${config.sourceProjectId}`, { headers: gitlabAuthHeaders(config.gitlabToken) })
-  if (!res.ok) return undefined
-  const body = await res.json() as { default_branch?: unknown }
-  return typeof body.default_branch === 'string' ? body.default_branch : undefined
-}
-
 /**
  * How CI reaches the code: quick with no or the generic profile reads the
  * diff only (no clone cost); a framework profile and every deep review clone
@@ -203,22 +196,7 @@ export async function runCiTrigger(
   const { sourceBranch, headSha, projectPath } = await fetchMrDetail(config, deps.fetcher)
   // Per-project settings from the project's default branch: the author chooses the MR target,
   // so a target branch they pushed could carry settings that relax their own review.
-  let file: RepoReviewConfig = {}
-  const warnings: string[] = []
-  const defaultBranch = await fetchDefaultBranch(config, deps.fetcher ?? fetch).catch(() => undefined)
-  if (defaultBranch === undefined) warnings.push(`${REPO_CONFIG_PATH} not read: the project's default branch is unknown; using the defaults`)
-  else {
-    try {
-      const text = await fetchRepoFile(deps.fetcher ?? fetch, { baseUrl: config.gitlabBaseUrl, token: config.gitlabToken, projectId: config.sourceProjectId, ref: defaultBranch, path: REPO_CONFIG_PATH })
-      if (text !== undefined) {
-        const parsed = parseRepoConfig(text)
-        file = parsed.config
-        warnings.push(...parsed.warnings)
-      }
-    } catch (err) {
-      warnings.push(`${REPO_CONFIG_PATH} could not be read (${err instanceof Error ? err.message : String(err)}); using the defaults`)
-    }
-  }
+  const { file, warnings } = await loadRepoSettings(timedFetcher(deps.fetcher ?? fetch), { baseUrl: config.gitlabBaseUrl, token: config.gitlabToken, projectId: config.sourceProjectId })
   const eff = effectiveConfig({ ...(config.reviewProfile !== undefined ? { profile: config.reviewProfile } : {}), ignoreGlobs: config.envIgnoreGlobs, fanout: config.envFanout }, file)
   const effConfig: CiEnvConfig = { ...config, reviewProfile: eff.profile, ignoreGlobs: eff.ignoreGlobs, fanout: eff.fanout }
   // Push-gate (mirror of the webhook autoRereviewOnPush semantics): the bridge fires
@@ -270,26 +248,16 @@ export async function runCiTrigger(
   const runReview = (extra: Partial<ReviewRequest> = {}, more: Partial<EngineRunOptions> = {}) => { gateMs = Date.now() - gateStart; return ctx.reviewEngine.run(request(extra), { ...options, ...more }) }
   const coFetcher = timedFetcher(deps.fetcher ?? fetch)
   // MR commands wait for the next review job; answer them before the push-gate decides.
-  const reply = async (discussionId: string, body: string) => {
-    const res = await coFetcher(`${config.gitlabBaseUrl}/api/v4/projects/${config.sourceProjectId}/merge_requests/${config.mrIid}/discussions/${encodeURIComponent(discussionId)}/notes`, {
-      method: 'POST', headers: { ...gitlabAuthHeaders(config.gitlabToken), 'content-type': 'application/json' }, body: JSON.stringify({ body }),
-    })
-    if (!res.ok) throw new Error(`GitLab ${res.status} posting a command answer`)
-  }
+  const reply = (discussionId: string, body: string) => replyToCommand(coFetcher, { baseUrl: config.gitlabBaseUrl, token: config.gitlabToken, projectId: config.sourceProjectId, mrIid: config.mrIid }, discussionId, body)
   let pending: PendingCommand[] = []
   if (botUserId !== undefined) {
     pending = await findPendingCommands(coFetcher, { baseUrl: config.gitlabBaseUrl, token: config.gitlabToken, projectId: config.sourceProjectId, mrIid: config.mrIid, botUserId })
       .catch((err: unknown) => { console.warn(`[review] MR commands unreadable: ${err instanceof Error ? err.message : String(err)}`); return [] })
   }
-  let answered = 0
-  for (const c of pending) {
-    if (c.command.kind === 'rereview') continue
-    const text = c.finding === undefined
-      ? '`/maestro explain` and `/maestro fix` work as a reply inside a review finding thread; `/maestro rereview [path]` works anywhere.'
-      : await ctx.reviewEngine.answer(request(), options, buildCommandPrompt(c.command, c.finding)).catch((err: unknown) => `Could not answer: ${err instanceof Error ? err.message : String(err)}`)
-    await reply(c.discussionId, `${sanitizeAgentText(text)}\n\n${commandMarker(c.noteId)}`).then(() => { answered++ })
-      .catch((err: unknown) => console.warn(`[review] command answer not posted: ${err instanceof Error ? err.message : String(err)}`))
-  }
+  let answered = await answerCommands(pending, {
+    answer: (prompt) => ctx.reviewEngine.answer !== undefined ? ctx.reviewEngine.answer(request(), options, prompt) : Promise.reject(new Error('this engine cannot answer commands')),
+    reply,
+  })
   const rereview = pending.find((c) => c.command.kind === 'rereview')
   let result: ReviewResult
   if (config.deepRequested) {
