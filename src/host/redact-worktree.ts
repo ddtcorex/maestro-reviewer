@@ -1,4 +1,4 @@
-import { lstat, readFile, readdir, writeFile } from 'node:fs/promises'
+import { lstat, readFile, readdir, stat, unlink, writeFile } from 'node:fs/promises'
 import { join, resolve, sep } from 'node:path'
 import { SECRET_KINDS, redact } from './redact.js'
 
@@ -6,7 +6,9 @@ import { SECRET_KINDS, redact } from './redact.js'
  * Redacts the files of an ephemeral review checkout in place, so the agents'
  * file tools never read a raw secret. Only ever run on the CI clone under
  * /tmp/maestro-*: anything else is refused. Text files up to `maxBytes`;
- * `.git` and symlinks are skipped (a symlink may point outside the root).
+ * `.git` and directory symlinks are skipped (they may point outside the
+ * root); a symlink to a file holding a secret is replaced by a redacted copy,
+ * so its target is never written.
  * Secrets only: personal data in files the MR does not touch is not the
  * review's to mask (the diff itself is still redacted in full), and masking
  * every email and phone number of a large codebase only fed the model noise.
@@ -22,14 +24,16 @@ export async function redactWorktree(root: string, opts: { maxBytes?: number } =
     for (const name of await readdir(dir)) {
       if (name === '.git') continue
       const p = join(dir, name)
-      const st = await lstat(p)
-      if (st.isSymbolicLink()) continue
-      if (st.isDirectory()) { await walk(p); continue }
+      const link = (await lstat(p)).isSymbolicLink()
+      const st = link ? await stat(p).catch(() => undefined) : await lstat(p)
+      if (st === undefined) continue
+      if (st.isDirectory()) { if (!link) await walk(p); continue }
       if (!st.isFile() || st.size > maxBytes) continue
       const buf = await readFile(p)
       if (buf.subarray(0, 8192).includes(0)) continue
       const r = redact(buf.toString('utf8'), { only: SECRET_KINDS })
       if (r.hits.length === 0) continue
+      if (link) await unlink(p)
       await writeFile(p, r.text)
       files++
       hits += r.hits.length
@@ -37,4 +41,13 @@ export async function redactWorktree(root: string, opts: { maxBytes?: number } =
   }
   await walk(abs)
   return { files, hits }
+}
+
+/**
+ * Pure. Whether a DSH host worktree is redacted: always, except when a
+ * runtime audit runs (a deep review of the whole MR with the runtime
+ * auditor), which needs the real files for tests and the environment.
+ */
+export function redactsWorkspace(p: { mode: string; scope: { kind: string } }, auditor: 'runtime' | 'static'): boolean {
+  return !(p.scope.kind === 'mr' && p.mode === 'deep' && auditor === 'runtime')
 }

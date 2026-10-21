@@ -47,7 +47,7 @@ describe('answerCommands', () => {
 describe('workspace worktree redaction', () => {
   it('redacts a host worktree unless a runtime audit needs the real files', async () => {
     const calls: string[] = []
-    vi.doMock('../src/host/redact-worktree.js', () => ({ redactWorktree: vi.fn(async (root: string) => { calls.push(root); return { files: 0, hits: 0 } }) }))
+    vi.doMock('../src/host/redact-worktree.js', async (importOriginal) => ({ ...await importOriginal<typeof import('../src/host/redact-worktree.js')>(), redactWorktree: vi.fn(async (root: string) => { calls.push(root); return { files: 0, hits: 0 } }) }))
     vi.resetModules()
     const { createReviewEngine } = await import('../src/host/engine.js')
     const forge = {
@@ -64,6 +64,26 @@ describe('workspace worktree redaction', () => {
     await go('deep', 'static')
     await go('deep', 'runtime')
     expect(calls).toEqual(['/tmp/maestro-mr-1-2', '/tmp/maestro-mr-1-2'])
+    vi.doUnmock('../src/host/redact-worktree.js')
+  })
+})
+
+describe('workspace worktree redaction failure', () => {
+  it('fails the review closed: no agent reads an unredacted worktree', async () => {
+    vi.doMock('../src/host/redact-worktree.js', async (importOriginal) => ({ ...await importOriginal<typeof import('../src/host/redact-worktree.js')>(), redactWorktree: vi.fn(async () => { throw new Error('disk full') }) }))
+    vi.resetModules()
+    const { createReviewEngine } = await import('../src/host/engine.js')
+    const forge = {
+      mrHeadSha: async () => 'abc', mrBaseSha: async () => 'b', compare: async () => undefined,
+      reviewScope: async () => ({ files: [{ path: 'a', bytes: 1 }], skipped: [] }),
+      postNote: async () => {}, replyToDiscussion: async () => {}, postFindings: async () => {},
+      signals: () => ({ start: async () => {}, finish: async () => {} }), mountAgentTools: async () => {},
+    }
+    const reviewer = vi.fn(async () => ({ summary: 'ok', failures: [] }))
+    const r = await createReviewEngine({} as any, { reviewer, auditor: vi.fn() } as any).run({ projectPath: 'g/p', projectId: 1, mrIid: 2, sourceBranch: 'b', headSha: 'abc', trigger: 'mention', mode: 'quick', scope: { kind: 'mr' } } as any,
+      { gitlab: { baseUrl: 'https://g', token: 't', botUsername: 'bot' }, access: { kind: 'workspace', localRepoPath: '/repo', ensureWorktree: async () => '/tmp/maestro-mr-1-2', removeWorktree: async () => {}, auditor: 'runtime' } as any, model: { provider: 'p', model: 'm' } as any, agentTimeoutMs: 1000, forge: forge as any })
+    expect(reviewer).not.toHaveBeenCalled()
+    expect(r.ok).toBe(false)
     vi.doUnmock('../src/host/redact-worktree.js')
   })
 })

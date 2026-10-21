@@ -484,7 +484,8 @@ its HTML comments escaped, so no agent text can forge a review marker.
 
 Limits: phone numbers in a national format and lowercase `password: value`
 lines are not recognised; the DSH host flow (webhook) redacts its worktree
-only when no runtime audit runs (a runtime audit needs the real files); and in
+only when no runtime audit runs (a runtime audit needs the real files), and a
+review stops if that redaction fails; and in
 a CI checkout the git history (`git log -p`,
 `git diff <base>..HEAD`) still holds the raw values because the lint needs
 it, so a secret is only as safe as the agent's refusal to read history.

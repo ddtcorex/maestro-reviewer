@@ -29,7 +29,7 @@ import { REPO_CONFIG_PATH, configChangedInMr } from './repo-config.js'
 import { secretFindings } from './redact.js'
 import { checkDbSchemaWhitelist, detectFrameworkVersions, frameworkContextLine, whitelistFindings } from './composer-context.js'
 import { FEEDBACK_WINDOW, MUTE_THRESHOLD, hasOpenThread, mutedCodes } from './review-feedback.js'
-import { redactWorktree } from './redact-worktree.js'
+import { redactWorktree, redactsWorkspace } from './redact-worktree.js'
 import type { FindingSeverity } from './review-findings-tool.js'
 import type { ReviewRequest, ReviewResult } from './events.js'
 import { lastCompletedReview, recordReviewFinish, recordReviewStart } from './review-history.js'
@@ -710,9 +710,10 @@ export function createReviewEngine(ctx: Context, agents: EngineAgents = createEn
               // Redact the checkout the agents read, unless a runtime audit (env up, tests) needs the real files.
               ensureWorktree: async (repoPath: string, branch: string, pid: number, iid: number, suffix?: string) => {
                 const wt = await access.ensureWorktree(repoPath, branch, pid, iid, suffix)
-                if (payload.mode === 'quick' || access.auditor === 'static') {
-                  const r = await redactWorktree(wt).catch((err: unknown) => { console.warn(`maestro-orchestrator: worktree not redacted: ${err instanceof Error ? err.message : String(err)}`); return undefined })
-                  if (r !== undefined && r.hits > 0) console.log(`[review] redacted ${r.hits} value(s) in ${r.files} file(s) of the worktree`)
+                if (redactsWorkspace(payload, access.auditor)) {
+                  // Fail closed, as in CI: no agent reads a worktree that could not be redacted.
+                  const r = await redactWorktree(wt)
+                  if (r.hits > 0) console.log(`[review] redacted ${r.hits} value(s) in ${r.files} file(s) of the worktree`)
                 }
                 return wt
               },

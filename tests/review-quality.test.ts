@@ -93,3 +93,32 @@ describe('deterministic dedupe (C1)', () => {
     expect(hasOpenThread({ code: 'SEC-SECRET-IN-DIFF', path: '.env', severity: 'blocking' }, blockingOpen)).toBe(true)
   })
 })
+
+describe('host worktree redaction (I3)', () => {
+  it('runs exactly when no runtime audit runs', async () => {
+    const { redactsWorkspace } = await import('../src/host/redact-worktree.js')
+    const mr = { kind: 'mr' as const }
+    const disc = { kind: 'discussion' as const }
+    expect(redactsWorkspace({ mode: 'deep', scope: mr }, 'runtime')).toBe(false)
+    expect(redactsWorkspace({ mode: 'deep', scope: disc }, 'runtime')).toBe(true)
+    expect(redactsWorkspace({ mode: 'quick', scope: mr }, 'runtime')).toBe(true)
+    expect(redactsWorkspace({ mode: 'deep', scope: mr }, 'static')).toBe(true)
+  })
+
+  it('replaces a symlink to a file holding a secret with a redacted copy, leaving the target alone', async () => {
+    const { symlink, lstat } = await import('node:fs/promises')
+    const outside = await mkdtemp('/tmp/maestro-quality-target-')
+    const root = await mkdtemp('/tmp/maestro-quality-')
+    try {
+      await writeFile(join(outside, 'env.php'), "'password' => 'hunter2'\n")
+      await symlink(join(outside, 'env.php'), join(root, 'env.php'))
+      await redactWorktree(root)
+      expect((await lstat(join(root, 'env.php'))).isSymbolicLink()).toBe(false)
+      expect(await readFile(join(root, 'env.php'), 'utf8')).toContain('[REDACTED:env-secret]')
+      expect(await readFile(join(outside, 'env.php'), 'utf8')).toContain('hunter2')
+    } finally {
+      await rm(root, { recursive: true, force: true })
+      await rm(outside, { recursive: true, force: true })
+    }
+  })
+})

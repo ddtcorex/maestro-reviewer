@@ -94,7 +94,8 @@ describe('redactWorktree', () => {
     const outside = mkdtempSync('/tmp/maestro-outside-')
     writeFileSync(join(outside, 'secret.env'), 'API_TOKEN=keepme\n')
     symlinkSync(join(outside, 'secret.env'), join(root, 'linked.env'))
-    expect(await redactWorktree(root)).toEqual({ files: 1, hits: 1 })
+    // The symlinked file is replaced by a redacted copy; its target stays as it was.
+    expect(await redactWorktree(root)).toEqual({ files: 2, hits: 2 })
     expect(readFileSync(join(root, 'app/etc/env.php'), 'utf8')).toContain('[REDACTED:env-secret]')
     expect(readFileSync(join(root, '.git/config'), 'utf8')).toContain('hunter2')
     expect(readFileSync(join(outside, 'secret.env'), 'utf8')).toContain('keepme')
