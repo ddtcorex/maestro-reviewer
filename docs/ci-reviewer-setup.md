@@ -428,7 +428,15 @@ after writing it (the same as the deep label):
 Only authors with Developer access or above are answered; each command is
 answered once (the bot's reply carries a hidden marker), at most 5 per run.
 
-### 5.6 Code Quality report
+### 5.6 Framework context and the schema whitelist
+
+The reviewer reads `composer.lock` at the MR head (or, without a lock,
+`composer.json`'s `require`) and tells the model the Magento, Hyvä and PHP
+versions in use, so findings fit those versions. An MR that changes a
+module's `etc/db_schema.xml` without its `etc/db_schema_whitelist.json` gets
+a major `MAGENTO-DB-WHITELIST` finding with the command that regenerates it.
+
+### 5.7 Code Quality report
 
 The review job keeps `gl-code-quality-report.json` (Code Climate format: one
 entry per new finding with a position) as an artifact and as a
@@ -440,7 +448,7 @@ reviewer project, which would expose every project's reviews to each other.
 So the widget stays empty by design; the findings are the MR threads and the
 artifact is for tooling.
 
-### 5.7 Secrets and personal data
+### 5.8 Secrets and personal data
 
 Before any model call the reviewer replaces private keys, cloud and forge
 tokens (AWS, GitLab, GitHub, OpenAI style), JWTs, `KEY=value` secrets

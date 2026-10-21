@@ -44,6 +44,8 @@ export interface ReviewForge {
   mrBaseSha(): Promise<string | undefined>
   /** Files the review may see after the ignore globs, and the paths they removed; throws when the diff cannot be read. */
   reviewScope(): Promise<{ files: Array<{ path: string; bytes: number }>; skipped: string[]; redacted?: Array<{ path: string; hits: DiffHit[] }> }>
+  /** A file's text at `ref`, undefined when it does not exist there. */
+  readFile(path: string, ref: string): Promise<string | undefined>
   /** Per finding code, how many of the project's last `window` MRs dismissed it with `/maestro dismiss`. */
   feedback(window: number): Promise<Map<string, number>>
   /** From now on the agent tools and reviewScope serve these files (an interdiff) instead of the MR diff. */
