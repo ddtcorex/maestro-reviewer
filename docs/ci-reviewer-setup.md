@@ -276,7 +276,7 @@ Use the numeric project id (shown on the project's overview page), for example
 | `REVIEW_PROFILE` | `magento2`, `laravel`, `symfony`, `wordpress`, `generic` | Framework checklist. Unset or `generic`: diff-only review. A framework profile clones the source at the head SHA and reviews the checkout. An unknown value fails the job. |
 | `REVIEW_ON_PUSH` | `1` | Re-review new pushes with an incremental-changes block. Unset: only the first review of an MR runs. |
 | `REVIEW_IGNORE_GLOBS` | comma-separated globs, for example `docs/**, **/*.svg` | Extra paths kept from the model, added to the defaults: `**/package-lock.json`, `**/pnpm-lock.yaml`, `**/yarn.lock`, `**/composer.lock`, `**/*.min.js`, `**/*.min.css`, `**/*.map`, `**/generated/**`, `pub/static/**`, `var/**`, `**/__snapshots__/**`, `**/i18n/*.csv`. A deleted file is matched on its old path. Skipped files are listed in the review comment; an MR whose every file matches gets one "Nothing reviewable" comment and no model call. A checkout review can still read a skipped file from the worktree. |
-| `REVIEW_FANOUT_FILES`, `REVIEW_FANOUT_BYTES` | positive integers, default `25` files and `150000` bytes of diff | Above either threshold the MR is reviewed in parallel parts: files are grouped by module (`app/code/<Vendor>/<Module>`, `app/design/<area>/<Vendor>`, else the first two directories), high risk files apart from the rest, each part within both thresholds (a single larger file is its own part). Findings are merged, deduped and posted once; the comment says `Reviewed in N parallel parts` and names any part that failed. The review fails only when every part fails. |
+| `REVIEW_FANOUT_FILES`, `REVIEW_FANOUT_BYTES` | positive integers, default `25` files and `150000` bytes of diff | Above either threshold the MR is reviewed in parallel parts: files are grouped by module (`app/code/<Vendor>/<Module>`, `app/design/<area>/<Vendor>`, else the first two directories), high risk files apart from the rest, each part within both thresholds (a single larger file is its own part); at most 6 parts, so a very large MR gets larger parts rather than a longer job. Parts skip the govard lint rule, which covers the whole MR. A review with a failed part is marked partial, and the next re-review covers the whole MR. Findings are merged, deduped and posted once; the comment says `Reviewed in N parallel parts` and names any part that failed. The review fails only when every part fails. |
 | `REVIEW_FANOUT_CONCURRENCY` | positive integer, default `3` | How many parts run at once. |
 | `REVIEW_LLM_PROVIDER` | `openai`, `anthropic`, `gemini`, `openrouter`, `deepseek`, `custom` | The project's own provider; a preset fills the base URL ([table](#provider-presets)), `custom` needs `REVIEW_LLM_BASE_URL`. |
 | `REVIEW_LLM_API_KEY` | the project's key (masked, expand off) | Bills this project's reviews to its own key. |
@@ -369,8 +369,9 @@ runs twice either way.
 A re-review looks at the interdiff only (what changed since the last reviewed
 head) when the MR base is the one that review recorded and GitLab returns every
 changed file's text. After a rebase (the base moved), when the prior head is
-unreachable, when GitLab collapsed a large file, or when the prior review
-predates 0.17 (no recorded base), it reviews the whole MR; the job log says
+unreachable, when GitLab collapsed a large file, when the prior review
+predates 0.17 (no recorded base) or was partial, and for every deep request, it
+reviews the whole MR; the job log says
 which (`full review: base changed since <sha>`). Existing threads stay visible
 to the reviewer either way, so it replies to them instead of posting
 duplicates.

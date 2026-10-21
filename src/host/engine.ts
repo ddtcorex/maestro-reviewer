@@ -209,7 +209,7 @@ export function createEngineAgents(ctx: Context): EngineAgents {
             installModelSelection(agentCtx, { current: agentOptions, assembled: undefined })
             await agentCtx.plugin(ReviewToolPolicy, { onToolCall: run.onToolCall })
             await mountAgentPreset(ctx.agentPresets, agentCtx, 'dsh-maestro-reviewer')
-            await run.forge.mountAgentTools(agentCtx, { onDiffTruncated: () => { diffTruncated = true }, ...(chunk !== undefined ? { onlyPaths: chunk.files } : {}) })
+            await run.forge.mountAgentTools(agentCtx, { onDiffTruncated: () => { diffTruncated = true }, ...(chunk !== undefined ? { onlyPaths: chunk.files, partLabel: chunk.label } : {}) })
             await agentCtx.plugin(ReviewFindingsTool, { onReport: (findings) => { capturedFindings = findings } })
             // Diff-only runs have no worktree; nothing to search there.
             if (worktreePath !== undefined) {
@@ -403,8 +403,9 @@ export function createReviewEngine(ctx: Context, agents: EngineAgents = createEn
         const priorHeadSha = payload.priorHeadSha ?? (await lastCompletedReview(payload.projectId, payload.mrIid))?.headSha
         if (priorHeadSha !== undefined && currentHeadSha !== undefined && priorHeadSha !== currentHeadSha) {
           const compare = await forge.compare(priorHeadSha, currentHeadSha)
-          const plan = payload.scope.kind === 'mr'
-            ? planIncremental({ headSha: priorHeadSha, ...(payload.priorBaseSha !== undefined ? { baseSha: payload.priorBaseSha } : {}) }, { headSha: currentHeadSha, ...(currentBaseSha !== undefined ? { baseSha: currentBaseSha } : {}) }, compare)
+          // A deep request asks for the whole MR, never only what changed since a quick pass.
+          const plan = payload.scope.kind === 'mr' && payload.mode === 'quick'
+            ? planIncremental({ headSha: priorHeadSha, ...(payload.priorBaseSha !== undefined ? { baseSha: payload.priorBaseSha } : {}), ...(payload.priorPartial === true ? { partial: true } : {}) }, { headSha: currentHeadSha, ...(currentBaseSha !== undefined ? { baseSha: currentBaseSha } : {}) }, compare)
             : undefined
           if (plan?.kind === 'interdiff') {
             forge.restrictToInterdiff(plan.files)
@@ -442,13 +443,14 @@ export function createReviewEngine(ctx: Context, agents: EngineAgents = createEn
         return { ok: true, summary, failures: [], durationMs: Date.now() - t0, ...telemetry() }
       }
       let scopeFiles: Array<{ path: string; bytes: number }> | undefined
-      const fanout = opts.fanout ?? DEFAULT_FANOUT
+      // Opt-in: only a caller that passes thresholds (the CI trigger) fans out.
+      const fanout = opts.fanout
       /** One reviewer run, or parallel parts for a large MR whose findings are merged and posted once. */
       const review = async (worktreePath: string | undefined, p: ReviewRequest, profile?: ReviewSkillProfile): Promise<ReviewOutcome> => {
-        const chunks = p.scope.kind === 'mr' && scopeFiles !== undefined ? planChunks(scopeFiles, fanout) : []
+        const chunks = fanout !== undefined && p.scope.kind === 'mr' && scopeFiles !== undefined ? planChunks(scopeFiles, fanout) : []
         if (chunks.length <= 1) return agents.reviewer(worktreePath, p, agentRun, profile, incrementalBlock)
         const runFor = (c: Chunk): AgentRunConfig => c.risk === 'high' && opts.deepModel !== undefined ? { ...agentRun, model: opts.deepModel } : agentRun
-        const settled = await runWithConcurrency(chunks.map((c) => () => agents.reviewer(worktreePath, p, runFor(c), profile, incrementalBlock, { label: c.id, files: c.files })), fanout.concurrency)
+        const settled = await runWithConcurrency(chunks.map((c) => () => agents.reviewer(worktreePath, p, runFor(c), profile, incrementalBlock, { label: c.id, files: c.files })), fanout?.concurrency ?? DEFAULT_FANOUT.concurrency)
         const done = settled.flatMap((r) => r.status === 'fulfilled' ? [r.value] : [])
         const failed = settled.flatMap((r, i) => r.status === 'rejected' ? [{ chunk: chunks[i], reason: r.reason instanceof Error ? r.reason.message : String(r.reason) }] : [])
         if (done.length === 0) throw new Error(`every review part failed: ${failed[0].reason}`)
@@ -461,6 +463,7 @@ export function createReviewEngine(ctx: Context, agents: EngineAgents = createEn
           severityCounts: countFindingSeverities(findings),
           findings,
           models: [...new Set(done.flatMap((o) => o.models ?? []))],
+          ...(failed.length > 0 ? { partial: true } : {}),
         }
       }
       const diffOnly = () => runDiffOnlyReview(payload, {

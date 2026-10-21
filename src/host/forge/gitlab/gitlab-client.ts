@@ -20,6 +20,8 @@ export interface Config {
   loadDiffs?: () => Promise<ReviewDiffs>
   /** A fan-out part: the tools serve only these new paths. */
   onlyPaths?: string[]
+  /** A fan-out part's label: parts share one workspace, so each spills to its own file. */
+  partLabel?: string
 }
 
 /** The MR diffs a review may see, and the paths the ignore globs removed. */
@@ -34,6 +36,7 @@ export const Config: z<Config> = z.object({
   onDiffTruncated: z.function(),
   loadDiffs: z.function(),
   onlyPaths: z.array(z.string()),
+  partLabel: z.string(),
 })
 
 /** Hard cap on diff files fetched for one review. */
@@ -146,15 +149,17 @@ interface OwnThread {
  * ("path outside cwd", tickets g-dd0d1679/g-716cd436). Writing the diff
  * inside the workspace root keeps it readable via the read tool.
  */
-export function resolveDiffSpillPath(workspaceRoot: string, mrIid: number): string {
-  return join(resolve(workspaceRoot), '.maestro', `mr-${mrIid}.diff`)
+const spillName = (mrIid: number, part?: string) => `mr-${mrIid}${part === undefined || part === '' ? '' : `-${part.replace(/[^A-Za-z0-9_-]/g, '')}`}.diff`
+
+export function resolveDiffSpillPath(workspaceRoot: string, mrIid: number, part?: string): string {
+  return join(resolve(workspaceRoot), '.maestro', spillName(mrIid, part))
 }
 
-export function writeDiffSpill(workspaceRoot: string, mrIid: number, text: string): { path: string; bytes: number } {
-  const abs = resolveDiffSpillPath(workspaceRoot, mrIid)
+export function writeDiffSpill(workspaceRoot: string, mrIid: number, text: string, part?: string): { path: string; bytes: number } {
+  const abs = resolveDiffSpillPath(workspaceRoot, mrIid, part)
   mkdirSync(join(resolve(workspaceRoot), '.maestro'), { recursive: true })
   writeFileSync(abs, text, 'utf-8')
-  return { path: join('.maestro', `mr-${mrIid}.diff`), bytes: Buffer.byteLength(text, 'utf8') }
+  return { path: join('.maestro', spillName(mrIid, part)), bytes: Buffer.byteLength(text, 'utf8') }
 }
 
 interface SC{agent?:{session?:{header?:{cwd?:string}}}}
@@ -231,7 +236,7 @@ export function apply(ctx: Context, config: Config): void {
       // No session cwd (should not happen for review agents): fall back to
       // the legacy inline text, which the runtime may spill to /tmp.
       if (cwd === undefined) return { path: '', bytes: Buffer.byteLength(text, 'utf8'), files: diffFileList(diffs) }
-      const spilled = writeDiffSpill(cwd, config.mrIid, text)
+      const spilled = writeDiffSpill(cwd, config.mrIid, text, config.partLabel)
       return { ...spilled, files: diffFileList(diffs) }
     },
   }))

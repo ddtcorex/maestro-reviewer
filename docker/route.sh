@@ -45,7 +45,7 @@ select_route() {
       REVIEW_LLM_BASE_URL="$REVIEW_ROUTE_BASE_URL"
       REVIEW_LLM_API="${REVIEW_ROUTE_API:-openai-completions}"
       # A default-scope model pin must not choose the model a project pays for.
-      unset REVIEW_MODEL_PROVIDER REVIEW_MODEL
+      unset REVIEW_MODEL_PROVIDER REVIEW_MODEL REVIEW_DEEP_MODEL_PROVIDER REVIEW_DEEP_MODEL
       ;;
     *)
       route_fail "invalid REVIEW_ROUTE (allowed: default, project, unconfigured)"

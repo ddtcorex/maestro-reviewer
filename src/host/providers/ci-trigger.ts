@@ -178,7 +178,7 @@ export async function runCiTrigger(
   // cache is per runner and races across concurrent jobs, so it is only a fallback
   // when GitLab cannot be read.
   const history = deps.history ?? { lastCompletedReview }
-  let prior: { headSha?: string; baseSha?: string } | undefined
+  let prior: { headSha?: string; baseSha?: string; partial?: boolean } | undefined
   let botUserId: number | undefined
   try {
     botUserId = await fetchBotUserId(deps.fetcher ?? fetch, config.gitlabBaseUrl, config.gitlabToken)
@@ -208,6 +208,7 @@ export async function runCiTrigger(
     headSha,
     ...(prior?.headSha !== undefined ? { priorHeadSha: prior.headSha } : {}),
     ...(prior?.baseSha !== undefined ? { priorBaseSha: prior.baseSha } : {}),
+    ...(prior?.partial === true ? { priorPartial: true } : {}),
     trigger: 'mention',
     mode: config.mode,
     scope: { kind: 'mr' },

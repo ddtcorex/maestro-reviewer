@@ -54,5 +54,5 @@ export interface ReviewForge {
   /** Running and final markers on the merge request. */
   signals(): ForgeSignals
   /** Mounts the forge's read tools (diffs, threads, inline comments) on a review agent. */
-  mountAgentTools(agentCtx: Context, opts: { onDiffTruncated?(): void; onlyPaths?: string[] }): Promise<void>
+  mountAgentTools(agentCtx: Context, opts: { onDiffTruncated?(): void; onlyPaths?: string[]; partLabel?: string }): Promise<void>
 }

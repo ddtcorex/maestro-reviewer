@@ -44,6 +44,8 @@ export interface ReviewMeta {
   findings: Array<{ code: string; fingerprint: string; severity: string }>
   muted?: string[]
   truncated?: boolean
+  /** The review did not see every file (a failed fan-out part, a capped diff): the next one must be full. */
+  partial?: boolean
   at: string
 }
 
@@ -82,6 +84,7 @@ function isReviewMeta(x: unknown): x is ReviewMeta {
   }
   if (m.muted !== undefined && (!Array.isArray(m.muted) || !m.muted.every(isStr))) return false
   if (m.truncated !== undefined && typeof m.truncated !== 'boolean') return false
+  if (m.partial !== undefined && typeof m.partial !== 'boolean') return false
   return true
 }
 
@@ -110,6 +113,7 @@ export function buildReviewMeta(opts: {
   models: string[]
   findings: ReviewFinding[]
   usage?: { input: number; output: number; cached: number }
+  partial?: boolean
   now?: () => Date
 }): ReviewMeta {
   return {
@@ -119,6 +123,7 @@ export function buildReviewMeta(opts: {
     mode: opts.mode,
     models: opts.models,
     ...(opts.usage !== undefined ? { usage: opts.usage } : {}),
+    ...(opts.partial === true ? { partial: true } : {}),
     findings: opts.findings.map(f => ({ code: f.code ?? 'none', fingerprint: findingFingerprint(f), severity: f.severity ?? 'minor' })),
     at: (opts.now ?? (() => new Date()))().toISOString(),
   }

@@ -13,6 +13,13 @@ export interface FanoutSettings extends FanoutThresholds { concurrency: number }
 
 export const DEFAULT_FANOUT: FanoutSettings = { files: 25, bytes: 150_000, concurrency: 3 }
 
+/**
+ * Most parts one review runs: at the default concurrency two waves, so a very
+ * large MR grows its parts instead of the job time (a job killed by its
+ * timeout leaves the bot's eyes and the next run skips).
+ */
+export const MAX_PARTS = 6
+
 /** Magento code and themes group by module or theme, everything else by its first two segments. */
 export function groupKey(path: string): string {
   const parts = path.split('/')
@@ -23,6 +30,13 @@ export function groupKey(path: string): string {
 
 /** Pure. Under both thresholds the whole MR is one chunk `all`; a single file is never split. */
 export function planChunks(files: Array<{ path: string; bytes: number }>, t: FanoutThresholds): Chunk[] {
+  for (let scale = 1; ; scale++) {
+    const chunks = planChunksAt(files, { files: t.files * scale, bytes: t.bytes * scale })
+    if (chunks.length <= MAX_PARTS) return chunks
+  }
+}
+
+function planChunksAt(files: Array<{ path: string; bytes: number }>, t: FanoutThresholds): Chunk[] {
   const total = files.reduce((n, f) => n + f.bytes, 0)
   if (files.length <= t.files && total <= t.bytes) return [{ id: 'all', files: files.map((f) => f.path), risk: 'low' }]
   const high = new Set(splitScope({ files: files.map((f) => f.path) }, 'deep').split.deep.files)

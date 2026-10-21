@@ -37,7 +37,7 @@ export function buildIncrementalBlock(
 
 export type IncrementalPlan =
   | { kind: 'interdiff'; files: InterdiffFile[] }
-  | { kind: 'full'; reason: 'base changed' | 'prior base unknown' | 'prior head unreachable' | 'interdiff too large' }
+  | { kind: 'full'; reason: 'base changed' | 'prior base unknown' | 'prior head unreachable' | 'interdiff too large' | 'prior review partial' }
 
 /**
  * Whether a re-review can look at the interdiff alone (spec section 6, P6):
@@ -46,10 +46,11 @@ export type IncrementalPlan =
  * head is still reachable, and GitLab sent every file's text. Pure.
  */
 export function planIncremental(
-  prior: { headSha: string; baseSha?: string },
+  prior: { headSha: string; baseSha?: string; partial?: boolean },
   current: { headSha: string; baseSha?: string },
   compare: CompareResult | undefined,
 ): IncrementalPlan {
+  if (prior.partial === true) return { kind: 'full', reason: 'prior review partial' }
   if (prior.baseSha === undefined || current.baseSha === undefined) return { kind: 'full', reason: 'prior base unknown' }
   if (prior.baseSha !== current.baseSha) return { kind: 'full', reason: 'base changed' }
   if (compare === undefined) return { kind: 'full', reason: 'prior head unreachable' }

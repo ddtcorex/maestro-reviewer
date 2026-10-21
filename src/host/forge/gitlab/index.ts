@@ -61,6 +61,7 @@ export function gitlabForge(
         botUsername: cfg.botUsername,
         loadDiffs,
         ...(toolOpts.onlyPaths !== undefined ? { onlyPaths: toolOpts.onlyPaths } : {}),
+        ...(toolOpts.partLabel !== undefined ? { partLabel: toolOpts.partLabel } : {}),
         ...(toolOpts.onDiffTruncated !== undefined ? { onDiffTruncated: toolOpts.onDiffTruncated } : {}),
       })
     },

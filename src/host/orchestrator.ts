@@ -48,7 +48,8 @@ export interface ReviewerScopePromptOpts {
  */
 export function reviewerPromptParts(opts: ReviewerScopePromptOpts): { stable: string[]; dynamic: string[] } {
   const dynamic: string[] = []
-  if (opts.lint !== null) dynamic.push(`LINT RULE: you MUST run the govard lint with the bash tool at least once before report_review_findings, with workdir "${opts.lint.worktreePath}": govard audit run --checks lint --format json --mode auto --timeout auto --lint-provider govard --scope diff --base "${opts.lint.base}". Pass timeoutMs 600000 (the bash tool maximum); if the result says the command is still running and moved to a background job, poll it with job_output and never start it again. Exit 0 means clean and 1 means findings in the JSON output. A run that cannot execute (govard missing, no Docker, a timeout, an unsupported framework) is not a finding and must not stop the review: say that lint was unavailable and continue. A review that never attempts the lint run is incomplete.`)
+  // A part reviews a slice of the MR; the lint rule runs over the whole MR, so parts never get it.
+  if (opts.lint !== null && opts.part === undefined) dynamic.push(`LINT RULE: you MUST run the govard lint with the bash tool at least once before report_review_findings, with workdir "${opts.lint.worktreePath}": govard audit run --checks lint --format json --mode auto --timeout auto --lint-provider govard --scope diff --base "${opts.lint.base}". Pass timeoutMs 600000 (the bash tool maximum); if the result says the command is still running and moved to a background job, poll it with job_output and never start it again. Exit 0 means clean and 1 means findings in the JSON output. A run that cannot execute (govard missing, no Docker, a timeout, an unsupported framework) is not a finding and must not stop the review: say that lint was unavailable and continue. A review that never attempts the lint run is incomplete.`)
   if (opts.scopeKind === 'discussion') {
     return {
       stable: [`${opts.profileInstruction}Review only the requested inline discussion. Do not review unrelated files or start a broad audit. Call gitlab_get_mr_diff, then gitlab_get_file_diff for the file under review, then call report_review_findings exactly once when done.`],
@@ -303,6 +304,8 @@ export interface ReviewOutcome {
   models?: string[]
   /** A fan-out part's findings, left for the merged post. */
   deferredPost?: boolean
+  /** Some files were not reviewed (a failed part, a capped diff). */
+  partial?: boolean
 }
 
 export function reviewerSummary(postedNew: number, postedReplies: number, diffTruncated: boolean): string {
@@ -312,10 +315,10 @@ export function reviewerSummary(postedNew: number, postedReplies: number, diffTr
 /** Token usage of the run so far, for the metadata; optional on every deps object. */
 interface UsageDeps { usageTotal?(): { input: number; output: number; cached: number } | null; baseSha?: string }
 
-function metaFor(payload: ReviewRequest, outcome: Pick<ReviewOutcome, 'findings' | 'models'>, deps: UsageDeps): ReviewMeta | undefined {
+function metaFor(payload: ReviewRequest, outcome: Pick<ReviewOutcome, 'findings' | 'models' | 'partial'>, deps: UsageDeps): ReviewMeta | undefined {
   if (payload.headSha === undefined) return undefined
   const usage = deps.usageTotal?.() ?? undefined
-  return buildReviewMeta({ headSha: payload.headSha, ...(deps.baseSha !== undefined ? { baseSha: deps.baseSha } : {}), mode: payload.mode, models: outcome.models ?? [], findings: outcome.findings ?? [], ...(usage !== undefined ? { usage } : {}) })
+  return buildReviewMeta({ headSha: payload.headSha, ...(deps.baseSha !== undefined ? { baseSha: deps.baseSha } : {}), mode: payload.mode, models: outcome.models ?? [], findings: outcome.findings ?? [], ...(usage !== undefined ? { usage } : {}), ...(outcome.partial === true ? { partial: true } : {}) })
 }
 
 /**

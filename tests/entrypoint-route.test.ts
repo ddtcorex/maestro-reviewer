@@ -14,7 +14,7 @@ function route(env: Record<string, string>, settings = BAKED) {
   const generic = join(dir, 'settings.generic-openai.yaml')
   writeFileSync(target, settings)
   writeFileSync(generic, readFileSync('docker/ci-settings.generic-openai.yaml', 'utf-8'))
-  const r = spawnSync('sh', ['-c', '. docker/route.sh; select_route "$1" "$2"; rc=$?; echo "PIN=${REVIEW_MODEL_PROVIDER:-}/${REVIEW_MODEL:-}"; exit $rc', 'sh', target, generic], {
+  const r = spawnSync('sh', ['-c', '. docker/route.sh; select_route "$1" "$2"; rc=$?; echo "PIN=${REVIEW_MODEL_PROVIDER:-}/${REVIEW_MODEL:-}"; echo "DEEP=${REVIEW_DEEP_MODEL_PROVIDER:-}/${REVIEW_DEEP_MODEL:-}"; exit $rc', 'sh', target, generic], {
     env: { PATH: process.env.PATH ?? '/usr/bin:/bin', CI_JOB_ID: '123', ...env }, encoding: 'utf-8',
   })
   return { code: r.status, out: readFileSync(target, 'utf-8'), stderr: r.stderr + r.stdout }
@@ -80,6 +80,12 @@ describe('select_route', () => {
     expect(project.stderr).toContain('PIN=/')
     const fallback = route({ ...pin, ...triple })
     expect(fallback.stderr).toContain('PIN=custom-openai/default-pinned')
+  })
+
+  it('a project route also drops the default-scope deep model pair used for fan-out parts', () => {
+    const deep = { REVIEW_DEEP_MODEL_PROVIDER: 'deepseek-official', REVIEW_DEEP_MODEL: 'deepseek-v4-pro' }
+    expect(route({ ...deep, ...projectRoute('k') }).stderr).toContain('DEEP=/')
+    expect(route({ ...deep, ...triple }).stderr).toContain('DEEP=deepseek-official/deepseek-v4-pro')
   })
 
   it('unconfigured returns 3 so the entrypoint exits without a review', () => {
