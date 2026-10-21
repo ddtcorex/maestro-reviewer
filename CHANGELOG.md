@@ -1,5 +1,53 @@
 # Changelog
 
+## [0.19.0] - 2026-10-21
+
+Host helpers for the DSH plugin, the deferred B3 and B4 minors, and faster,
+truer reviews on large checkouts (#194).
+
+### Added
+
+- Engine helpers shared by the CI trigger and the DSH host plugin:
+  `answerCommands` and `replyToCommand` (`ci-commands`), `loadRepoSettings`
+  (`ci-repo-settings`), pinned in `engine-exports` with `latestCompletedReview`.
+- A partial review comment shows `⚠️ Partial` and how many files a failed
+  part left unreviewed, instead of `✅ Completed`.
+
+### Changed
+
+- Fan-out is opt-in: it runs only when a `REVIEW_FANOUT_*` variable or
+  `fanout` in `.maestro-review.yml` is set. On a checkout every part explored
+  the codebase again, which measured slower and costlier than one agent.
+- Review agents no longer get `web_fetch` or `web_search` (minutes per
+  review, and an easy way out for what an agent reads; `bash` remains).
+- `MAGENTO-DB-WHITELIST` is minor, and says why the whitelist matters.
+- The model's thread list leaves out engine-made findings
+  (`SEC-SECRET-IN-DIFF`, `MAGENTO-DB-WHITELIST`, `CFG-CHANGED`).
+- Checkout redaction masks secrets only; emails and phone numbers are still
+  masked in the diff. File symlinks that resolve outside the checkout or into
+  `.git` are removed.
+- The DSH host flow redacts its worktree whenever no runtime audit runs, and
+  stops the review when redaction fails.
+
+### Fixed
+
+- An open major thread no longer hides a blocking deterministic finding of
+  the same code and path.
+- A partial review (a failed part, a path rereview) no longer stands for its
+  head in the CI push-gate and coexistence check; one cut by GitLab's diff
+  file cap still does (`capped` in the metadata), so it is not re-run on
+  every pipeline.
+- A fan-out review of a capped diff is marked partial.
+- A failed `/maestro` command answer is retried by the next job instead of
+  being consumed.
+- 15 s timeouts on the CI trigger's GitLab calls; a compare that timed out
+  or reached GitLab's 1000 file limit is not an interdiff.
+- Ignore globs match inside dot directories; usage reading never throws; a
+  half-set `REVIEW_DEEP_MODEL` pair fails at parse time.
+- `review-report.json` findings keep code, severity, path and line only.
+- The project rules prompt and the `CFG-CHANGED` notice name the default
+  branch.
+
 ## [0.18.0] - 2026-10-21
 
 Per-project settings, redaction, an operator gate, feedback, MR commands,
