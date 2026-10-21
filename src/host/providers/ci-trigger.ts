@@ -13,9 +13,10 @@ import { resolveIgnoreGlobs } from '../diff-filter.js'
 import { DEFAULT_FANOUT, type FanoutSettings } from '../chunking.js'
 import { REPO_CONFIG_PATH, effectiveConfig, parseRepoConfig, type RepoReviewConfig } from '../repo-config.js'
 import { fetchRepoFile } from '../forge/gitlab/mr-api.js'
-import { gateExitCode, toCodeQuality, type ReviewGate } from '../codequality.js'
+import { toCodeQuality, type ReviewGate } from '../codequality.js'
+import { openBlockingThreads } from '../ci-gate.js'
+import { sanitizeAgentText } from '../forge/gitlab/gitlab-client.js'
 import { buildCommandPrompt, commandMarker, findPendingCommands, type PendingCommand } from '../ci-commands.js'
-import type { FindingSeverity } from '../review-findings-tool.js'
 import { fetchBotUserId, hasCompletedDeepReview, hasCompletedReviewForSha, hasRunningEyes, latestCompletedReview, removeDeepLabel } from '../ci-coexist.js'
 
 export const name = 'maestro-review-ci-trigger'
@@ -156,6 +157,13 @@ export async function fetchMrDetail(config: CiEnvConfig, fetcher: typeof fetch =
   return { sourceBranch: body.source_branch, headSha: body.sha, projectPath, ...(typeof body.target_branch === 'string' ? { targetBranch: body.target_branch } : {}) }
 }
 
+async function fetchDefaultBranch(config: CiEnvConfig, fetcher: typeof fetch): Promise<string | undefined> {
+  const res = await fetcher(`${config.gitlabBaseUrl}/api/v4/projects/${config.sourceProjectId}`, { headers: gitlabAuthHeaders(config.gitlabToken) })
+  if (!res.ok) return undefined
+  const body = await res.json() as { default_branch?: unknown }
+  return typeof body.default_branch === 'string' ? body.default_branch : undefined
+}
+
 /**
  * How CI reaches the code: quick with no or the generic profile reads the
  * diff only (no clone cost); a framework profile and every deep review clone
@@ -190,13 +198,16 @@ export async function runCiTrigger(
   const bootMs = Math.round(performance.now())
   const gateStart = Date.now()
   let gateMs: number | undefined
-  const { sourceBranch, headSha, projectPath, targetBranch } = await fetchMrDetail(config, deps.fetcher)
-  // Per-project settings from the target branch: an MR cannot relax its own review.
+  const { sourceBranch, headSha, projectPath } = await fetchMrDetail(config, deps.fetcher)
+  // Per-project settings from the project's default branch: the author chooses the MR target,
+  // so a target branch they pushed could carry settings that relax their own review.
   let file: RepoReviewConfig = {}
   const warnings: string[] = []
-  if (targetBranch !== undefined) {
+  const defaultBranch = await fetchDefaultBranch(config, deps.fetcher ?? fetch).catch(() => undefined)
+  if (defaultBranch === undefined) warnings.push(`${REPO_CONFIG_PATH} not read: the project's default branch is unknown; using the defaults`)
+  else {
     try {
-      const text = await fetchRepoFile(deps.fetcher ?? fetch, { baseUrl: config.gitlabBaseUrl, token: config.gitlabToken, projectId: config.sourceProjectId, ref: targetBranch, path: REPO_CONFIG_PATH })
+      const text = await fetchRepoFile(deps.fetcher ?? fetch, { baseUrl: config.gitlabBaseUrl, token: config.gitlabToken, projectId: config.sourceProjectId, ref: defaultBranch, path: REPO_CONFIG_PATH })
       if (text !== undefined) {
         const parsed = parseRepoConfig(text)
         file = parsed.config
@@ -274,7 +285,7 @@ export async function runCiTrigger(
     const text = c.finding === undefined
       ? '`/maestro explain` and `/maestro fix` work as a reply inside a review finding thread; `/maestro rereview [path]` works anywhere.'
       : await ctx.reviewEngine.answer(request(), options, buildCommandPrompt(c.command, c.finding)).catch((err: unknown) => `Could not answer: ${err instanceof Error ? err.message : String(err)}`)
-    await reply(c.discussionId, `${text}\n\n${commandMarker(c.noteId)}`).then(() => { answered++ })
+    await reply(c.discussionId, `${sanitizeAgentText(text)}\n\n${commandMarker(c.noteId)}`).then(() => { answered++ })
       .catch((err: unknown) => console.warn(`[review] command answer not posted: ${err instanceof Error ? err.message : String(err)}`))
   }
   const rereview = pending.find((c) => c.command.kind === 'rereview')
@@ -306,13 +317,12 @@ export async function runCiTrigger(
     result = path !== undefined && full !== undefined
       ? await runReview({ pathPrefix: path }, { carryFindings: full })
       : await runReview()
-    if (full !== undefined && path !== undefined) result = { ...result, gateSeverities: [...(result.gateSeverities ?? []), ...full.map((f) => f.severity)] }
     const note = result.ok ? `Re-reviewed ${path === undefined ? 'the whole MR' : `\`${path}\``} at ${headSha.slice(0, 8)}; see the review comment.` : `The re-review failed: ${result.failures[0] ?? 'unknown error'}`
     await reply(rereview.discussionId, `${note}\n\n${commandMarker(rereview.noteId)}`).then(() => { answered++ })
       .catch((err: unknown) => console.warn(`[review] rereview answer not posted: ${err instanceof Error ? err.message : String(err)}`))
   } else if (prior?.headSha === headSha) {
     // A rerun of a reviewed head must not slip past the gate: carry that review's severities.
-    result = { ok: true, summary: `already reviewed at ${headSha}, skipping`, failures: [], durationMs: 0, ...(prior.findings !== undefined ? { gateSeverities: prior.findings.map((f) => f.severity) } : {}) }
+    result = { ok: true, summary: `already reviewed at ${headSha}, skipping`, failures: [], durationMs: 0 }
   } else if (prior !== undefined && !config.rereviewOnPush) {
     result = { ok: true, summary: `new commits since ${prior.headSha} but REVIEW_ON_PUSH is not set, skipping`, failures: [], durationMs: 0 }
   } else if (await hasCompletedReviewForSha(coFetcher, config.gitlabBaseUrl, config.gitlabToken, config.sourceProjectId, config.mrIid, headSha, botUserId)) {
@@ -342,11 +352,26 @@ export async function runCiTrigger(
   return result
 }
 
-/** 1 on an infra failure, 3 when the operator's gate meets a blocking finding, else 0. */
-export function ciExitCode(result: ReviewResult, config: Pick<CiEnvConfig, 'gate'>): 0 | 1 | 3 {
+/**
+ * 1 on an infra failure; with REVIEW_GATE=blocking, 3 while the MR has an
+ * open blocking bot thread (read from GitLab at the end of every job, skips
+ * included) or this review was partial; else 0. An unreadable MR fails closed.
+ */
+export async function ciExitCode(
+  result: ReviewResult, config: Pick<CiEnvConfig, 'gate' | 'gitlabBaseUrl' | 'gitlabToken' | 'sourceProjectId' | 'mrIid'>, fetcher: typeof fetch = fetch,
+): Promise<0 | 1 | 3> {
   if (!result.ok) return 1
-  const carried = (result.gateSeverities ?? []).map((severity) => ({ status: 'new' as const, body: '', severity: severity as FindingSeverity }))
-  return gateExitCode([...(result.findings ?? []), ...carried], config.gate)
+  if (config.gate !== 'blocking') return 0
+  if (result.partial === true) { console.error('[review] gate: some files were not reviewed (a failed part), failing closed'); return 3 }
+  try {
+    const botUserId = await fetchBotUserId(fetcher, config.gitlabBaseUrl, config.gitlabToken)
+    const open = await openBlockingThreads(fetcher, { baseUrl: config.gitlabBaseUrl, token: config.gitlabToken, projectId: config.sourceProjectId, mrIid: config.mrIid, botUserId })
+    if (open > 0) console.error(`[review] gate: ${open} open blocking thread(s); resolve or fix them`)
+    return open > 0 ? 3 : 0
+  } catch (err) {
+    console.error(`[review] gate: MR state unreadable (${err instanceof Error ? err.message : String(err)}), failing closed`)
+    return 3
+  }
 }
 
 export function apply(ctx: Context): void {
@@ -364,7 +389,7 @@ export function apply(ctx: Context): void {
         if (exit === undefined) {
           console.error('[review] ctx.get(\'appExit\') is undefined — the launcher did not provide it, process cannot signal its real exit code')
         } else {
-          exit(ciExitCode(result, config))
+          exit(await ciExitCode(result, config))
         }
       } catch (err) {
         console.error('maestro-review-ci-trigger:', err instanceof Error ? err.message : String(err))

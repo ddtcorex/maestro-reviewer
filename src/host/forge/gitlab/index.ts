@@ -11,7 +11,9 @@ import { runWithConcurrency } from '../../chunking.js'
 
 /** Every diff the agents see passes through the redactor; the hits stay with the forge. */
 function redactAll(all: GitlabClient.GitlabDiff[], skipped: string[], truncated: boolean, prefix?: string): GitlabClient.ReviewDiffs {
-  const kept = prefix === undefined ? all : all.filter((d) => d.new_path.startsWith(prefix) || d.old_path.startsWith(prefix))
+  // Directory boundary: `src` matches src/a.php, never src2/b.php.
+  const under = (p: string) => prefix !== undefined && (prefix.endsWith('/') ? p.startsWith(prefix) : p === prefix || p.startsWith(`${prefix}/`))
+  const kept = prefix === undefined ? all : all.filter((d) => under(d.new_path) || under(d.old_path))
   const redacted: NonNullable<GitlabClient.ReviewDiffs['redacted']> = []
   const diffs = kept.map((d) => {
     const r = redactDiff(d.diff)
@@ -102,6 +104,7 @@ export function gitlabForge(
         loadDiffs,
         ...(toolOpts.onlyPaths !== undefined ? { onlyPaths: toolOpts.onlyPaths } : {}),
         ...(toolOpts.partLabel !== undefined ? { partLabel: toolOpts.partLabel } : {}),
+        ...(toolOpts.readOnly === true ? { readOnly: true } : {}),
         ...(toolOpts.onDiffTruncated !== undefined ? { onDiffTruncated: toolOpts.onDiffTruncated } : {}),
       })
     },

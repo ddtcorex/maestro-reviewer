@@ -33,7 +33,3 @@ export function toCodeQuality(findings: ReviewFinding[]): CodeQualityIssue[] {
 
 export type ReviewGate = 'off' | 'blocking'
 
-/** 3 fails the review job on a blocking finding when the gate is on; infra errors keep their own code. */
-export function gateExitCode(findings: ReviewFinding[], gate: ReviewGate): 0 | 3 {
-  return gate === 'blocking' && findings.some((f) => normalizeFindingSeverity(f.severity) === 'blocking') ? 3 : 0
-}

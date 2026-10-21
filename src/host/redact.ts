@@ -19,6 +19,7 @@ const placeholder = (kind: RedactionKind) => `[REDACTED:${kind}]`
 interface Rule { kind: RedactionKind; re: RegExp; value?: (m: RegExpExecArray) => { start: number; end: number } | undefined }
 
 const ENV_KEY = '[A-Za-z0-9_]*(?:PASSWORD|PASSWD|SECRET|TOKEN|API_KEY|APIKEY|ACCESS_KEY|PRIVATE_KEY)[A-Za-z0-9_]*'
+const NOT_SECRET_KEY = /(?:TTL|LENGTH|EXPIRY|EXPIRES|EXPIRATION|HEADER|NAME|TYPE|URL|PATH|FIELD|PARAM|LIFETIME|TIMEOUT|COUNT|SIZE|MIN|MAX)[A-Za-z0-9_]*[ \t]*[=:]/
 const ARRAY_KEY = 'password|passwd|secret|api_key|apikey|token|access_token|private_key|client_secret'
 
 const RULES: Rule[] = [
@@ -32,7 +33,10 @@ const RULES: Rule[] = [
     kind: 'env-secret',
     // Same-line only ([ \t], never \s): an empty `KEY=` must not take the next line as its value.
     re: new RegExp(`((?<![A-Za-z0-9_])(?:export[ \\t]+)?${ENV_KEY}[ \\t]*[=:][ \\t]*)(['"]?)([^\\s'"#$%{\\[(][^\\s'"#()]*)\\2(?![(\\w.])`, 'g'),
-    value: (m) => (/^(?:process\.|getenv|env\b)/.test(m[3]) ? undefined : { start: m.index + m[1].length + m[2].length, end: m.index + m[1].length + m[2].length + m[3].length }),
+    // Settings that only look like secrets (TOKEN_TTL=3600, PASSWORD_MIN_LENGTH: 8, API_TOKEN_HEADER = 'X-Auth-Token') stay.
+    value: (m) => (/^(?:process\.|getenv|env\b)/.test(m[3]) || /^\d+$/.test(m[3]) || NOT_SECRET_KEY.test(m[1])
+      ? undefined
+      : { start: m.index + m[1].length + m[2].length, end: m.index + m[1].length + m[2].length + m[3].length }),
   },
   // PHP arrays such as Magento's app/etc/env.php: 'password' => 'literal'.
   {
@@ -43,7 +47,8 @@ const RULES: Rule[] = [
   { kind: 'email', re: /(?<![A-Za-z0-9._%-])[A-Za-z0-9][A-Za-z0-9._%+-]*@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}\b/g },
   {
     kind: 'phone',
-    re: /(?<!\w)\+\d{1,3}(?:[ .-]?\(?\d{1,4}\)?){2,5}(?!\w)/g,
+    // Never at a line start: in a diff that `+` is the added-line marker (+20231021,... is data, not a phone).
+    re: /(?<!\w)(?<!^)\+\d{1,3}(?:[ .-]?\(?\d{1,4}\)?){2,5}(?!\w)/gm,
     value: (m) => (m[0].replace(/\D/g, '').length >= 8 ? { start: m.index, end: m.index + m[0].length } : undefined),
   },
 ]
@@ -115,8 +120,10 @@ export function secretFindings(files: Array<{ path: string; hits: DiffHit[] }>):
   for (const file of files) {
     const added = file.hits.filter((h) => h.added && h.line !== undefined && SECRET_KINDS.has(h.kind))
     if (added.length === 0) continue
+    // Token formats are near certain; a KEY=value secret is a heuristic, so it is major, never a gate blocker.
+    const severity = added.some((h) => h.kind !== 'env-secret') ? 'blocking' : 'major'
     out.push({
-      status: 'new', path: file.path, line: added[0].line, severity: 'blocking', category: 'security', code: 'SEC-SECRET-IN-DIFF',
+      status: 'new', path: file.path, line: added[0].line, severity, category: 'security', code: 'SEC-SECRET-IN-DIFF',
       body: `This change adds what looks like a secret: ${added.map((h) => `${h.kind} (line ${h.line})`).join(', ')}. The value was redacted before the review. Remove it, rotate it, and load it from the environment or a secret store instead.`,
     })
   }

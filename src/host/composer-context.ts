@@ -12,6 +12,10 @@ export interface FrameworkVersions { magento?: string; magentoFramework?: string
 const MAGENTO = ['magento/product-community-edition', 'magento/product-enterprise-edition', 'magento/magento2-base']
 const HYVA = ['hyva-themes/magento2-default-theme', 'hyva-themes/magento2-theme-module']
 
+/** Version or constraint text only: composer files come from the MR head, so anything else is untrusted prose. */
+const VERSION = /^[A-Za-z0-9.*~^|<>=@ ,-]{1,40}$/
+const versionText = (v: unknown): v is string => typeof v === 'string' && VERSION.test(v) && !/\s{2}|[a-z]{4}\s[a-z]{3}/i.test(v)
+
 const isObject = (v: unknown): v is Record<string, unknown> => v !== null && typeof v === 'object' && !Array.isArray(v)
 
 /** Pure. A lock wins; composer.json `require` constraints fill in when there is no lock. */
@@ -23,17 +27,17 @@ export function detectFrameworkVersions(lock: unknown, composerJson?: unknown): 
     const version = (names: string[]) => packages.find((p) => names.includes(String(p.name)))?.version
     const magento = version(MAGENTO)
     const hyva = version(HYVA)
-    if (typeof magento === 'string') out.magento = magento
-    if (typeof hyva === 'string') out.hyva = hyva
-    if (isObject(lock.platform) && typeof lock.platform.php === 'string') out.php = lock.platform.php
+    if (versionText(magento)) out.magento = magento
+    if (versionText(hyva)) out.hyva = hyva
+    if (isObject(lock.platform) && versionText(lock.platform.php)) out.php = lock.platform.php
     return out
   }
   if (isObject(composerJson) && isObject(composerJson.require)) {
     const req = composerJson.require as Record<string, unknown>
-    if (typeof req['magento/framework'] === 'string') out.magentoFramework = req['magento/framework']
-    const hyva = HYVA.map((n) => req[n]).find((v) => typeof v === 'string')
-    if (typeof hyva === 'string') out.hyva = hyva
-    if (typeof req.php === 'string') out.php = req.php
+    if (versionText(req['magento/framework'])) out.magentoFramework = req['magento/framework']
+    const hyva = HYVA.map((n) => req[n]).find(versionText)
+    if (versionText(hyva)) out.hyva = hyva
+    if (versionText(req.php)) out.php = req.php
   }
   return out
 }

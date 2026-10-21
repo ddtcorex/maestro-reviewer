@@ -4,7 +4,7 @@ import { defineTool } from '@deepseek-ai/dsh-tools'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { gitlabAuthHeaders } from './gitlab-auth.js'
-import type { DiffHit } from '../../redact.js'
+import { redact, type DiffHit } from '../../redact.js'
 
 export const name = 'maestro-gitlab-client'
 export const inject = ['tools']
@@ -23,6 +23,8 @@ export interface Config {
   onlyPaths?: string[]
   /** A fan-out part's label: parts share one workspace, so each spills to its own file. */
   partLabel?: string
+  /** Only the two diff read tools (the command answer agent). */
+  readOnly?: boolean
 }
 
 /** The MR diffs a review may see, and the paths the ignore globs removed. */
@@ -38,7 +40,17 @@ export const Config: z<Config> = z.object({
   loadDiffs: z.function(),
   onlyPaths: z.array(z.string()),
   partLabel: z.string(),
+  readOnly: z.boolean(),
 })
+
+/**
+ * Escapes HTML comments in anything an agent writes to GitLab, so no agent
+ * text (steered by MR content) can carry a review marker or metadata block.
+ * Only the engine writes those, after this escaping.
+ */
+export function sanitizeAgentText(text: string): string {
+  return text.replace(/<!--/g, '&lt;!--')
+}
 
 /** Hard cap on diff files fetched for one review. */
 export const MAX_DIFF_FILES = 3000
@@ -184,7 +196,8 @@ export function selectOwnThreads(
       discussionId: d.id,
       path: d.notes[0].position!.new_path,
       line: d.notes[0].position!.new_line,
-      lastCommentBody: d.notes[d.notes.length - 1].body,
+      // Human replies reach the model here too: redact them like the diffs.
+      lastCommentBody: redact(d.notes[d.notes.length - 1].body).text,
       resolved: d.notes[0].resolved === true,
     }))
   return { threads, totalDiscussions: discussions.length }
@@ -268,6 +281,8 @@ export function apply(ctx: Context, config: Config): void {
     },
   }))
 
+  if (config.readOnly === true) return
+
   ctx.tools.register(defineTool({
     name: 'gitlab_post_mr_comment',
     description: 'Post a Markdown comment (discussion note) on this merge request.',
@@ -282,7 +297,7 @@ export function apply(ctx: Context, config: Config): void {
       const response = await fetch(`${apiBase}/notes`, {
         method: 'POST',
         headers: { ...headers, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ body: args.body }),
+        body: JSON.stringify({ body: sanitizeAgentText(args.body) }),
       })
       if (!response.ok) {
         throw new Error(`GitLab API error ${response.status}: ${await response.text()}`)
@@ -350,7 +365,7 @@ export function apply(ctx: Context, config: Config): void {
         method: 'POST',
         headers: { ...headers, 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          body: args.body,
+          body: sanitizeAgentText(args.body),
           position: {
             position_type: 'text',
             base_sha: diffRefs.base_sha,
@@ -384,7 +399,7 @@ export function apply(ctx: Context, config: Config): void {
       const response = await fetch(`${apiBase}/discussions/${args.discussionId}/notes`, {
         method: 'POST',
         headers: { ...headers, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ body: args.body }),
+        body: JSON.stringify({ body: sanitizeAgentText(args.body) }),
       })
       if (!response.ok) {
         throw new Error(`GitLab API error ${response.status}: ${await response.text()}`)
