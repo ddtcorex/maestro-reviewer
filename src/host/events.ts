@@ -1,3 +1,4 @@
+import type { AgentUsage, Stage } from './telemetry.js'
 export interface MrOpenedPayload {
   projectPath: string
   projectId: number
@@ -36,6 +37,10 @@ export interface ReviewRequest extends MrOpenedPayload {
    * local history store, which is runner-local in CI.
    */
   priorHeadSha?: string
+  /** MR base SHA the prior review recorded; with priorHeadSha it allows an interdiff review. */
+  priorBaseSha?: string
+  /** The prior review did not see every file. */
+  priorPartial?: boolean
   /** Short (8-char) head-sha hint for `push` triggers, taken from the webhook
    * body — feeds the in-flight key so two concurrent pushes stop deduping
    * each other. Absent when the body carries no sha. */
@@ -50,4 +55,8 @@ export interface ReviewResult {
   durationMs: number
   /** Tool calls the review's agents attempted, per tool name (absent when no agent ran). */
   toolCalls?: Record<string, number>
+  /** Wall clock per stage in ms (boot is added by the CI trigger). */
+  stages?: Partial<Record<Stage, number>>
+  /** Token usage per agent run; `usage` is null when the session reported none. */
+  usage?: AgentUsage[]
 }

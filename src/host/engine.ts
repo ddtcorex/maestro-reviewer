@@ -26,13 +26,16 @@ import { gitlabForge } from './forge/gitlab/index.js'
 import { countFindingSeverities } from './severity.js'
 import type { ReviewRequest, ReviewResult } from './events.js'
 import { lastCompletedReview, recordReviewFinish, recordReviewStart } from './review-history.js'
-import { buildIncrementalBlock } from './incremental.js'
+import { buildIncrementalBlock, planIncremental } from './incremental.js'
 import { loadedReviewProfile, type ReviewSkillProfile } from './skills-tool.js'
 import { REVIEW_SOURCE_KIND } from './source.js'
 import { cloneSourceRepo, defaultRun } from './ci-clone.js'
+import { DEFAULT_FANOUT, planChunks, runWithConcurrency, type Chunk, type FanoutSettings } from './chunking.js'
+import { mergeFindings } from './merge-findings.js'
+import { createStageTimer, sumUsage, usageFromSession, type AgentUsage, type TokenUsage } from './telemetry.js'
 import {
   agentOptionsForModel, assertSafeBranchName, assertTurnSucceededOrSalvage, auditorOutputFromSession, buildAuditorPrompt,
-  buildReviewerScopePrompt, getTurnErrorMessage, isBranchNotFoundError,
+  buildNothingReviewableComment, buildReviewerScopePrompt, getTurnErrorMessage, isBranchNotFoundError,
   isUnsupportedReasoningError, mountAgentPreset, reviewerSummary, runDiffOnlyReview, runReviewAndAudit,
   whenIdleWithTimeout, withAuditorDegrade,
   type DiffOnlyReviewDeps, type ReviewAndAuditDeps, type ReviewOutcome,
@@ -48,6 +51,13 @@ import {
 
 const execFileAsync = promisify(execFile)
 const GIT_TIMEOUT_MS = 60_000
+
+/**
+ * The CI review worktree. One review runs per job container, and DSH writes
+ * the session workspace path into the model-visible runtime context, so a
+ * per-MR path would end the provider's cached prefix right there.
+ */
+export const CI_WORKTREE_PATH = '/tmp/maestro-review-worktree'
 
 export type EnsureWorktree = (localRepoPath: string, sourceBranch: string, projectId: number, mrIid: number, keySuffix?: string) => Promise<string>
 
@@ -79,6 +89,12 @@ export interface EngineRunOptions {
   agentTimeoutMs: number
   /** The forge of this MR; defaults to GitLab at `gitlab`. */
   forge?: ReviewForge
+  /** Fan-out thresholds and parallelism (default DEFAULT_FANOUT). */
+  fanout?: FanoutSettings
+  /** Model for high risk fan-out parts; absent = one model for every part. */
+  deepModel?: ModelSelection
+  /** Paths kept from the model (default DEFAULT_IGNORE_GLOBS); used only by the default GitLab forge. */
+  ignoreGlobs?: readonly string[]
   /**
    * Final status of a run, with the review duration measured from the MR
    * signals start. Called once per run, except for a deduped worktree run;
@@ -109,11 +125,16 @@ export interface AgentRunConfig {
   agentTimeoutMs: number
   /** Counts every tool call the run's agents attempt; the totals land in ReviewResult.toolCalls. */
   onToolCall: (toolName: string) => void
+  /** Records one agent session's token usage (null when the session reported none). */
+  onUsage: (agent: AgentUsage['agent'], model: string, usage: TokenUsage | null) => void
 }
 
 /** The reviewer and auditor agent runs; separate so the run flow can be tested without agents. */
+/** One fan-out part: the reviewer sees only these files and leaves posting to the merge. */
+export interface ReviewChunk { label: string; files: string[] }
+
 export interface EngineAgents {
-  reviewer(worktreePath: string | undefined, payload: ReviewRequest, run: AgentRunConfig, reviewProfile?: ReviewSkillProfile, incrementalBlock?: string): Promise<ReviewOutcome>
+  reviewer(worktreePath: string | undefined, payload: ReviewRequest, run: AgentRunConfig, reviewProfile?: ReviewSkillProfile, incrementalBlock?: string, chunk?: ReviewChunk): Promise<ReviewOutcome>
   auditor(worktreePath: string, payload: ReviewRequest, run: AgentRunConfig, opts?: { staticOnly?: boolean }): Promise<string>
 }
 
@@ -149,8 +170,26 @@ export function summarizeReport(body: string | undefined): string | undefined {
   return `${(lastSpace > 80 ? cut.slice(0, lastSpace) : cut).trim()} …`
 }
 
+/** Posts findings one by one so one bad position never loses the rest. */
+export async function postFindingsSequentially(forge: ReviewForge, findings: ReviewFinding[]): Promise<{ postedNew: number; postedReplies: number; failures: string[] }> {
+  const failures: string[] = []
+  let postedNew = 0
+  let postedReplies = 0
+  for (const finding of findings) {
+    try {
+      await forge.postFindings([finding])
+      if (finding.status === 'new') postedNew++
+      else postedReplies++
+    } catch (err) {
+      const locator = finding.status === 'new' ? `${finding.path}:${finding.line}` : finding.discussionId
+      failures.push(`${locator}: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  }
+  return { postedNew, postedReplies, failures }
+}
+
 export function createEngineAgents(ctx: Context): EngineAgents {
-  async function reviewer(worktreePath: string | undefined, payload: ReviewRequest, run: AgentRunConfig, reviewProfile?: ReviewSkillProfile, incrementalBlock?: string): Promise<ReviewOutcome> {
+  async function reviewer(worktreePath: string | undefined, payload: ReviewRequest, run: AgentRunConfig, reviewProfile?: ReviewSkillProfile, incrementalBlock?: string, chunk?: ReviewChunk): Promise<ReviewOutcome> {
     // MR base SHA feeds the govard diff-scope lint command; undefined omits the
     // lint rule instead of sending a wasted govard invocation.
     const lintDefaultBase = await run.forge.mrBaseSha()
@@ -170,7 +209,7 @@ export function createEngineAgents(ctx: Context): EngineAgents {
             installModelSelection(agentCtx, { current: agentOptions, assembled: undefined })
             await agentCtx.plugin(ReviewToolPolicy, { onToolCall: run.onToolCall })
             await mountAgentPreset(ctx.agentPresets, agentCtx, 'dsh-maestro-reviewer')
-            await run.forge.mountAgentTools(agentCtx, { onDiffTruncated: () => { diffTruncated = true } })
+            await run.forge.mountAgentTools(agentCtx, { onDiffTruncated: () => { diffTruncated = true }, ...(chunk !== undefined ? { onlyPaths: chunk.files, partLabel: chunk.label } : {}) })
             await agentCtx.plugin(ReviewFindingsTool, { onReport: (findings) => { capturedFindings = findings } })
             // Diff-only runs have no worktree; nothing to search there.
             if (worktreePath !== undefined) {
@@ -200,10 +239,9 @@ export function createEngineAgents(ctx: Context): EngineAgents {
         const lint = worktreePath !== undefined && lintDefaultBase && detectGovardLint(ctx, handle.agent)
           ? { worktreePath, base: lintDefaultBase }
           : null
-        let scopePrompt = payload.scope.kind === 'discussion'
+        const scopePrompt = payload.scope.kind === 'discussion'
           ? buildReviewerScopePrompt({ scopeKind: 'discussion', discussionId: payload.scope.discussionId, path: payload.scope.path, line: payload.scope.line, profileInstruction, lint })
-          : buildReviewerScopePrompt({ scopeKind: 'full', mode: payload.mode, profileInstruction, lint })
-        if (incrementalBlock !== undefined) scopePrompt = `${incrementalBlock}\n\n${scopePrompt}`
+          : buildReviewerScopePrompt({ scopeKind: 'full', mode: payload.mode, profileInstruction, lint, ...(incrementalBlock !== undefined ? { incrementalBlock } : {}), ...(chunk !== undefined ? { part: chunk } : {}) })
         handle.agent.followup(createUserMessage({
           content: [{ type: 'text', text: scopePrompt }],
           source: { kind: REVIEW_SOURCE_KIND },
@@ -225,21 +263,11 @@ export function createEngineAgents(ctx: Context): EngineAgents {
           return { summary: response, failures: [] }
         }
 
-        const failures: string[] = []
-        let postedNew = 0
-        let postedReplies = 0
-        for (const finding of capturedFindings) {
-          try {
-            await run.forge.postFindings([finding])
-            if (finding.status === 'new') postedNew++
-            else postedReplies++
-          } catch (err) {
-            const locator = finding.status === 'new' ? `${finding.path}:${finding.line}` : finding.discussionId
-            failures.push(`${locator}: ${err instanceof Error ? err.message : String(err)}`)
-          }
-        }
+        if (chunk !== undefined) return { summary: '', failures: [], findings: capturedFindings, models: [primaryOptions.model], deferredPost: true }
+        const { postedNew, postedReplies, failures } = await postFindingsSequentially(run.forge, capturedFindings)
         return { summary: reviewerSummary(postedNew, postedReplies, diffTruncated), failures, severityCounts: countFindingSeverities(capturedFindings), findings: capturedFindings, models: [primaryOptions.model] }
       } finally {
+        run.onUsage('reviewer', agentOptions.model, usageFromSession(handle.agent.session))
         await handle.dispose()
       }
     }
@@ -299,6 +327,7 @@ export function createEngineAgents(ctx: Context): EngineAgents {
       assertTurnSucceededOrSalvage(handle, text.trim() !== '', 'auditor')
       return `## Maestro Performance Audit\n\n${text}`
     } finally {
+      run.onUsage('auditor', agentOptions.model, usageFromSession(handle.agent.session))
       await handle.dispose()
     }
   }
@@ -310,18 +339,52 @@ export function createReviewEngine(ctx: Context, agents: EngineAgents = createEn
   async function run(payload: ReviewRequest, opts: EngineRunOptions): Promise<ReviewResult> {
     const t0 = Date.now()
     const { gitlab, access } = opts
-    const forge = opts.forge ?? gitlabForge(gitlab, payload)
+    const timer = createStageTimer()
+    // Posting runs inside the agent stage (findings after each reviewer turn,
+    // the comment after all agents), so it is timed per call and moved to post.
+    let postMs = 0
+    const timedPost = async <T>(call: () => Promise<T>): Promise<T> => {
+      const start = Date.now()
+      try { return await call() } finally { postMs += Date.now() - start }
+    }
+    const rawForge = opts.forge ?? gitlabForge(gitlab, payload, opts.ignoreGlobs !== undefined ? { ignoreGlobs: opts.ignoreGlobs } : {})
+    const forge: ReviewForge = {
+      mrHeadSha: () => rawForge.mrHeadSha(),
+      mrBaseSha: () => rawForge.mrBaseSha(),
+      reviewScope: () => rawForge.reviewScope(),
+      restrictToInterdiff: (files) => rawForge.restrictToInterdiff(files),
+      compare: (from, to) => rawForge.compare(from, to),
+      postNote: (body) => timedPost(() => rawForge.postNote(body)),
+      replyToDiscussion: (id, body) => timedPost(() => rawForge.replyToDiscussion(id, body)),
+      postFindings: (findings) => timedPost(() => rawForge.postFindings(findings)),
+      signals: () => rawForge.signals(),
+      mountAgentTools: (agentCtx, o) => rawForge.mountAgentTools(agentCtx, o),
+    }
     const toolCallCounts = new Map<string, number>()
     const toolCalls = () => Object.fromEntries([...toolCallCounts].sort(([a], [b]) => a.localeCompare(b)))
+    const usages: AgentUsage[] = []
     const agentRun: AgentRunConfig = {
       gitlab, forge, model: opts.model, agentTimeoutMs: opts.agentTimeoutMs,
       onToolCall: (toolName) => { toolCallCounts.set(toolName, (toolCallCounts.get(toolName) ?? 0) + 1) },
+      onUsage: (agent, model, usage) => { usages.push({ agent, model, usage }) },
     }
+    let agentsStarted = false
+    /** Closes the stage timeline once and returns the run's telemetry. */
+    const telemetry = () => {
+      if (agentsStarted) {
+        agentsStarted = false
+        timer.mark('agent', postMs)
+        timer.add('post', postMs)
+      }
+      return { toolCalls: toolCalls(), stages: timer.toJSON(), usage: [...usages] }
+    }
+    const usageTotal = () => sumUsage(usages.map((u) => u.usage))
     let reviewStart = Date.now()
     const notify = (status: 'completed' | 'failed', summary?: string) => opts.notify?.(status, summary, Date.now() - reviewStart)
     try {
       const historyId = `${payload.projectId}-${payload.mrIid}-${Date.now()}`
       const currentHeadSha = await forge.mrHeadSha().catch(() => undefined)
+      const currentBaseSha = await forge.mrBaseSha().catch(() => undefined)
       await recordReviewStart({
         id: historyId,
         projectId: payload.projectId,
@@ -340,7 +403,20 @@ export function createReviewEngine(ctx: Context, agents: EngineAgents = createEn
         const priorHeadSha = payload.priorHeadSha ?? (await lastCompletedReview(payload.projectId, payload.mrIid))?.headSha
         if (priorHeadSha !== undefined && currentHeadSha !== undefined && priorHeadSha !== currentHeadSha) {
           const compare = await forge.compare(priorHeadSha, currentHeadSha)
-          incrementalBlock = buildIncrementalBlock(compare, priorHeadSha, currentHeadSha)
+          // A deep request asks for the whole MR, never only what changed since a quick pass.
+          const plan = payload.scope.kind === 'mr' && payload.mode === 'quick'
+            ? planIncremental({ headSha: priorHeadSha, ...(payload.priorBaseSha !== undefined ? { baseSha: payload.priorBaseSha } : {}), ...(payload.priorPartial === true ? { partial: true } : {}) }, { headSha: currentHeadSha, ...(currentBaseSha !== undefined ? { baseSha: currentBaseSha } : {}) }, compare)
+            : undefined
+          if (plan?.kind === 'interdiff') {
+            forge.restrictToInterdiff(plan.files)
+            incrementalBlock = buildIncrementalBlock(compare, priorHeadSha, currentHeadSha, { interdiff: true })
+          } else if (plan?.kind === 'full' && plan.reason === 'base changed') {
+            // A compare across a rebase mixes in the target's changes: review it all, no hint.
+            console.log(`[review] full review: ${plan.reason} since ${priorHeadSha.slice(0, 12)}`)
+          } else {
+            if (plan !== undefined) console.log(`[review] full review: ${plan.reason} since ${priorHeadSha.slice(0, 12)}`)
+            incrementalBlock = buildIncrementalBlock(compare, priorHeadSha, currentHeadSha)
+          }
         }
       } catch {
         // Optional optimization only — never fail the review for it.
@@ -350,28 +426,72 @@ export function createReviewEngine(ctx: Context, agents: EngineAgents = createEn
       const signals = payload.scope.kind === 'mr' ? forge.signals() : undefined
       reviewStart = Date.now()
       await signals?.start()
+      timer.mark('fetch')
+      agentsStarted = true
       const postComment = (body: string) => forge.postNote(body)
       const replyToDiscussion = (discussionId: string, body: string) => forge.replyToDiscussion(discussionId, body)
       const deduped = async (): Promise<ReviewResult> => {
         console.error(`maestro-orchestrator: deduped duplicate in-flight review project=${payload.projectPath} mr=!${payload.mrIid} trigger=${payload.trigger}`)
         await recordReviewFinish(historyId, { status: 'completed', summary: DEDUPED_SUMMARY })
         await signals?.finish('completed')
-        return { ok: true, summary: DEDUPED_SUMMARY, failures: [], durationMs: Date.now() - t0 }
+        return { ok: true, summary: DEDUPED_SUMMARY, failures: [], durationMs: Date.now() - t0, ...telemetry() }
       }
       const completed = async (summary: string | undefined): Promise<ReviewResult> => {
         await recordReviewFinish(historyId, { status: 'completed', summary })
         notify('completed', summary)
         await signals?.finish('completed')
-        return { ok: true, summary, failures: [], durationMs: Date.now() - t0, toolCalls: toolCalls() }
+        return { ok: true, summary, failures: [], durationMs: Date.now() - t0, ...telemetry() }
+      }
+      let scopeFiles: Array<{ path: string; bytes: number }> | undefined
+      // Opt-in: only a caller that passes thresholds (the CI trigger) fans out.
+      const fanout = opts.fanout
+      /** One reviewer run, or parallel parts for a large MR whose findings are merged and posted once. */
+      const review = async (worktreePath: string | undefined, p: ReviewRequest, profile?: ReviewSkillProfile): Promise<ReviewOutcome> => {
+        const chunks = fanout !== undefined && p.scope.kind === 'mr' && scopeFiles !== undefined ? planChunks(scopeFiles, fanout) : []
+        if (chunks.length <= 1) return agents.reviewer(worktreePath, p, agentRun, profile, incrementalBlock)
+        const runFor = (c: Chunk): AgentRunConfig => c.risk === 'high' && opts.deepModel !== undefined ? { ...agentRun, model: opts.deepModel } : agentRun
+        const settled = await runWithConcurrency(chunks.map((c) => () => agents.reviewer(worktreePath, p, runFor(c), profile, incrementalBlock, { label: c.id, files: c.files })), fanout?.concurrency ?? DEFAULT_FANOUT.concurrency)
+        const done = settled.flatMap((r) => r.status === 'fulfilled' ? [r.value] : [])
+        const failed = settled.flatMap((r, i) => r.status === 'rejected' ? [{ chunk: chunks[i], reason: r.reason instanceof Error ? r.reason.message : String(r.reason) }] : [])
+        if (done.length === 0) throw new Error(`every review part failed: ${failed[0].reason}`)
+        const findings = mergeFindings(done.map((o) => o.findings ?? []))
+        const posted = await postFindingsSequentially(forge, findings)
+        const parts = [`Reviewed in ${chunks.length} parallel parts.`, ...failed.map((f) => `Part ${f.chunk.id} (${f.chunk.files.length} files) failed: ${f.reason}; its files were not reviewed.`)]
+        return {
+          summary: `${reviewerSummary(posted.postedNew, posted.postedReplies, false)} ${parts.join(' ')}`,
+          failures: [...done.flatMap((o) => o.failures), ...posted.failures],
+          severityCounts: countFindingSeverities(findings),
+          findings,
+          models: [...new Set(done.flatMap((o) => o.models ?? []))],
+          ...(failed.length > 0 ? { partial: true } : {}),
+        }
       }
       const diffOnly = () => runDiffOnlyReview(payload, {
-        runReviewer: (p) => agents.reviewer(undefined, p, agentRun, payload.reviewProfile, incrementalBlock),
+        runReviewer: (p) => review(undefined, p, payload.reviewProfile),
         postComment,
         replyToDiscussion,
         writeFailedReport,
         gitlabBaseUrl: gitlab.baseUrl,
+        usageTotal,
+        skippedFiles,
+        baseSha: currentBaseSha,
       } as unknown as DiffOnlyReviewDeps)
+      let skippedFiles: string[] | undefined
       try {
+        if (payload.scope.kind === 'mr') {
+          // An unreadable diff is left to the agents, which report it themselves.
+          const scope = await forge.reviewScope().catch(() => undefined)
+          timer.mark('fetch')
+          if (scope !== undefined && scope.files.length === 0) {
+            const body = buildNothingReviewableComment(payload, { gitlabBaseUrl: gitlab.baseUrl, skipped: scope.skipped, ...(currentBaseSha !== undefined ? { baseSha: currentBaseSha } : {}) })
+            agentsStarted = false
+            await forge.postNote(body)
+            timer.add('post', postMs)
+            return await completed(summarizeReport(body))
+          }
+          skippedFiles = scope?.skipped
+          scopeFiles = scope?.files
+        }
         if (access.kind === 'diff') {
           const diffBody = await diffOnly()
           // A deduped diff run returns '' and is still recorded as completed (unchanged behaviour).
@@ -385,12 +505,14 @@ export function createReviewEngine(ctx: Context, agents: EngineAgents = createEn
           const profile = opts.reviewProfile ?? 'generic'
           const cloneDir = join('/tmp', `maestro-ci-src-${payload.projectId}-${payload.mrIid}`)
           // D3: make the MR merge base reachable from the head in the shallow clone.
-          const baseSha = await forge.mrBaseSha()
+          const baseSha = currentBaseSha
+          timer.mark('fetch')
           await cloneSourceRepo({ fetcher: fetch, run: defaultRun, host: access.host, projectId: payload.projectId, sourceBranch: payload.sourceBranch, headSha: payload.headSha as string, token: gitlab.token, dir: cloneDir, ...(baseSha ? { baseSha } : {}) })
+          timer.mark('clone')
           try {
-            const ciEnsureWorktree = async (repoPath: string, branch: string, pid: number, iid: number, suffix?: string): Promise<string> => {
+            const ciEnsureWorktree = async (repoPath: string, branch: string): Promise<string> => {
               assertSafeBranchName(branch)
-              const wt = join('/tmp', `maestro-mr-${pid}-${iid}${suffix === undefined ? '' : `-${suffix}`}`)
+              const wt = CI_WORKTREE_PATH
               // No re-fetch: the clone already holds the head, and `fetch --depth` on a
               // shallow repo would cut back the history the base check just deepened.
               await defaultRun('git', ['worktree', 'remove', '--force', wt], repoPath).catch(() => {})
@@ -401,13 +523,16 @@ export function createReviewEngine(ctx: Context, agents: EngineAgents = createEn
               localRepoPath: cloneDir,
               ensureWorktree: ciEnsureWorktree,
               removeWorktree,
-              runReviewer: (worktreePath, p) => agents.reviewer(worktreePath, p, agentRun, profile, incrementalBlock),
+              runReviewer: (worktreePath, p) => review(worktreePath, p, profile),
               runAuditor: withAuditorDegrade((worktreePath, p) => agents.auditor(worktreePath, p, agentRun, { staticOnly: true })),
               postComment,
               replyToDiscussion,
               writeFailedReport,
               gitlabBaseUrl: gitlab.baseUrl,
               reviewProfile: profile,
+              usageTotal,
+              skippedFiles,
+              baseSha: currentBaseSha,
             } as unknown as ReviewAndAuditDeps)
           } finally {
             await defaultRun('rm', ['-rf', cloneDir]).catch(() => {})
@@ -421,13 +546,16 @@ export function createReviewEngine(ctx: Context, agents: EngineAgents = createEn
               ensureWorktree: access.ensureWorktree,
               removeWorktree: access.removeWorktree,
               ...(access.teardownEnvironment !== undefined ? { teardownEnvironment: access.teardownEnvironment } : {}),
-              runReviewer: (worktreePath, p) => agents.reviewer(worktreePath, p, agentRun, profile, incrementalBlock),
+              runReviewer: (worktreePath, p) => review(worktreePath, p, profile),
               runAuditor: access.auditor === 'static' ? withAuditorDegrade(runAuditor) : runAuditor,
               postComment,
               replyToDiscussion,
               writeFailedReport,
               gitlabBaseUrl: gitlab.baseUrl,
               reviewProfile: profile,
+              usageTotal,
+              skippedFiles,
+              baseSha: currentBaseSha,
             } as unknown as ReviewAndAuditDeps)
           } catch (err) {
             const isBranchNotFound = (err as { code?: string })?.code === 'BRANCH_NOT_FOUND' || isBranchNotFoundError(err)
@@ -445,7 +573,7 @@ export function createReviewEngine(ctx: Context, agents: EngineAgents = createEn
         await recordReviewFinish(historyId, { status: 'failed', error: message }).catch(() => {})
         notify('failed', message)
         await signals?.finish('failed')
-        return { ok: false, summary: undefined, failures: [message], durationMs: Date.now() - t0, toolCalls: toolCalls() }
+        return { ok: false, summary: undefined, failures: [message], durationMs: Date.now() - t0, ...telemetry() }
       }
     } catch (err) {
       // Surface failures as a result instead of an unhandled rejection, so both
@@ -453,7 +581,7 @@ export function createReviewEngine(ctx: Context, agents: EngineAgents = createEn
       // same outcome.
       const message = err instanceof Error ? err.message : String(err)
       console.error(`maestro-orchestrator: review run failed for MR !${String(payload.mrIid)}:`, err)
-      return { ok: false, summary: undefined, failures: [message], durationMs: Date.now() - t0, toolCalls: toolCalls() }
+      return { ok: false, summary: undefined, failures: [message], durationMs: Date.now() - t0, ...telemetry() }
     }
   }
   return { run }

@@ -16,7 +16,16 @@ export interface Config {
   botUsername: string
   /** Called once when the MR diff exceeds MAX_DIFF_FILES and was cut. */
   onDiffTruncated?: () => void
+  /** The forge's shared, already filtered diff load; absent = fetch every file here. */
+  loadDiffs?: () => Promise<ReviewDiffs>
+  /** A fan-out part: the tools serve only these new paths. */
+  onlyPaths?: string[]
+  /** A fan-out part's label: parts share one workspace, so each spills to its own file. */
+  partLabel?: string
 }
+
+/** The MR diffs a review may see, and the paths the ignore globs removed. */
+export interface ReviewDiffs { diffs: GitlabDiff[]; skipped: string[]; truncated: boolean }
 
 export const Config: z<Config> = z.object({
   baseUrl: z.string().required(),
@@ -25,6 +34,9 @@ export const Config: z<Config> = z.object({
   token: z.string().role('secret').required(),
   botUsername: z.string().required(),
   onDiffTruncated: z.function(),
+  loadDiffs: z.function(),
+  onlyPaths: z.array(z.string()),
+  partLabel: z.string(),
 })
 
 /** Hard cap on diff files fetched for one review. */
@@ -63,6 +75,7 @@ export interface GitlabDiff {
   old_path: string
   new_path: string
   diff: string
+  deleted_file?: boolean
 }
 
 export interface DiffFileEntry {
@@ -136,15 +149,17 @@ interface OwnThread {
  * ("path outside cwd", tickets g-dd0d1679/g-716cd436). Writing the diff
  * inside the workspace root keeps it readable via the read tool.
  */
-export function resolveDiffSpillPath(workspaceRoot: string, mrIid: number): string {
-  return join(resolve(workspaceRoot), '.maestro', `mr-${mrIid}.diff`)
+const spillName = (mrIid: number, part?: string) => `mr-${mrIid}${part === undefined || part === '' ? '' : `-${part.replace(/[^A-Za-z0-9_-]/g, '')}`}.diff`
+
+export function resolveDiffSpillPath(workspaceRoot: string, mrIid: number, part?: string): string {
+  return join(resolve(workspaceRoot), '.maestro', spillName(mrIid, part))
 }
 
-export function writeDiffSpill(workspaceRoot: string, mrIid: number, text: string): { path: string; bytes: number } {
-  const abs = resolveDiffSpillPath(workspaceRoot, mrIid)
+export function writeDiffSpill(workspaceRoot: string, mrIid: number, text: string, part?: string): { path: string; bytes: number } {
+  const abs = resolveDiffSpillPath(workspaceRoot, mrIid, part)
   mkdirSync(join(resolve(workspaceRoot), '.maestro'), { recursive: true })
   writeFileSync(abs, text, 'utf-8')
-  return { path: join('.maestro', `mr-${mrIid}.diff`), bytes: Buffer.byteLength(text, 'utf8') }
+  return { path: join('.maestro', spillName(mrIid, part)), bytes: Buffer.byteLength(text, 'utf8') }
 }
 
 interface SC{agent?:{session?:{header?:{cwd?:string}}}}
@@ -181,10 +196,16 @@ export function apply(ctx: Context, config: Config): void {
   let cachedDiffs: GitlabDiff[] | undefined
 
   let diffsTruncated = false
+  let skippedPaths: string[] = []
+  let otherPartPaths: string[] = []
   async function getDiffs(): Promise<GitlabDiff[]> {
     if (cachedDiffs !== undefined) return cachedDiffs
-    const all = await fetchAllDiffs(fetch, apiBase, headers)
-    cachedDiffs = all.diffs
+    const all = config.loadDiffs !== undefined ? await config.loadDiffs() : { ...await fetchAllDiffs(fetch, apiBase, headers), skipped: [] }
+    // Empty means no allowlist: the schema defaults an absent array to [], and a part is never empty.
+    const only = config.onlyPaths === undefined || config.onlyPaths.length === 0 ? undefined : new Set(config.onlyPaths)
+    cachedDiffs = only === undefined ? all.diffs : all.diffs.filter((d) => only.has(d.new_path))
+    otherPartPaths = only === undefined ? [] : all.diffs.filter((d) => !only.has(d.new_path)).flatMap((d) => [d.new_path, d.old_path])
+    skippedPaths = all.skipped
     diffsTruncated = all.truncated
     if (all.truncated) config.onDiffTruncated?.()
     return cachedDiffs
@@ -215,7 +236,7 @@ export function apply(ctx: Context, config: Config): void {
       // No session cwd (should not happen for review agents): fall back to
       // the legacy inline text, which the runtime may spill to /tmp.
       if (cwd === undefined) return { path: '', bytes: Buffer.byteLength(text, 'utf8'), files: diffFileList(diffs) }
-      const spilled = writeDiffSpill(cwd, config.mrIid, text)
+      const spilled = writeDiffSpill(cwd, config.mrIid, text, config.partLabel)
       return { ...spilled, files: diffFileList(diffs) }
     },
   }))
@@ -233,6 +254,12 @@ export function apply(ctx: Context, config: Config): void {
     async execute(args) {
       const diffs = await getDiffs()
       const text = selectFileDiff(diffs, args.path)
+      if (text === undefined && otherPartPaths.includes(args.path)) {
+        throw new Error(`path belongs to another part of this review: ${args.path}`)
+      }
+      if (text === undefined && skippedPaths.includes(args.path)) {
+        throw new Error(`path filtered from this review (generated, vendored or lock file): ${args.path}`)
+      }
       if (text === undefined) {
         throw new Error(`path not in this MR diff: ${args.path}`)
       }

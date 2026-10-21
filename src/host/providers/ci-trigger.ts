@@ -9,6 +9,8 @@ import type {} from '@deepseek-ai/dsh-agent-default-model'
 import type { CodeAccess, EngineRunOptions } from '../engine.js'
 import type {} from '../engine-row.js'
 import { gitlabAuthHeaders } from '../forge/gitlab/gitlab-auth.js'
+import { resolveIgnoreGlobs } from '../diff-filter.js'
+import { DEFAULT_FANOUT, type FanoutSettings } from '../chunking.js'
 import { fetchBotUserId, hasCompletedDeepReview, hasCompletedReviewForSha, hasRunningEyes, latestCompletedReview, removeDeepLabel } from '../ci-coexist.js'
 
 export const name = 'maestro-review-ci-trigger'
@@ -37,6 +39,12 @@ export interface CiEnvConfig {
   rereviewOnPush: boolean
   /** The MR carries the deep label (written by the resolve job): one deep review per head SHA. */
   deepRequested: boolean
+  /** Paths kept from the model: the defaults plus REVIEW_IGNORE_GLOBS. */
+  ignoreGlobs: string[]
+  /** REVIEW_FANOUT_FILES / _BYTES / _CONCURRENCY over DEFAULT_FANOUT. */
+  fanout: FanoutSettings
+  /** REVIEW_DEEP_MODEL_PROVIDER + REVIEW_DEEP_MODEL: the model of high risk fan-out parts. */
+  deepModel?: { provider: string; model: string }
 }
 
 export const CiEnvConfig: z<CiEnvConfig> = z.object({
@@ -53,7 +61,18 @@ export const CiEnvConfig: z<CiEnvConfig> = z.object({
   reviewProfile: z.union([z.const('magento2'), z.const('laravel'), z.const('symfony'), z.const('wordpress'), z.const('generic')]),
   rereviewOnPush: z.boolean().default(false),
   deepRequested: z.boolean().default(false),
+  ignoreGlobs: z.array(z.string()).required(),
+  fanout: z.object({ files: z.natural().required(), bytes: z.natural().required(), concurrency: z.natural().required() }).required(),
+  deepModel: z.union([z.object({ provider: z.string(), model: z.string() }), z.const(undefined)]),
 })
+
+/** A positive integer env value, or the default when unset; anything else fails the job naming the variable. */
+function positiveInt(env: Record<string, string | undefined>, name: string, fallback: number): number {
+  const raw = env[name]
+  if (raw === undefined || raw.trim() === '') return fallback
+  if (!/^\d+$/.test(raw.trim()) || Number(raw) < 1) throw new Error(`${name} must be a positive integer, got "${raw}"`)
+  return Number(raw)
+}
 
 /**
  * Reads the CI contract env vars (spec §5.2) — not Cordis-supplied config, since these are
@@ -86,6 +105,13 @@ export function parseCiEnvConfig(env: Record<string, string | undefined>): CiEnv
     reviewProfile: env.REVIEW_PROFILE as ReviewSkillProfile | undefined,
     rereviewOnPush: env.REVIEW_ON_PUSH === '1',
     deepRequested: env.REVIEW_DEEP_REQUESTED === '1',
+    ignoreGlobs: resolveIgnoreGlobs(env),
+    fanout: {
+      files: positiveInt(env, 'REVIEW_FANOUT_FILES', DEFAULT_FANOUT.files),
+      bytes: positiveInt(env, 'REVIEW_FANOUT_BYTES', DEFAULT_FANOUT.bytes),
+      concurrency: positiveInt(env, 'REVIEW_FANOUT_CONCURRENCY', DEFAULT_FANOUT.concurrency),
+    },
+    ...(env.REVIEW_DEEP_MODEL ? { deepModel: { provider: env.REVIEW_DEEP_MODEL_PROVIDER as string, model: env.REVIEW_DEEP_MODEL } } : {}),
   })
 }
 
@@ -119,6 +145,11 @@ export function ciAccess(config: CiEnvConfig): CodeAccess {
   return checkout ? { kind: 'clone', host: config.gitlabHost } : { kind: 'diff' }
 }
 
+/** The fan-out engine options of the job. */
+export function ciFanout(config: CiEnvConfig): Pick<EngineRunOptions, 'fanout' | 'deepModel'> {
+  return { fanout: config.fanout, ...(config.deepModel !== undefined ? { deepModel: config.deepModel } : {}) }
+}
+
 /** The pinned model, else the host default (no Settings UI in CI). */
 export function ciModel(ctx: Context, config: CiEnvConfig): ModelSelection {
   if (config.reviewModel !== undefined) return { provider: config.reviewModel.provider, model: config.reviewModel.model }
@@ -134,6 +165,10 @@ export async function runCiTrigger(
     history?: { lastCompletedReview(projectId: number, mrIid: number): Promise<{ headSha?: string } | undefined> }
   } = {},
 ): Promise<ReviewResult> {
+  // Boot: process start (dsh launch, profile load) up to this plugin's run.
+  const bootMs = Math.round(performance.now())
+  const gateStart = Date.now()
+  let gateMs: number | undefined
   const { sourceBranch, headSha, projectPath } = await fetchMrDetail(config, deps.fetcher)
   // Push-gate (mirror of the webhook autoRereviewOnPush semantics): the bridge fires
   // on every MR pipeline, so skip when this exact head SHA already completed — and
@@ -143,7 +178,7 @@ export async function runCiTrigger(
   // cache is per runner and races across concurrent jobs, so it is only a fallback
   // when GitLab cannot be read.
   const history = deps.history ?? { lastCompletedReview }
-  let prior: { headSha?: string } | undefined
+  let prior: { headSha?: string; baseSha?: string; partial?: boolean } | undefined
   let botUserId: number | undefined
   try {
     botUserId = await fetchBotUserId(deps.fetcher ?? fetch, config.gitlabBaseUrl, config.gitlabToken)
@@ -162,19 +197,23 @@ export async function runCiTrigger(
     reviewProfile: config.reviewProfile,
     model: ciModel(ctx, config),
     agentTimeoutMs: config.agentTimeoutMs,
+    ignoreGlobs: config.ignoreGlobs,
+    ...ciFanout(config),
   }
-  const runReview = () => ctx.reviewEngine.run({
+  const runReview = () => { gateMs = Date.now() - gateStart; return ctx.reviewEngine.run({
     projectPath,
     projectId: config.sourceProjectId,
     mrIid: config.mrIid,
     sourceBranch,
     headSha,
     ...(prior?.headSha !== undefined ? { priorHeadSha: prior.headSha } : {}),
+    ...(prior?.baseSha !== undefined ? { priorBaseSha: prior.baseSha } : {}),
+    ...(prior?.partial === true ? { priorPartial: true } : {}),
     trigger: 'mention',
     mode: config.mode,
     scope: { kind: 'mr' },
     reviewProfile: config.reviewProfile,
-  } satisfies ReviewRequest, options)
+  } satisfies ReviewRequest, options) }
   const coFetcher = deps.fetcher ?? fetch
   let result: ReviewResult
   if (config.deepRequested) {
@@ -214,7 +253,8 @@ export async function runCiTrigger(
   // entrypoint exports REVIEW_REPORT_DIR=$PWD captured before the cd, so reports land
   // in the CI job's working directory where `artifacts:` picks them up.
   const reportDir = process.env.REVIEW_REPORT_DIR?.trim() || '.'
-  const report = { ...result, projectId: config.sourceProjectId, mrIid: config.mrIid, mode: config.mode, generatedAt: new Date().toISOString() }
+  const stages = { ...result.stages, boot: bootMs, fetch: (result.stages?.fetch ?? 0) + (gateMs ?? Date.now() - gateStart) }
+  const report = { ...result, stages, projectId: config.sourceProjectId, mrIid: config.mrIid, mode: config.mode, generatedAt: new Date().toISOString() }
   await writeFile(join(reportDir, 'review-report.json'), JSON.stringify(report, null, 2), 'utf-8')
   const md = `# Review Report\n\n**Project:** ${config.sourceProjectId} !${config.mrIid}\n**Mode:** ${config.mode}\n**Duration:** ${result.durationMs}ms\n\n${result.summary ?? '(no summary)'}\n${result.failures.length > 0 ? `\nFailures:\n${result.failures.map(f => `- ${f}`).join('\n')}\n` : ''}`
   await writeFile(join(reportDir, 'review-report.md'), md, 'utf-8')

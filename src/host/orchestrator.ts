@@ -31,22 +31,43 @@ export interface ReviewerScopePromptOpts {
    * worktree and the MR base sha because nothing wires them as defaults.
    */
   lint: { worktreePath: string; base: string } | null
+  /** What changed since the last completed review (re-reviews only). */
+  incrementalBlock?: string
+  /** A fan-out part: the files this agent reviews. */
+  part?: { label: string; files: string[] }
 }
 
 /**
- * Reviewer scope prompt. Static analysis is mandatory: reviewers skipped the
- * lint for whole rounds (no lint signal at all), so the prompt requires at
- * least one govard CLI lint run through the bash tool before
- * report_review_findings. A run that cannot execute is reported, never fatal.
- * Pure for testing.
+ * Reviewer scope prompt, split for provider prefix caching (spec section 6,
+ * P5): `stable` holds only what is the same for every MR of a profile and
+ * mode, `dynamic` everything carrying a path, SHA or MR state, and is sent
+ * last. Static analysis is mandatory: reviewers skipped the lint for whole
+ * rounds, so the prompt requires at least one govard CLI lint run through
+ * the bash tool before report_review_findings. A run that cannot execute is
+ * reported, never fatal. Pure for testing.
  */
-export function buildReviewerScopePrompt(opts: ReviewerScopePromptOpts): string {
-  const lintRule = opts.lint === null ? '' : ` LINT RULE: you MUST run the govard lint with the bash tool at least once before report_review_findings, with workdir "${opts.lint.worktreePath}": govard audit run --checks lint --format json --mode auto --timeout auto --lint-provider govard --scope diff --base "${opts.lint.base}". Pass timeoutMs 600000 (the bash tool maximum); if the result says the command is still running and moved to a background job, poll it with job_output and never start it again. Exit 0 means clean and 1 means findings in the JSON output. A run that cannot execute (govard missing, no Docker, a timeout, an unsupported framework) is not a finding and must not stop the review: say that lint was unavailable and continue. A review that never attempts the lint run is incomplete.`
+export function reviewerPromptParts(opts: ReviewerScopePromptOpts): { stable: string[]; dynamic: string[] } {
+  const dynamic: string[] = []
+  // A part reviews a slice of the MR; the lint rule runs over the whole MR, so parts never get it.
+  if (opts.lint !== null && opts.part === undefined) dynamic.push(`LINT RULE: you MUST run the govard lint with the bash tool at least once before report_review_findings, with workdir "${opts.lint.worktreePath}": govard audit run --checks lint --format json --mode auto --timeout auto --lint-provider govard --scope diff --base "${opts.lint.base}". Pass timeoutMs 600000 (the bash tool maximum); if the result says the command is still running and moved to a background job, poll it with job_output and never start it again. Exit 0 means clean and 1 means findings in the JSON output. A run that cannot execute (govard missing, no Docker, a timeout, an unsupported framework) is not a finding and must not stop the review: say that lint was unavailable and continue. A review that never attempts the lint run is incomplete.`)
   if (opts.scopeKind === 'discussion') {
-    return `${opts.profileInstruction}Review only the requested inline discussion ${opts.discussionId} at ${opts.path}:${opts.line}. Do not review unrelated files or start a broad audit. Call gitlab_get_mr_diff, then gitlab_get_file_diff for the file under review, then call report_review_findings exactly once when done. ${lintRule}`
+    return {
+      stable: [`${opts.profileInstruction}Review only the requested inline discussion. Do not review unrelated files or start a broad audit. Call gitlab_get_mr_diff, then gitlab_get_file_diff for the file under review, then call report_review_findings exactly once when done.`],
+      dynamic: [`The discussion is ${opts.discussionId} at ${opts.path}:${opts.line}.`, ...dynamic],
+    }
   }
   const deletedFilesRule = 'DELETED FILES: a deleted file\'s diff only tells you what logic is gone — never file a finding positioned on a deleted file (there is no line left to fix). If removing it drops behavior that is not replicated elsewhere, report that as a finding against the file that should carry the replacement logic (or the closest call site), not the deleted file itself.'
-  return `${opts.profileInstruction}Review this merge request (${opts.mode} mode). Call gitlab_list_own_review_threads and gitlab_get_mr_diff first, then gitlab_get_file_diff per file you inspect (inline results never spill), then call report_review_findings exactly once when done. ${lintRule} DEDUP RULE: when a finding matches the substance of an existing own thread (same file and same underlying issue, even if worded differently — including resolved threads, whose reply reopens them), report it as {status: "reply", discussionId} instead of posting a new thread. Use status "new" only for issues with no matching thread. ${deletedFilesRule}`
+  if (opts.incrementalBlock !== undefined) dynamic.push(opts.incrementalBlock)
+  if (opts.part !== undefined) dynamic.push(`This merge request is large and reviewed in parallel parts. You review part ${opts.part.label}: only these ${opts.part.files.length} file(s), and the diff tools serve only them. Other parts cover the rest, so do not report that files are missing.\n${opts.part.files.map((f) => `- ${f}`).join('\n')}`)
+  return {
+    stable: [`${opts.profileInstruction}Review this merge request (${opts.mode} mode). Call gitlab_list_own_review_threads and gitlab_get_mr_diff first, then gitlab_get_file_diff per file you inspect (inline results never spill), then call report_review_findings exactly once when done. DEDUP RULE: when a finding matches the substance of an existing own thread (same file and same underlying issue, even if worded differently — including resolved threads, whose reply reopens them), report it as {status: "reply", discussionId} instead of posting a new thread. Use status "new" only for issues with no matching thread. ${deletedFilesRule}`],
+    dynamic,
+  }
+}
+
+export function buildReviewerScopePrompt(opts: ReviewerScopePromptOpts): string {
+  const { stable, dynamic } = reviewerPromptParts(opts)
+  return [stable.join(''), ...dynamic].join('\n\n')
 }
 
 /**
@@ -70,6 +91,8 @@ export function buildReviewComment(opts: {
   marker?: { sha: string; flow: ReviewFlow }
   /** Hidden review metadata, embedded only together with the marker. */
   meta?: ReviewMeta
+  /** Paths the ignore globs kept from the model. */
+  skipped?: string[]
 }): string {
   const mrUrl = `${opts.gitlabBaseUrl.replace(/\/$/, '')}/${opts.projectPath}/-/merge_requests/${opts.mrIid}`
   const title = opts.isDiffOnly === true ? '## 🤖 Maestro Review — Diff-only' : '## 🤖 Maestro Review'
@@ -104,11 +127,37 @@ export function buildReviewComment(opts: {
   const failuresBlock = opts.failures.length > 0
     ? `\n\n<details>\n<summary>⚠️ Failed to post (${opts.failures.length})</summary>\n\n${opts.failures.map((f) => `- \`${f}\``).join('\n')}\n\n</details>`
     : ''
+  const skippedBlock = opts.skipped !== undefined && opts.skipped.length > 0 ? `\n\n${skippedFilesBlock(opts.skipped)}` : ''
   const footer = `\n\n---\n\n<sub>Generated by Maestro · [View MR →](${mrUrl})</sub>`
   const markerLine = opts.marker === undefined
     ? ''
     : `\n\n${reviewMarker(opts.marker.sha, opts.marker.flow)}${opts.meta === undefined ? '' : `\n${encodeReviewMeta(opts.meta)}`}`
-  return `${title}\n\n${metaLine}\n\n${scopeNote}${opts.summary}${findingsLine}${failuresBlock}${footer}${markerLine}`
+  return `${title}\n\n${metaLine}\n\n${scopeNote}${opts.summary}${findingsLine}${failuresBlock}${skippedBlock}${footer}${markerLine}`
+}
+
+const SKIPPED_LIST_CAP = 50
+
+function skippedFilesBlock(skipped: string[]): string {
+  const shown = skipped.slice(0, SKIPPED_LIST_CAP).map((p) => `- \`${p}\``)
+  if (skipped.length > SKIPPED_LIST_CAP) shown.push(`- and ${skipped.length - SKIPPED_LIST_CAP} more`)
+  return `<details>\n<summary>Not reviewed: ${skipped.length} generated, vendored or lock file(s)</summary>\n\n${shown.join('\n')}\n\n</details>`
+}
+
+/** Every changed file matched the ignore globs: one comment, marker included so the push-gate counts it. */
+export function buildNothingReviewableComment(payload: ReviewRequest, opts: { gitlabBaseUrl: string; skipped: string[]; baseSha?: string }): string {
+  return buildReviewComment({
+    projectPath: payload.projectPath,
+    mrIid: payload.mrIid,
+    gitlabBaseUrl: opts.gitlabBaseUrl,
+    mode: payload.mode,
+    summary: opts.skipped.length > 0
+      ? 'Nothing reviewable: every changed file matches the ignore globs (generated, vendored or lock files).'
+      : 'Nothing reviewable: no file changed.',
+    failures: [],
+    skipped: opts.skipped,
+    marker: commentMarker(payload),
+    meta: metaFor(payload, { findings: [], models: [] }, opts.baseSha !== undefined ? { baseSha: opts.baseSha } : {}),
+  })
 }
 
 export function buildNotStartedComment(opts: { gitlabBaseUrl: string; projectPath: string; mrIid: number; marker?: { sha: string; flow: ReviewFlow } }): string {
@@ -163,7 +212,7 @@ export function isUnsupportedReasoningError(err: unknown): boolean {
  * ran outside of unit tests that happened to mock the same wrong shape.
  * Returns `[]` — never throws — when no event source exists.
  */
-function readSessionEvents(session: unknown): unknown[] {
+export function readSessionEvents(session: unknown): unknown[] {
   const candidate = session as {
     ownEvents?: unknown
     snapshotEvents?: unknown
@@ -253,15 +302,23 @@ export interface ReviewOutcome {
   findings?: ReviewFinding[]
   /** Model ids that produced this review. */
   models?: string[]
+  /** A fan-out part's findings, left for the merged post. */
+  deferredPost?: boolean
+  /** Some files were not reviewed (a failed part, a capped diff). */
+  partial?: boolean
 }
 
 export function reviewerSummary(postedNew: number, postedReplies: number, diffTruncated: boolean): string {
   return `${postedNew} new inline comment(s), ${postedReplies} thread(s) updated.${diffTruncated ? ` Diff truncated at ${GitlabClient.MAX_DIFF_FILES} files: files beyond the cap were not reviewed.` : ''}`
 }
 
-function metaFor(payload: ReviewRequest, outcome: Pick<ReviewOutcome, 'findings' | 'models'>): ReviewMeta | undefined {
+/** Token usage of the run so far, for the metadata; optional on every deps object. */
+interface UsageDeps { usageTotal?(): { input: number; output: number; cached: number } | null; baseSha?: string }
+
+function metaFor(payload: ReviewRequest, outcome: Pick<ReviewOutcome, 'findings' | 'models' | 'partial'>, deps: UsageDeps): ReviewMeta | undefined {
   if (payload.headSha === undefined) return undefined
-  return buildReviewMeta({ headSha: payload.headSha, mode: payload.mode, models: outcome.models ?? [], findings: outcome.findings ?? [] })
+  const usage = deps.usageTotal?.() ?? undefined
+  return buildReviewMeta({ headSha: payload.headSha, ...(deps.baseSha !== undefined ? { baseSha: deps.baseSha } : {}), mode: payload.mode, models: outcome.models ?? [], findings: outcome.findings ?? [], ...(usage !== undefined ? { usage } : {}), ...(outcome.partial === true ? { partial: true } : {}) })
 }
 
 /**
@@ -468,7 +525,7 @@ export async function runReviewAndAudit(payload: ReviewRequest, deps: ReviewAndA
       const labels = ['Reviewer', 'Auditor']
       if (settled[0].status === 'fulfilled') {
         const { summary, failures, severityCounts } = settled[0].value
-        const meta = metaFor(payload, settled[0].value)
+        const meta = metaFor(payload, settled[0].value, deps as UsageDeps)
         // Try to parse findings counts from summary like "2 new inline comment(s), 1 thread(s) updated."
         const summaryText = summary ?? ''
         const newMatch = /(\d+)\s+new inline/.exec(summaryText)
@@ -488,6 +545,7 @@ export async function runReviewAndAudit(payload: ReviewRequest, deps: ReviewAndA
               findings: { newCount, replyCount, severityCounts },
               marker: commentMarker(payload),
               meta,
+              skipped: (deps as unknown as { skippedFiles?: string[] }).skippedFiles,
             })
           : `## 🤖 Maestro Review\n\n**\`${payload.projectPath}\` !${payload.mrIid}** · ✅ Completed · \`${payload.mode}\`${(deps as unknown as { reviewProfile?: string }).reviewProfile !== undefined ? ` · \`${(deps as unknown as { reviewProfile: string }).reviewProfile}\`` : ''}\n\n${summaryText}${failures.length > 0 ? `\n\n<details>\n<summary>⚠️ Failed to post (${failures.length})</summary>\n\n${failures.map((f) => `- \`${f}\``).join('\n')}\n\n</details>` : ''}`
         sections.push(richOpts)
@@ -552,7 +610,8 @@ export async function runDiffOnlyReview(payload: ReviewRequest, deps: DiffOnlyRe
           failures,
           isDiffOnly: true,
           marker: commentMarker(payload),
-          meta: metaFor(payload, outcome),
+          meta: metaFor(payload, outcome, deps as UsageDeps),
+          skipped: (deps as unknown as { skippedFiles?: string[] }).skippedFiles,
         })
       : `## 🤖 Maestro Review — Diff-only\n\n> **Scope:** Diff-only — reviewed the GitLab diff without a local checkout, Magento environment, static analysis, or tests. For a full review, add this project in Settings → Maestro and mention again.\n\n${summary}${failures.length > 0 ? `\n\n<details>\n<summary>⚠️ Failed to post (${failures.length})</summary>\n\n${failures.map((f) => `- \`${f}\``).join('\n')}\n\n</details>` : ''}`
     const body = diffBody
