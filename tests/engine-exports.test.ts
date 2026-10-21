@@ -18,7 +18,7 @@ const PLUGIN_SURFACE: Record<string, string[]> = {
   'lib/ci-commands.js': ['answerCommands', 'findPendingCommands', 'replyToCommand', 'commandMarker'],
   'lib/ci-repo-settings.js': ['loadRepoSettings'],
   'lib/commands.js': ['parseCommand'],
-  'lib/ci-coexist.js': ['fetchBotUserId'],
+  'lib/ci-coexist.js': ['fetchBotUserId', 'latestCompletedReview'],
   'lib/repo-config.js': ['effectiveConfig'],
   'lib/forge/gitlab/gitlab-client.js': ['timedFetcher'],
   'lib/events.js': [],
