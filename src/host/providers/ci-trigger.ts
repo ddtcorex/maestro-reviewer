@@ -13,6 +13,8 @@ import { resolveIgnoreGlobs } from '../diff-filter.js'
 import { DEFAULT_FANOUT, type FanoutSettings } from '../chunking.js'
 import { REPO_CONFIG_PATH, effectiveConfig, parseRepoConfig, type RepoReviewConfig } from '../repo-config.js'
 import { fetchRepoFile } from '../forge/gitlab/mr-api.js'
+import { gateExitCode, toCodeQuality, type ReviewGate } from '../codequality.js'
+import type { FindingSeverity } from '../review-findings-tool.js'
 import { fetchBotUserId, hasCompletedDeepReview, hasCompletedReviewForSha, hasRunningEyes, latestCompletedReview, removeDeepLabel } from '../ci-coexist.js'
 
 export const name = 'maestro-review-ci-trigger'
@@ -48,6 +50,8 @@ export interface CiEnvConfig {
   /** Only the REVIEW_IGNORE_GLOBS entries and fan-out values the environment sets, to layer over the repo file. */
   envIgnoreGlobs: string[]
   envFanout: Partial<FanoutSettings>
+  /** REVIEW_GATE: `blocking` fails the review job on a blocking finding (operator only, default off). */
+  gate: ReviewGate
   /** REVIEW_DEEP_MODEL_PROVIDER + REVIEW_DEEP_MODEL: the model of high risk fan-out parts. */
   deepModel?: { provider: string; model: string }
 }
@@ -69,6 +73,7 @@ export const CiEnvConfig: z<CiEnvConfig> = z.object({
   ignoreGlobs: z.array(z.string()).required(),
   fanout: z.object({ files: z.natural().required(), bytes: z.natural().required(), concurrency: z.natural().required() }).required(),
   deepModel: z.union([z.object({ provider: z.string(), model: z.string() }), z.const(undefined)]),
+  gate: z.union([z.const('off'), z.const('blocking')]).default('off'),
   envIgnoreGlobs: z.array(z.string()).required(),
   envFanout: z.object({ files: z.natural(), bytes: z.natural(), concurrency: z.natural() }).required(),
 })
@@ -90,6 +95,9 @@ function positiveInt(env: Record<string, string | undefined>, name: string, fall
 export function parseCiEnvConfig(env: Record<string, string | undefined>): CiEnvConfig {
   if (env.GITLAB_HOST === undefined) throw new Error('missing GITLAB_HOST')
   if (env.REVIEW_GITLAB_TOKEN === undefined) throw new Error('missing REVIEW_GITLAB_TOKEN')
+  if (env.REVIEW_GATE !== undefined && env.REVIEW_GATE !== '' && env.REVIEW_GATE !== 'off' && env.REVIEW_GATE !== 'blocking') {
+    throw new Error(`unsupported REVIEW_GATE "${env.REVIEW_GATE}" (supported: off, blocking)`)
+  }
   if (env.REVIEW_PROFILE !== undefined && !(REVIEW_PROFILES as readonly string[]).includes(env.REVIEW_PROFILE)) {
     throw new Error(`unsupported REVIEW_PROFILE "${env.REVIEW_PROFILE}" (supported: ${REVIEW_PROFILES.join(', ')})`)
   }
@@ -118,6 +126,7 @@ export function parseCiEnvConfig(env: Record<string, string | undefined>): CiEnv
       bytes: positiveInt(env, 'REVIEW_FANOUT_BYTES', DEFAULT_FANOUT.bytes),
       concurrency: positiveInt(env, 'REVIEW_FANOUT_CONCURRENCY', DEFAULT_FANOUT.concurrency),
     },
+    gate: env.REVIEW_GATE === 'blocking' ? 'blocking' : 'off',
     envIgnoreGlobs: (env.REVIEW_IGNORE_GLOBS ?? '').split(',').map((g) => g.trim()).filter((g) => g !== ''),
     envFanout: Object.fromEntries(([['files', 'REVIEW_FANOUT_FILES'], ['bytes', 'REVIEW_FANOUT_BYTES'], ['concurrency', 'REVIEW_FANOUT_CONCURRENCY']] as const)
       .filter(([, name]) => (env[name] ?? '').trim() !== '')
@@ -206,7 +215,7 @@ export async function runCiTrigger(
   // cache is per runner and races across concurrent jobs, so it is only a fallback
   // when GitLab cannot be read.
   const history = deps.history ?? { lastCompletedReview }
-  let prior: { headSha?: string; baseSha?: string; partial?: boolean } | undefined
+  let prior: { headSha?: string; baseSha?: string; partial?: boolean; findings?: Array<{ severity: string }> } | undefined
   let botUserId: number | undefined
   try {
     botUserId = await fetchBotUserId(deps.fetcher ?? fetch, config.gitlabBaseUrl, config.gitlabToken)
@@ -263,7 +272,8 @@ export async function runCiTrigger(
         .catch((err: unknown) => console.warn(`[review] could not remove the deep label: ${err instanceof Error ? err.message : String(err)}`))
     }
   } else if (prior?.headSha === headSha) {
-    result = { ok: true, summary: `already reviewed at ${headSha}, skipping`, failures: [], durationMs: 0 }
+    // A rerun of a reviewed head must not slip past the gate: carry that review's severities.
+    result = { ok: true, summary: `already reviewed at ${headSha}, skipping`, failures: [], durationMs: 0, ...(prior.findings !== undefined ? { gateSeverities: prior.findings.map((f) => f.severity) } : {}) }
   } else if (prior !== undefined && !config.rereviewOnPush) {
     result = { ok: true, summary: `new commits since ${prior.headSha} but REVIEW_ON_PUSH is not set, skipping`, failures: [], durationMs: 0 }
   } else if (await hasCompletedReviewForSha(coFetcher, config.gitlabBaseUrl, config.gitlabToken, config.sourceProjectId, config.mrIid, headSha, botUserId)) {
@@ -285,9 +295,18 @@ export async function runCiTrigger(
   const stages = { ...result.stages, boot: bootMs, fetch: (result.stages?.fetch ?? 0) + (gateMs ?? Date.now() - gateStart) }
   const report = { ...result, stages, projectId: config.sourceProjectId, mrIid: config.mrIid, mode: config.mode, generatedAt: new Date().toISOString() }
   await writeFile(join(reportDir, 'review-report.json'), JSON.stringify(report, null, 2), 'utf-8')
+  // Always written, `[]` when the run posted nothing, so the artifact report never goes missing.
+  await writeFile(join(reportDir, 'gl-code-quality-report.json'), JSON.stringify(toCodeQuality(result.findings ?? []), null, 2), 'utf-8')
   const md = `# Review Report\n\n**Project:** ${config.sourceProjectId} !${config.mrIid}\n**Mode:** ${config.mode}\n**Duration:** ${result.durationMs}ms\n\n${result.summary ?? '(no summary)'}\n${result.failures.length > 0 ? `\nFailures:\n${result.failures.map(f => `- ${f}`).join('\n')}\n` : ''}`
   await writeFile(join(reportDir, 'review-report.md'), md, 'utf-8')
   return result
+}
+
+/** 1 on an infra failure, 3 when the operator's gate meets a blocking finding, else 0. */
+export function ciExitCode(result: ReviewResult, config: Pick<CiEnvConfig, 'gate'>): 0 | 1 | 3 {
+  if (!result.ok) return 1
+  const carried = (result.gateSeverities ?? []).map((severity) => ({ status: 'new' as const, body: '', severity: severity as FindingSeverity }))
+  return gateExitCode([...(result.findings ?? []), ...carried], config.gate)
 }
 
 export function apply(ctx: Context): void {
@@ -305,7 +324,7 @@ export function apply(ctx: Context): void {
         if (exit === undefined) {
           console.error('[review] ctx.get(\'appExit\') is undefined — the launcher did not provide it, process cannot signal its real exit code')
         } else {
-          exit(result.ok ? 0 : 1)
+          exit(ciExitCode(result, config))
         }
       } catch (err) {
         console.error('maestro-review-ci-trigger:', err instanceof Error ? err.message : String(err))

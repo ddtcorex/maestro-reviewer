@@ -393,6 +393,7 @@ export function createReviewEngine(ctx: Context, agents: EngineAgents = createEn
     }
     const notices: string[] = [...(opts.repo?.warnings ?? [])]
     let agentsStarted = false
+    let runFindings: ReviewFinding[] | undefined
     /** Closes the stage timeline once and returns the run's telemetry. */
     const telemetry = () => {
       if (agentsStarted) {
@@ -400,7 +401,7 @@ export function createReviewEngine(ctx: Context, agents: EngineAgents = createEn
         timer.mark('agent', postMs)
         timer.add('post', postMs)
       }
-      return { toolCalls: toolCalls(), stages: timer.toJSON(), usage: [...usages] }
+      return { toolCalls: toolCalls(), stages: timer.toJSON(), usage: [...usages], ...(runFindings !== undefined ? { findings: runFindings } : {}) }
     }
     const usageTotal = () => sumUsage(usages.map((u) => u.usage))
     let reviewStart = Date.now()
@@ -471,6 +472,11 @@ export function createReviewEngine(ctx: Context, agents: EngineAgents = createEn
       const fanout = opts.fanout
       /** One reviewer run, or parallel parts for a large MR whose findings are merged and posted once. */
       const review = async (worktreePath: string | undefined, p: ReviewRequest, profile?: ReviewSkillProfile): Promise<ReviewOutcome> => {
+        const outcome = await reviewParts(worktreePath, p, profile)
+        runFindings = outcome.findings
+        return outcome
+      }
+      const reviewParts = async (worktreePath: string | undefined, p: ReviewRequest, profile?: ReviewSkillProfile): Promise<ReviewOutcome> => {
         const chunks = fanout !== undefined && p.scope.kind === 'mr' && scopeFiles !== undefined ? planChunks(scopeFiles, fanout) : []
         if (chunks.length <= 1) return agents.reviewer(worktreePath, p, agentRun, profile, incrementalBlock)
         const runFor = (c: Chunk): AgentRunConfig => c.risk === 'high' && opts.deepModel !== undefined ? { ...agentRun, model: opts.deepModel } : agentRun

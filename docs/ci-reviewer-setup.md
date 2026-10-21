@@ -263,6 +263,7 @@ for any name from [4.5](#45-pinned-by-the-pipeline-never-define).
 | `REVIEW_REQUIRE_PROJECT_KEY` | no | protected | `1` at `*`: no project ever falls back to the default key; a project without its own key gets one "AI review is not configured" note and no model call. A project's scoped `0` opts it out. |
 | `REVIEW_MODE`, `REVIEW_PROFILE`, `REVIEW_ON_PUSH`, `REVIEW_IGNORE_GLOBS`, `REVIEW_FANOUT_FILES`, `REVIEW_FANOUT_BYTES`, `REVIEW_FANOUT_CONCURRENCY` | no | protected | Defaults for every project, same meaning as in 4.3. |
 | `REVIEW_DEEP_MODEL_PROVIDER`, `REVIEW_DEEP_MODEL` | no, set both or neither | protected | The model for high risk parts of a fanned-out review (PHP, `di.xml`, plugins, observers, setup); same provider names as `REVIEW_MODEL_PROVIDER`. Unset: every part uses the review model. Ignored on a project route. |
+| `REVIEW_GATE` | no (default `off`) | protected | `blocking`: the review job fails (exit code 3) when the review has a blocking finding. The source bridge is `allow_failure: true`, so the MR shows a warning; remove `allow_failure` from the bridge as well to block the merge. Can also be scoped `review/<id>` for one project. Never a source repository setting. |
 | `REVIEW_ACCEPT_PRIVILEGED_BOT` | no, temporary only | protected | `1`: a bot that is Developer or above on the config project, or Maintainer or above on the reviewer project, only logs a warning instead of failing `resolve`. For the period before a dedicated bot user exists (for example a Maintainer's own token). It accepts the risk the check exists for: an agent reading untrusted MR content holds a token that can read every key and change the pipeline file. Administrators stay refused; every other check stays. Delete it as soon as a dedicated bot is in place. |
 
 ### 4.3 Per source project settings, scope `review/<source project id>`
@@ -399,6 +400,18 @@ reviews the whole MR; the job log says
 which (`full review: base changed since <sha>`). Existing threads stay visible
 to the reviewer either way, so it replies to them instead of posting
 duplicates.
+
+### 5.4 Code Quality report
+
+The review job keeps `gl-code-quality-report.json` (Code Climate format: one
+entry per new finding with a position) as an artifact and as a
+`codequality` report of the reviewer's child pipeline. GitLab does not show a
+report from another project's pipeline in the source MR widget (measured on
+18.11: the MR comparer answers `ERROR`), and fetching it into the source
+pipeline would require letting every source project's job token read the
+reviewer project, which would expose every project's reviews to each other.
+So the widget stays empty by design; the findings are the MR threads and the
+artifact is for tooling.
 
 ### 5.4 Secrets and personal data
 

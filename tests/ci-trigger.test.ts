@@ -13,7 +13,7 @@ describe('parseCiEnvConfig', () => {
       sourceProjectId: 123, mrIid: 456, mode: 'quick', dryRun: false, rereviewOnPush: false, deepRequested: false, agentTimeoutMs: 1_200_000,
       ignoreGlobs: [...DEFAULT_IGNORE_GLOBS],
       fanout: { files: 25, bytes: 150_000, concurrency: 3 },
-      envIgnoreGlobs: [], envFanout: {},
+      envIgnoreGlobs: [], envFanout: {}, gate: 'off',
     })
   })
 
@@ -231,7 +231,7 @@ describe('runCiTrigger', () => {
       trigger: 'mention', mode: 'quick', scope: { kind: 'mr' },
     })
     expect(result.ok).toBe(true)
-    expect(writes.map(w => w[0])).toEqual(['review-report.json', 'review-report.md'])
+    expect(writes.map(w => w[0])).toEqual(['review-report.json', 'gl-code-quality-report.json', 'review-report.md'])
     expect(writes[0][1]).toContain('"summary": "done"')
   })
 
@@ -247,7 +247,7 @@ describe('runCiTrigger', () => {
     } finally {
       delete process.env.REVIEW_REPORT_DIR
     }
-    expect(writes.map(w => w[0])).toEqual(['/out/review-report.json', '/out/review-report.md'])
+    expect(writes.map(w => w[0])).toEqual(['/out/review-report.json', '/out/gl-code-quality-report.json', '/out/review-report.md'])
   })
 
   it('carries REVIEW_PROFILE into the ReviewRequest', async () => {

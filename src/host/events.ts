@@ -1,4 +1,5 @@
 import type { AgentUsage, Stage } from './telemetry.js'
+import type { ReviewFinding } from './review-findings-tool.js'
 export interface MrOpenedPayload {
   projectPath: string
   projectId: number
@@ -57,6 +58,10 @@ export interface ReviewResult {
   toolCalls?: Record<string, number>
   /** Wall clock per stage in ms (boot is added by the CI trigger). */
   stages?: Partial<Record<Stage, number>>
+  /** The reviewer's findings (merged across fan-out parts), for the Code Quality report and the gate. */
+  findings?: ReviewFinding[]
+  /** Severities of the prior review of this same head, when the run skipped it: the gate still applies to them. */
+  gateSeverities?: string[]
   /** Token usage per agent run; `usage` is null when the session reported none. */
   usage?: AgentUsage[]
 }
