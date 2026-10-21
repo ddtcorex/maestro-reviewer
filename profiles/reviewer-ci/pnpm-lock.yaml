@@ -9,8 +9,8 @@ importers:
   .:
     dependencies:
       '@ddtcorex/maestro-reviewer':
-        specifier: 0.16.0
-        version: 0.16.0(@deepseek-ai/cordis@4.0.4)
+        specifier: 0.17.0
+        version: 0.17.0(@deepseek-ai/cordis@4.0.4)
       '@ddtcorex/maestro-skills':
         specifier: ^2.13.0
         version: 2.15.0(@deepseek-ai/cordis@4.0.4)
@@ -129,8 +129,8 @@ packages:
     resolution: {integrity: sha512-Nq8OhGWiZIZGV6hLHoyAKLLcJihP/xFeBMGJoUrxTX2psI8dCifzLhZISFb+VWS3wFMRDmCGw5R+dOySCqPLhw==}
     engines: {node: '>=6.9.0'}
 
-  '@ddtcorex/maestro-reviewer@0.16.0':
-    resolution: {integrity: sha512-J56nsYwwkqbsXF90dLhbBU8AreBSZ7bRNdxCXEFe4tbfNxmLSnjgCosmhhZ6wTLRnOYcFeuzJAqLgQnoJLDOKA==}
+  '@ddtcorex/maestro-reviewer@0.17.0':
+    resolution: {integrity: sha512-jzllYIFiwjkwqXm1wXRgP0Efgn61Qr8t22BA9iKdgMhg6ud9IN402862I4kyYx5LxWWLdozhWxFeAL7kb9F3YA==}
     engines: {node: ^22.19.0 || >=24.0.0}
     peerDependencies:
       '@deepseek-ai/cordis': ~4.0.4
@@ -4050,7 +4050,7 @@ snapshots:
 
   '@babel/runtime@7.29.7': {}
 
-  '@ddtcorex/maestro-reviewer@0.16.0(@deepseek-ai/cordis@4.0.4)':
+  '@ddtcorex/maestro-reviewer@0.17.0(@deepseek-ai/cordis@4.0.4)':
     dependencies:
       '@deepseek-ai/cordis': 4.0.4(@deepseek-ai/cordis-plugin-include@1.0.9)(@deepseek-ai/cordis-plugin-loader@1.0.5)
       '@deepseek-ai/schemastery': 3.18.5
