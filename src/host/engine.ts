@@ -25,6 +25,8 @@ import type { ReviewForge } from './forge/types.js'
 import { gitlabForge } from './forge/gitlab/index.js'
 import { SEVERITY_ORDER, countFindingSeverities, normalizeFindingSeverity } from './severity.js'
 import { REPO_CONFIG_PATH, configChangedInMr } from './repo-config.js'
+import { secretFindings } from './redact.js'
+import { redactWorktree } from './redact-worktree.js'
 import type { FindingSeverity } from './review-findings-tool.js'
 import type { ReviewRequest, ReviewResult } from './events.js'
 import { lastCompletedReview, recordReviewFinish, recordReviewStart } from './review-history.js'
@@ -514,6 +516,12 @@ export function createReviewEngine(ctx: Context, agents: EngineAgents = createEn
           }
           skippedFiles = scope?.skipped
           scopeFiles = scope?.files
+          const redacted = scope?.redacted ?? []
+          const redactedCount = redacted.reduce((n, f) => n + f.hits.length, 0)
+          if (redactedCount > 0) {
+            notices.push(`${redactedCount} values redacted before review (secrets and personal data): the model saw placeholders, never the values.`)
+            await postFindingsSequentially(forge, secretFindings(redacted)).catch(() => undefined)
+          }
           if (scope !== undefined && configChangedInMr(scope.files.map((f) => f.path))) {
             // The file is read from the target branch: a change here only applies after merge.
             notices.push(`This MR changes ${REPO_CONFIG_PATH}: the change applies after merge; this review used the target branch's settings.`)
@@ -548,6 +556,9 @@ export function createReviewEngine(ctx: Context, agents: EngineAgents = createEn
               // shallow repo would cut back the history the base check just deepened.
               await defaultRun('git', ['worktree', 'remove', '--force', wt], repoPath).catch(() => {})
               await defaultRun('git', ['worktree', 'add', '--detach', '--', wt, payload.headSha as string], repoPath)
+              // The agents' file tools read this checkout: redact it before any agent starts.
+              const r = await redactWorktree(wt)
+              if (r.hits > 0) console.log(`[review] redacted ${r.hits} value(s) in ${r.files} file(s) of the checkout`)
               return wt
             }
             fullBody = await runReviewAndAudit(payload, {

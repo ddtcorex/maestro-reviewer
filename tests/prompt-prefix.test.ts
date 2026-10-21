@@ -6,6 +6,8 @@ vi.mock('../src/host/ci-clone.js', () => ({
   defaultRun: vi.fn(async () => {}),
   redactCloneUrl: (u: string) => u,
 }))
+const order: string[] = []
+vi.mock('../src/host/redact-worktree.js', () => ({ redactWorktree: vi.fn(async (root: string) => { order.push(`redact ${root}`); return { files: 0, hits: 0 } }) }))
 vi.mock('../src/host/review-history.js', async (importOriginal) => {
   const mod = await importOriginal<typeof import('../src/host/review-history.js')>()
   return { ...mod, recordReviewStart: vi.fn(async () => {}), recordReviewFinish: vi.fn(async () => {}), lastCompletedReview: vi.fn(async () => undefined) }
@@ -45,13 +47,15 @@ describe('ci clone worktree path', () => {
     const { defaultRun } = await import('../src/host/ci-clone.js')
     const { createReviewEngine, CI_WORKTREE_PATH } = await import('../src/host/engine.js')
     const worktrees: string[] = []
-    const agents = { reviewer: vi.fn(async (w: string) => { worktrees.push(w); return { summary: 'ok', failures: [] } }), auditor: vi.fn() }
+    const agents = { reviewer: vi.fn(async (w: string) => { worktrees.push(w); order.push('reviewer'); return { summary: 'ok', failures: [] } }), auditor: vi.fn() }
     const engine = createReviewEngine({} as any, agents as any)
     for (const [projectId, mrIid] of [[3, 4], [8, 9]]) {
       await engine.run({ projectPath: 'g/p', projectId, mrIid, sourceBranch: 'b', headSha: 'abc', trigger: 'mention', mode: 'quick', scope: { kind: 'mr' } } as any,
         { gitlab: { baseUrl: 'https://git.example.com', token: 't', botUsername: 'bot' }, access: { kind: 'clone', host: 'git.example.com' }, model: { provider: 'p', model: 'm' } as any, agentTimeoutMs: 1000 })
     }
     expect(worktrees).toEqual([CI_WORKTREE_PATH, CI_WORKTREE_PATH])
+    // The checkout is redacted before any agent reads it.
+    expect(order).toEqual([`redact ${CI_WORKTREE_PATH}`, 'reviewer', `redact ${CI_WORKTREE_PATH}`, 'reviewer'])
     expect(vi.mocked(defaultRun).mock.calls.some((c) => (c[1] as string[]).includes(CI_WORKTREE_PATH))).toBe(true)
   })
 })

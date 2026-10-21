@@ -1,5 +1,6 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { ReviewFinding } from '../review-findings-tool.js'
+import type { DiffHit } from '../redact.js'
 
 /**
  * What the review engine needs from a code forge, bound to one merge request.
@@ -42,7 +43,7 @@ export interface ReviewForge {
   /** Merge base SHA, or undefined when it cannot be read (never throws). */
   mrBaseSha(): Promise<string | undefined>
   /** Files the review may see after the ignore globs, and the paths they removed; throws when the diff cannot be read. */
-  reviewScope(): Promise<{ files: Array<{ path: string; bytes: number }>; skipped: string[] }>
+  reviewScope(): Promise<{ files: Array<{ path: string; bytes: number }>; skipped: string[]; redacted?: Array<{ path: string; hits: DiffHit[] }> }>
   /** From now on the agent tools and reviewScope serve these files (an interdiff) instead of the MR diff. */
   restrictToInterdiff(files: InterdiffFile[]): void
   /** What changed between two SHAs, or undefined when it cannot be read (never throws). */

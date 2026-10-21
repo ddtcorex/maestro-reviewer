@@ -4,6 +4,7 @@ import { defineTool } from '@deepseek-ai/dsh-tools'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { gitlabAuthHeaders } from './gitlab-auth.js'
+import type { DiffHit } from '../../redact.js'
 
 export const name = 'maestro-gitlab-client'
 export const inject = ['tools']
@@ -25,7 +26,7 @@ export interface Config {
 }
 
 /** The MR diffs a review may see, and the paths the ignore globs removed. */
-export interface ReviewDiffs { diffs: GitlabDiff[]; skipped: string[]; truncated: boolean }
+export interface ReviewDiffs { diffs: GitlabDiff[]; skipped: string[]; truncated: boolean; redacted?: Array<{ path: string; hits: DiffHit[] }> }
 
 export const Config: z<Config> = z.object({
   baseUrl: z.string().required(),

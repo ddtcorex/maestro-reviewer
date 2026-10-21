@@ -5,6 +5,18 @@ import * as GitlabClient from './gitlab-client.js'
 import { fetchCompare, fetchMrBaseSha, fetchMrDetailHeadSha, postReviewFindings, type GitlabFindingPoster } from './mr-api.js'
 import { createReviewSignals } from './review-signals.js'
 import { DEFAULT_IGNORE_GLOBS, filterDiffs } from '../../diff-filter.js'
+import { redactDiff } from '../../redact.js'
+
+/** Every diff the agents see passes through the redactor; the hits stay with the forge. */
+function redactAll(kept: GitlabClient.GitlabDiff[], skipped: string[], truncated: boolean): GitlabClient.ReviewDiffs {
+  const redacted: NonNullable<GitlabClient.ReviewDiffs['redacted']> = []
+  const diffs = kept.map((d) => {
+    const r = redactDiff(d.diff)
+    if (r.hits.length > 0) redacted.push({ path: d.new_path, hits: r.hits })
+    return r.hits.length > 0 ? { ...d, diff: r.diff } : d
+  })
+  return { diffs, skipped, truncated, redacted }
+}
 
 export interface GitlabForgeConfig { baseUrl: string; token: string; botUsername: string }
 
@@ -21,11 +33,11 @@ export function gitlabForge(
   const loadDiffs = (): Promise<GitlabClient.ReviewDiffs> => {
     if (interdiff !== undefined) {
       const { kept, skipped } = filterDiffs(interdiff, globs)
-      return Promise.resolve({ diffs: kept, skipped, truncated: false })
+      return Promise.resolve(redactAll(kept, skipped, false))
     }
     diffsLoad ??= GitlabClient.fetchAllDiffs(fetch, mrApi, gitlabAuthHeaders(cfg.token))
       .then((all) => ({ ...filterDiffs(all.diffs, globs), truncated: all.truncated }))
-      .then(({ kept, skipped, truncated }) => ({ diffs: kept, skipped, truncated }))
+      .then(({ kept, skipped, truncated }) => redactAll(kept, skipped, truncated))
       .catch((err: unknown) => { diffsLoad = undefined; throw err })
     return diffsLoad
   }
@@ -45,7 +57,7 @@ export function gitlabForge(
     restrictToInterdiff: (files) => { interdiff = files },
     reviewScope: async () => {
       const scope = await loadDiffs()
-      return { files: GitlabClient.diffFileList(scope.diffs), skipped: scope.skipped }
+      return { files: GitlabClient.diffFileList(scope.diffs), skipped: scope.skipped, redacted: scope.redacted ?? [] }
     },
     compare: (from, to) => fetchCompare(cfg.baseUrl, cfg.token, mr.projectId, from, to),
     postNote: (body) => post(`${mrApi}/notes`, body),
