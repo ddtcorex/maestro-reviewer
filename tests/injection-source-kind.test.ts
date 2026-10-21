@@ -16,7 +16,7 @@ describe('review message attribution', () => {
 
     const src = readFileSync(new URL('../src/host/engine.ts', import.meta.url), 'utf8')
     const attributed = src.match(/source: \{ kind: REVIEW_SOURCE_KIND \}/g) ?? []
-    expect(attributed, 'both injections must use the shared constant').toHaveLength(2)
+    expect(attributed, 'every injection (reviewer, auditor, command answer) must use the shared constant').toHaveLength(3)
     expect(src, 'no injection may claim a human prompt').not.toMatch(/source: \{ kind: 'user' \}/)
   })
 
@@ -24,5 +24,6 @@ describe('review message attribution', () => {
     const src = readFileSync(new URL('../src/host/engine.ts', import.meta.url), 'utf8')
     expect((src.match(/sessionTitle\.rename\(handle\.agent\.session, `Maestro Reviewer — MR !/g) ?? [])).toHaveLength(1)
     expect((src.match(/sessionTitle\.rename\(handle\.agent\.session, `Maestro Auditor — MR !/g) ?? [])).toHaveLength(1)
+    expect((src.match(/sessionTitle\.rename\(handle\.agent\.session, `Maestro Answer — MR !/g) ?? [])).toHaveLength(1)
   })
 })

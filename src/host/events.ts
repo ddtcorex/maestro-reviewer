@@ -40,6 +40,8 @@ export interface ReviewRequest extends MrOpenedPayload {
   priorHeadSha?: string
   /** MR base SHA the prior review recorded; with priorHeadSha it allows an interdiff review. */
   priorBaseSha?: string
+  /** A `/maestro rereview <path>`: review only files under this repository-relative prefix. */
+  pathPrefix?: string
   /** The prior review did not see every file. */
   priorPartial?: boolean
   /** Short (8-char) head-sha hint for `push` triggers, taken from the webhook

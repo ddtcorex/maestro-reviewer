@@ -4,7 +4,14 @@
  * summary quoting a command is never read as one.
  */
 
-export type MaestroCommand = { kind: 'dismiss'; code?: string; reason?: string }
+export type MaestroCommand =
+  | { kind: 'dismiss'; code?: string; reason?: string }
+  | { kind: 'explain' }
+  | { kind: 'fix' }
+  | { kind: 'rereview'; path?: string }
+
+/** A repository-relative path prefix: no leading slash, no `..` segment, plain characters only. */
+const SAFE_PATH = /^(?!\/)(?!.*(?:^|\/)\.\.(?:\/|$))[A-Za-z0-9._\/-]+$/
 
 const CODE = /^[A-Z][A-Z0-9-]{2,40}$/
 
@@ -18,6 +25,12 @@ export function parseCommand(noteBody: string): MaestroCommand | undefined {
     const [head, ...tail] = rest.split(/\s+/)
     if (head !== undefined && CODE.test(head)) return { kind: 'dismiss', code: head, ...(tail.length > 0 ? { reason: tail.join(' ') } : {}) }
     return rest === '' ? { kind: 'dismiss' } : { kind: 'dismiss', reason: rest }
+  }
+  if (m[1] === 'explain') return { kind: 'explain' }
+  if (m[1] === 'fix') return { kind: 'fix' }
+  if (m[1] === 'rereview') {
+    const path = rest.split(/\s+/)[0]
+    return path !== undefined && path !== '' && SAFE_PATH.test(path) ? { kind: 'rereview', path } : { kind: 'rereview' }
   }
   return undefined
 }
