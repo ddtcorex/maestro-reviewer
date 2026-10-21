@@ -58,6 +58,25 @@ review:
       yaml_variables: false
       pipeline_variables: false
 
+# Periodic report: create a pipeline schedule on this project (Build >
+# Pipeline schedules, no variables; for example weekly). The job reads the
+# review jobs' review-report.json of the last REVIEW_REPORT_DAYS (default 7,
+# at most 30) with REVIEW_GITLAB_TOKEN and keeps periodic-report.json and .md.
+report:
+  stage: review
+  image: { name: $REVIEWER_IMAGE, entrypoint: [""] }
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+  variables:
+    GIT_STRATEGY: none
+  script:
+    - /report.sh
+  artifacts:
+    expire_in: 90 days
+    paths:
+      - periodic-report.json
+      - periodic-report.md
+
 # CI/CD variables of this project (Settings > CI/CD > Variables).
 #
 # Tokens, both masked and protected:
