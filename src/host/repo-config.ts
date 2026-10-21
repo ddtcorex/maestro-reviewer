@@ -6,8 +6,9 @@ import type { ReviewSkillProfile } from './skills-tool.js'
 
 /**
  * Per-project review settings from `.maestro-review.yml` (spec section 7,
- * F1). The file is read from the MR target branch, the merged and already
- * reviewed state, never from the head: an author must not widen the ignore
+ * F1). The file is read from the project's default branch, the merged and
+ * already reviewed state, never from the head or a target branch the author
+ * picked: an author must not widen the ignore
  * globs or raise the minimum severity to hide their own change. The merge
  * gate is not a file field. Any invalid content means no settings plus one
  * warning, never a failed review.

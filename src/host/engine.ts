@@ -100,7 +100,7 @@ export interface EngineRunOptions {
   carryFindings?: ReviewMeta['findings']
   /** Fan-out thresholds and parallelism (default DEFAULT_FANOUT). */
   fanout?: FanoutSettings
-  /** Settings from the target branch's .maestro-review.yml (the caller reads and merges them). */
+  /** Settings from the default branch's .maestro-review.yml (the caller reads and merges them). */
   repo?: { rules?: string[]; minSeverity?: FindingSeverity; language?: string; warnings?: string[] }
   /** Model for high risk fan-out parts; absent = one model for every part. */
   deepModel?: ModelSelection
@@ -641,8 +641,8 @@ export function createReviewEngine(ctx: Context, agents: EngineAgents = createEn
           }
           // Only a caller that read the settings (the CI trigger) can say which ones this review used.
           if (opts.repo !== undefined && scope !== undefined && configChangedInMr(scope.files.map((f) => f.path))) {
-            // The file is read from the target branch: a change here only applies after merge.
-            notices.push(`This MR changes ${REPO_CONFIG_PATH}: the change applies after merge; this review used the target branch's settings.`)
+            // The file is read from the default branch: a change here only applies once it lands there.
+            notices.push(`This MR changes ${REPO_CONFIG_PATH}: the change applies once it is on the default branch; this review used the default branch's settings.`)
             await postDeterministic([{
               status: 'new', path: REPO_CONFIG_PATH, line: 1, severity: 'minor', code: 'CFG-CHANGED', category: 'config',
               body: `This MR changes the review settings in ${REPO_CONFIG_PATH}. They apply after merge; check that the change does not hide findings (ignore globs, minSeverity).`,

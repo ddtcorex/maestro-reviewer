@@ -138,3 +138,13 @@ describe('fan-out over a capped diff (I4)', () => {
     expect(r.partial).toBe(true)
   })
 })
+
+describe('a failed command answer', () => {
+  it('is not replied to, so the next review job tries again', async () => {
+    const { answerCommands } = await import('../src/host/ci-commands.js')
+    const reply = vi.fn(async () => {})
+    const n = await answerCommands([{ discussionId: 'd', noteId: 3, command: { kind: 'explain' }, finding: { path: 'a', line: 1, body: 'x' } }] as any, { answer: async () => { throw new Error('rate limited') }, reply })
+    expect(n).toBe(0)
+    expect(reply).not.toHaveBeenCalled()
+  })
+})

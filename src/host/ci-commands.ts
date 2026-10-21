@@ -120,9 +120,14 @@ export async function answerCommands(
   let answered = 0
   for (const c of pending) {
     if (c.command.kind === 'rereview') continue
-    const text = c.finding === undefined
-      ? COMMAND_USAGE
-      : await deps.answer(buildCommandPrompt(c.command, c.finding)).catch((err: unknown) => `Could not answer: ${err instanceof Error ? err.message : String(err)}`)
+    let text: string
+    try {
+      text = c.finding === undefined ? COMMAND_USAGE : await deps.answer(buildCommandPrompt(c.command, c.finding))
+    } catch (err) {
+      // No reply: an answered command is one with a reply, so the next review job tries again.
+      console.warn(`[review] command not answered, left for the next job: ${err instanceof Error ? err.message : String(err)}`)
+      continue
+    }
     await deps.reply(c.discussionId, `${sanitizeAgentText(text)}\n\n${commandMarker(c.noteId)}`).then(() => { answered++ })
       .catch((err: unknown) => console.warn(`[review] command answer not posted: ${err instanceof Error ? err.message : String(err)}`))
   }

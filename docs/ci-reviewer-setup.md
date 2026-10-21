@@ -346,7 +346,8 @@ A source project can keep review settings in a `.maestro-review.yml` at its
 root. The reviewer reads it from the project's **default branch**, never from
 the MR or the branch it targets (an author chooses the target), so an author
 cannot loosen the review of their own change. An MR that edits the file gets a
-`CFG-CHANGED` finding and a note that the change applies after merge.
+`CFG-CHANGED` finding and a note that the change applies once it is on the
+default branch.
 
 ```yaml
 profile: magento2            # magento2 | laravel | symfony | wordpress | generic
