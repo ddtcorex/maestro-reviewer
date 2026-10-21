@@ -31,22 +31,39 @@ export interface ReviewerScopePromptOpts {
    * worktree and the MR base sha because nothing wires them as defaults.
    */
   lint: { worktreePath: string; base: string } | null
+  /** What changed since the last completed review (re-reviews only). */
+  incrementalBlock?: string
 }
 
 /**
- * Reviewer scope prompt. Static analysis is mandatory: reviewers skipped the
- * lint for whole rounds (no lint signal at all), so the prompt requires at
- * least one govard CLI lint run through the bash tool before
- * report_review_findings. A run that cannot execute is reported, never fatal.
- * Pure for testing.
+ * Reviewer scope prompt, split for provider prefix caching (spec section 6,
+ * P5): `stable` holds only what is the same for every MR of a profile and
+ * mode, `dynamic` everything carrying a path, SHA or MR state, and is sent
+ * last. Static analysis is mandatory: reviewers skipped the lint for whole
+ * rounds, so the prompt requires at least one govard CLI lint run through
+ * the bash tool before report_review_findings. A run that cannot execute is
+ * reported, never fatal. Pure for testing.
  */
-export function buildReviewerScopePrompt(opts: ReviewerScopePromptOpts): string {
-  const lintRule = opts.lint === null ? '' : ` LINT RULE: you MUST run the govard lint with the bash tool at least once before report_review_findings, with workdir "${opts.lint.worktreePath}": govard audit run --checks lint --format json --mode auto --timeout auto --lint-provider govard --scope diff --base "${opts.lint.base}". Pass timeoutMs 600000 (the bash tool maximum); if the result says the command is still running and moved to a background job, poll it with job_output and never start it again. Exit 0 means clean and 1 means findings in the JSON output. A run that cannot execute (govard missing, no Docker, a timeout, an unsupported framework) is not a finding and must not stop the review: say that lint was unavailable and continue. A review that never attempts the lint run is incomplete.`
+export function reviewerPromptParts(opts: ReviewerScopePromptOpts): { stable: string[]; dynamic: string[] } {
+  const dynamic: string[] = []
+  if (opts.lint !== null) dynamic.push(`LINT RULE: you MUST run the govard lint with the bash tool at least once before report_review_findings, with workdir "${opts.lint.worktreePath}": govard audit run --checks lint --format json --mode auto --timeout auto --lint-provider govard --scope diff --base "${opts.lint.base}". Pass timeoutMs 600000 (the bash tool maximum); if the result says the command is still running and moved to a background job, poll it with job_output and never start it again. Exit 0 means clean and 1 means findings in the JSON output. A run that cannot execute (govard missing, no Docker, a timeout, an unsupported framework) is not a finding and must not stop the review: say that lint was unavailable and continue. A review that never attempts the lint run is incomplete.`)
   if (opts.scopeKind === 'discussion') {
-    return `${opts.profileInstruction}Review only the requested inline discussion ${opts.discussionId} at ${opts.path}:${opts.line}. Do not review unrelated files or start a broad audit. Call gitlab_get_mr_diff, then gitlab_get_file_diff for the file under review, then call report_review_findings exactly once when done. ${lintRule}`
+    return {
+      stable: [`${opts.profileInstruction}Review only the requested inline discussion. Do not review unrelated files or start a broad audit. Call gitlab_get_mr_diff, then gitlab_get_file_diff for the file under review, then call report_review_findings exactly once when done.`],
+      dynamic: [`The discussion is ${opts.discussionId} at ${opts.path}:${opts.line}.`, ...dynamic],
+    }
   }
   const deletedFilesRule = 'DELETED FILES: a deleted file\'s diff only tells you what logic is gone — never file a finding positioned on a deleted file (there is no line left to fix). If removing it drops behavior that is not replicated elsewhere, report that as a finding against the file that should carry the replacement logic (or the closest call site), not the deleted file itself.'
-  return `${opts.profileInstruction}Review this merge request (${opts.mode} mode). Call gitlab_list_own_review_threads and gitlab_get_mr_diff first, then gitlab_get_file_diff per file you inspect (inline results never spill), then call report_review_findings exactly once when done. ${lintRule} DEDUP RULE: when a finding matches the substance of an existing own thread (same file and same underlying issue, even if worded differently — including resolved threads, whose reply reopens them), report it as {status: "reply", discussionId} instead of posting a new thread. Use status "new" only for issues with no matching thread. ${deletedFilesRule}`
+  if (opts.incrementalBlock !== undefined) dynamic.push(opts.incrementalBlock)
+  return {
+    stable: [`${opts.profileInstruction}Review this merge request (${opts.mode} mode). Call gitlab_list_own_review_threads and gitlab_get_mr_diff first, then gitlab_get_file_diff per file you inspect (inline results never spill), then call report_review_findings exactly once when done. DEDUP RULE: when a finding matches the substance of an existing own thread (same file and same underlying issue, even if worded differently — including resolved threads, whose reply reopens them), report it as {status: "reply", discussionId} instead of posting a new thread. Use status "new" only for issues with no matching thread. ${deletedFilesRule}`],
+    dynamic,
+  }
+}
+
+export function buildReviewerScopePrompt(opts: ReviewerScopePromptOpts): string {
+  const { stable, dynamic } = reviewerPromptParts(opts)
+  return [stable.join(''), ...dynamic].join('\n\n')
 }
 
 /**

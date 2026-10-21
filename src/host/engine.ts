@@ -50,6 +50,13 @@ import {
 const execFileAsync = promisify(execFile)
 const GIT_TIMEOUT_MS = 60_000
 
+/**
+ * The CI review worktree. One review runs per job container, and DSH writes
+ * the session workspace path into the model-visible runtime context, so a
+ * per-MR path would end the provider's cached prefix right there.
+ */
+export const CI_WORKTREE_PATH = '/tmp/maestro-review-worktree'
+
 export type EnsureWorktree = (localRepoPath: string, sourceBranch: string, projectId: number, mrIid: number, keySuffix?: string) => Promise<string>
 
 /** How the engine reaches the code under review. */
@@ -205,10 +212,9 @@ export function createEngineAgents(ctx: Context): EngineAgents {
         const lint = worktreePath !== undefined && lintDefaultBase && detectGovardLint(ctx, handle.agent)
           ? { worktreePath, base: lintDefaultBase }
           : null
-        let scopePrompt = payload.scope.kind === 'discussion'
+        const scopePrompt = payload.scope.kind === 'discussion'
           ? buildReviewerScopePrompt({ scopeKind: 'discussion', discussionId: payload.scope.discussionId, path: payload.scope.path, line: payload.scope.line, profileInstruction, lint })
-          : buildReviewerScopePrompt({ scopeKind: 'full', mode: payload.mode, profileInstruction, lint })
-        if (incrementalBlock !== undefined) scopePrompt = `${incrementalBlock}\n\n${scopePrompt}`
+          : buildReviewerScopePrompt({ scopeKind: 'full', mode: payload.mode, profileInstruction, lint, ...(incrementalBlock !== undefined ? { incrementalBlock } : {}) })
         handle.agent.followup(createUserMessage({
           content: [{ type: 'text', text: scopePrompt }],
           source: { kind: REVIEW_SOURCE_KIND },
@@ -447,9 +453,9 @@ export function createReviewEngine(ctx: Context, agents: EngineAgents = createEn
           await cloneSourceRepo({ fetcher: fetch, run: defaultRun, host: access.host, projectId: payload.projectId, sourceBranch: payload.sourceBranch, headSha: payload.headSha as string, token: gitlab.token, dir: cloneDir, ...(baseSha ? { baseSha } : {}) })
           timer.mark('clone')
           try {
-            const ciEnsureWorktree = async (repoPath: string, branch: string, pid: number, iid: number, suffix?: string): Promise<string> => {
+            const ciEnsureWorktree = async (repoPath: string, branch: string): Promise<string> => {
               assertSafeBranchName(branch)
-              const wt = join('/tmp', `maestro-mr-${pid}-${iid}${suffix === undefined ? '' : `-${suffix}`}`)
+              const wt = CI_WORKTREE_PATH
               // No re-fetch: the clone already holds the head, and `fetch --depth` on a
               // shallow repo would cut back the history the base check just deepened.
               await defaultRun('git', ['worktree', 'remove', '--force', wt], repoPath).catch(() => {})
