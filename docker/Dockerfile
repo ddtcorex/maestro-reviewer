@@ -64,8 +64,9 @@ COPY docker/ci-settings.deepseek.yaml /app/settings.yaml
 COPY docker/ci-settings.generic-openai.yaml /app/settings.generic-openai.yaml
 COPY docker/entrypoint.sh /entrypoint.sh
 COPY docker/resolve.sh /resolve.sh
+COPY docker/report.sh /report.sh
 COPY docker/route.sh /route.sh
-RUN chmod +x /entrypoint.sh /resolve.sh
+RUN chmod +x /entrypoint.sh /resolve.sh /report.sh
 
 LABEL org.opencontainers.image.source="https://github.com/ddtcorex/maestro-reviewer"
 LABEL org.opencontainers.image.revision="$CI_COMMIT_SHA"

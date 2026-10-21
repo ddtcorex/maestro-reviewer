@@ -148,7 +148,8 @@ export function childPipelineYaml(o: ChildOptions): string {
     script: ['/entrypoint.sh'],
     resource_group: `review-${key}`,
     cache: { key: `maestro-review-${key}`, paths: ['.maestro-history/'] },
-    artifacts: { when: 'always', expire_in: '1 week', paths: ['review-report.json', 'review-report.md', 'gl-code-quality-report.json'], reports: { codequality: 'gl-code-quality-report.json' } },
+    // 30 days: the scheduled report reads these, and a monthly window must still find them.
+    artifacts: { when: 'always', expire_in: '30 days', paths: ['review-report.json', 'review-report.md', 'gl-code-quality-report.json'], reports: { codequality: 'gl-code-quality-report.json' } },
   }
   return `${JSON.stringify({ review }, null, 2)}\n`
 }
