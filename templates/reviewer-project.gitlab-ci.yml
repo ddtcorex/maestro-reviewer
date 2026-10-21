@@ -24,7 +24,7 @@ stages: [resolve, review]
 
 variables:
   # Pin the tag (or digest) for reproducibility.
-  REVIEWER_IMAGE: "ddtcorex/maestro-reviewer:0.16.0"
+  REVIEWER_IMAGE: "ddtcorex/maestro-reviewer:0.17.0"
 
 resolve:
   stage: resolve
