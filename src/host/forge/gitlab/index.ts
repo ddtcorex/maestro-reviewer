@@ -103,7 +103,7 @@ export function gitlabForge(
     },
     reviewScope: async () => {
       const scope = await loadDiffs()
-      return { files: GitlabClient.diffFileList(scope.diffs), skipped: scope.skipped, redacted: scope.redacted ?? [] }
+      return { files: GitlabClient.diffFileList(scope.diffs), skipped: scope.skipped, redacted: scope.redacted ?? [], ...(scope.truncated ? { truncated: true } : {}) }
     },
     compare: (from, to) => fetchCompare(cfg.baseUrl, cfg.token, mr.projectId, from, to),
     postNote: (body) => post(`${mrApi}/notes`, body),

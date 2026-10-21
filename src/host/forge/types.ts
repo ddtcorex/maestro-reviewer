@@ -45,7 +45,7 @@ export interface ReviewForge {
   /** Merge base SHA, or undefined when it cannot be read (never throws). */
   mrBaseSha(): Promise<string | undefined>
   /** Files the review may see after the ignore globs, and the paths they removed; throws when the diff cannot be read. */
-  reviewScope(): Promise<{ files: Array<{ path: string; bytes: number }>; skipped: string[]; redacted?: Array<{ path: string; hits: DiffHit[] }> }>
+  reviewScope(): Promise<{ files: Array<{ path: string; bytes: number }>; skipped: string[]; redacted?: Array<{ path: string; hits: DiffHit[] }>; truncated?: boolean }>
   /** `<code>@<path>` of the bot's open finding threads, so a deterministic finding is not posted twice. */
   openFindingKeys?(): Promise<Set<string>>
   /** A file's text at `ref`, undefined when it does not exist there. */

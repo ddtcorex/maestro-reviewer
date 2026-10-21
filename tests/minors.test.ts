@@ -130,3 +130,11 @@ describe('review-report.json', () => {
     expect(writes.get('gl-code-quality-report.json')).toContain('X-Y')
   })
 })
+
+describe('fan-out over a capped diff (I4)', () => {
+  it('marks the review partial', async () => {
+    const many = Array.from({ length: 4 }, (_, i) => ({ path: `src/M${i}/a.php`, bytes: 1 }))
+    const r = await run(forgeWith({ reviewScope: async () => ({ files: many, skipped: [], truncated: true }) }), async () => ({ summary: 'ok', failures: [] }), { fanout: { files: 1, bytes: 1_000_000, concurrency: 2 } })
+    expect(r.partial).toBe(true)
+  })
+})

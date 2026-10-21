@@ -547,6 +547,8 @@ export function createReviewEngine(ctx: Context, agents: EngineAgents = createEn
         return { ok: true, summary, failures: [], durationMs: Date.now() - t0, ...telemetry() }
       }
       let scopeFiles: Array<{ path: string; bytes: number }> | undefined
+      /** The MR diff hit GitLab's file cap: files beyond it are never reviewed. */
+      let scopeTruncated = false
       // Opt-in: only a caller that passes thresholds (the CI trigger) fans out.
       const fanout = opts.fanout
       /** One reviewer run, or parallel parts for a large MR whose findings are merged and posted once. */
@@ -566,7 +568,7 @@ export function createReviewEngine(ctx: Context, agents: EngineAgents = createEn
         if (done.length === 0) throw new Error(`every review part failed: ${[...new Set(failed.map((f) => f.reason))].join('; ')}`)
         const findings = mergeFindings(done.map((o) => o.findings ?? []))
         const posted = await postFindingsSequentially(forge, findings, { minSeverity: agentRun.minSeverity, muted: agentRun.mutedCodes })
-        const parts = [`Reviewed in ${chunks.length} parallel parts.`, ...failed.map((f) => `Part ${f.chunk.id} (${f.chunk.files.length} files) failed: ${f.reason}; its files were not reviewed.`)]
+        const parts = [`Reviewed in ${chunks.length} parallel parts.`, ...(scopeTruncated ? ['The diff reached the file cap: files beyond it were not reviewed.'] : []), ...failed.map((f) => `Part ${f.chunk.id} (${f.chunk.files.length} files) failed: ${f.reason}; its files were not reviewed.`)]
         return {
           summary: summaryWithFloor(`${reviewerSummary(posted.postedNew, posted.postedReplies, false)} ${parts.join(' ')}`, posted.belowMinimum, agentRun.minSeverity),
           failures: [...done.flatMap((o) => o.failures), ...posted.failures],
@@ -574,7 +576,8 @@ export function createReviewEngine(ctx: Context, agents: EngineAgents = createEn
           findings,
           postedFindings: posted.posted,
           models: [...new Set(done.flatMap((o) => o.models ?? []))],
-          ...(failed.length > 0 ? { partial: true, unreviewed: failed.reduce((n, f) => n + f.chunk.files.length, 0) } : {}),
+          // The count covers failed parts only, so a capped diff leaves it out (it would undercount).
+          ...(failed.length > 0 || scopeTruncated ? { partial: true, ...(scopeTruncated ? {} : { unreviewed: failed.reduce((n, f) => n + f.chunk.files.length, 0) }) } : {}),
         }
       }
       const diffOnly = () => runDiffOnlyReview(payload, {
@@ -614,6 +617,7 @@ export function createReviewEngine(ctx: Context, agents: EngineAgents = createEn
           }
           skippedFiles = scope?.skipped
           scopeFiles = scope?.files
+          scopeTruncated = scope?.truncated === true
           // Feedback is optional context: an unreadable history never blocks the review.
           const muted = mutedCodes(await Promise.resolve().then(() => forge.feedback(FEEDBACK_WINDOW)).catch(() => new Map<string, number>()))
           if (muted.size > 0) {
