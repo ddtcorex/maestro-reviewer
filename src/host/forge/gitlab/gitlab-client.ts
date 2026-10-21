@@ -18,6 +18,8 @@ export interface Config {
   onDiffTruncated?: () => void
   /** The forge's shared, already filtered diff load; absent = fetch every file here. */
   loadDiffs?: () => Promise<ReviewDiffs>
+  /** A fan-out part: the tools serve only these new paths. */
+  onlyPaths?: string[]
 }
 
 /** The MR diffs a review may see, and the paths the ignore globs removed. */
@@ -31,6 +33,7 @@ export const Config: z<Config> = z.object({
   botUsername: z.string().required(),
   onDiffTruncated: z.function(),
   loadDiffs: z.function(),
+  onlyPaths: z.array(z.string()),
 })
 
 /** Hard cap on diff files fetched for one review. */
@@ -189,10 +192,14 @@ export function apply(ctx: Context, config: Config): void {
 
   let diffsTruncated = false
   let skippedPaths: string[] = []
+  let otherPartPaths: string[] = []
   async function getDiffs(): Promise<GitlabDiff[]> {
     if (cachedDiffs !== undefined) return cachedDiffs
     const all = config.loadDiffs !== undefined ? await config.loadDiffs() : { ...await fetchAllDiffs(fetch, apiBase, headers), skipped: [] }
-    cachedDiffs = all.diffs
+    // Empty means no allowlist: the schema defaults an absent array to [], and a part is never empty.
+    const only = config.onlyPaths === undefined || config.onlyPaths.length === 0 ? undefined : new Set(config.onlyPaths)
+    cachedDiffs = only === undefined ? all.diffs : all.diffs.filter((d) => only.has(d.new_path))
+    otherPartPaths = only === undefined ? [] : all.diffs.filter((d) => !only.has(d.new_path)).flatMap((d) => [d.new_path, d.old_path])
     skippedPaths = all.skipped
     diffsTruncated = all.truncated
     if (all.truncated) config.onDiffTruncated?.()
@@ -242,6 +249,9 @@ export function apply(ctx: Context, config: Config): void {
     async execute(args) {
       const diffs = await getDiffs()
       const text = selectFileDiff(diffs, args.path)
+      if (text === undefined && otherPartPaths.includes(args.path)) {
+        throw new Error(`path belongs to another part of this review: ${args.path}`)
+      }
       if (text === undefined && skippedPaths.includes(args.path)) {
         throw new Error(`path filtered from this review (generated, vendored or lock file): ${args.path}`)
       }

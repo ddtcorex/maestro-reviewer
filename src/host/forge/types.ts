@@ -42,7 +42,7 @@ export interface ReviewForge {
   /** Merge base SHA, or undefined when it cannot be read (never throws). */
   mrBaseSha(): Promise<string | undefined>
   /** Files the review may see after the ignore globs, and the paths they removed; throws when the diff cannot be read. */
-  reviewScope(): Promise<{ files: number; skipped: string[] }>
+  reviewScope(): Promise<{ files: Array<{ path: string; bytes: number }>; skipped: string[] }>
   /** From now on the agent tools and reviewScope serve these files (an interdiff) instead of the MR diff. */
   restrictToInterdiff(files: InterdiffFile[]): void
   /** What changed between two SHAs, or undefined when it cannot be read (never throws). */
@@ -54,5 +54,5 @@ export interface ReviewForge {
   /** Running and final markers on the merge request. */
   signals(): ForgeSignals
   /** Mounts the forge's read tools (diffs, threads, inline comments) on a review agent. */
-  mountAgentTools(agentCtx: Context, opts: { onDiffTruncated?(): void }): Promise<void>
+  mountAgentTools(agentCtx: Context, opts: { onDiffTruncated?(): void; onlyPaths?: string[] }): Promise<void>
 }

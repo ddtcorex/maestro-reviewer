@@ -10,6 +10,7 @@ import type { CodeAccess, EngineRunOptions } from '../engine.js'
 import type {} from '../engine-row.js'
 import { gitlabAuthHeaders } from '../forge/gitlab/gitlab-auth.js'
 import { resolveIgnoreGlobs } from '../diff-filter.js'
+import { DEFAULT_FANOUT, type FanoutSettings } from '../chunking.js'
 import { fetchBotUserId, hasCompletedDeepReview, hasCompletedReviewForSha, hasRunningEyes, latestCompletedReview, removeDeepLabel } from '../ci-coexist.js'
 
 export const name = 'maestro-review-ci-trigger'
@@ -40,6 +41,10 @@ export interface CiEnvConfig {
   deepRequested: boolean
   /** Paths kept from the model: the defaults plus REVIEW_IGNORE_GLOBS. */
   ignoreGlobs: string[]
+  /** REVIEW_FANOUT_FILES / _BYTES / _CONCURRENCY over DEFAULT_FANOUT. */
+  fanout: FanoutSettings
+  /** REVIEW_DEEP_MODEL_PROVIDER + REVIEW_DEEP_MODEL: the model of high risk fan-out parts. */
+  deepModel?: { provider: string; model: string }
 }
 
 export const CiEnvConfig: z<CiEnvConfig> = z.object({
@@ -57,7 +62,17 @@ export const CiEnvConfig: z<CiEnvConfig> = z.object({
   rereviewOnPush: z.boolean().default(false),
   deepRequested: z.boolean().default(false),
   ignoreGlobs: z.array(z.string()).required(),
+  fanout: z.object({ files: z.natural().required(), bytes: z.natural().required(), concurrency: z.natural().required() }).required(),
+  deepModel: z.union([z.object({ provider: z.string(), model: z.string() }), z.const(undefined)]),
 })
+
+/** A positive integer env value, or the default when unset; anything else fails the job naming the variable. */
+function positiveInt(env: Record<string, string | undefined>, name: string, fallback: number): number {
+  const raw = env[name]
+  if (raw === undefined || raw.trim() === '') return fallback
+  if (!/^\d+$/.test(raw.trim()) || Number(raw) < 1) throw new Error(`${name} must be a positive integer, got "${raw}"`)
+  return Number(raw)
+}
 
 /**
  * Reads the CI contract env vars (spec §5.2) — not Cordis-supplied config, since these are
@@ -91,6 +106,12 @@ export function parseCiEnvConfig(env: Record<string, string | undefined>): CiEnv
     rereviewOnPush: env.REVIEW_ON_PUSH === '1',
     deepRequested: env.REVIEW_DEEP_REQUESTED === '1',
     ignoreGlobs: resolveIgnoreGlobs(env),
+    fanout: {
+      files: positiveInt(env, 'REVIEW_FANOUT_FILES', DEFAULT_FANOUT.files),
+      bytes: positiveInt(env, 'REVIEW_FANOUT_BYTES', DEFAULT_FANOUT.bytes),
+      concurrency: positiveInt(env, 'REVIEW_FANOUT_CONCURRENCY', DEFAULT_FANOUT.concurrency),
+    },
+    ...(env.REVIEW_DEEP_MODEL ? { deepModel: { provider: env.REVIEW_DEEP_MODEL_PROVIDER as string, model: env.REVIEW_DEEP_MODEL } } : {}),
   })
 }
 
@@ -122,6 +143,11 @@ export async function fetchMrDetail(config: CiEnvConfig, fetcher: typeof fetch =
 export function ciAccess(config: CiEnvConfig): CodeAccess {
   const checkout = config.mode === 'deep' || (config.reviewProfile !== undefined && config.reviewProfile !== 'generic')
   return checkout ? { kind: 'clone', host: config.gitlabHost } : { kind: 'diff' }
+}
+
+/** The fan-out engine options of the job. */
+export function ciFanout(config: CiEnvConfig): Pick<EngineRunOptions, 'fanout' | 'deepModel'> {
+  return { fanout: config.fanout, ...(config.deepModel !== undefined ? { deepModel: config.deepModel } : {}) }
 }
 
 /** The pinned model, else the host default (no Settings UI in CI). */
@@ -172,6 +198,7 @@ export async function runCiTrigger(
     model: ciModel(ctx, config),
     agentTimeoutMs: config.agentTimeoutMs,
     ignoreGlobs: config.ignoreGlobs,
+    ...ciFanout(config),
   }
   const runReview = () => { gateMs = Date.now() - gateStart; return ctx.reviewEngine.run({
     projectPath,

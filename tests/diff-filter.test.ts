@@ -61,7 +61,7 @@ describe('gitlab forge with ignore globs', () => {
     vi.stubGlobal('fetch', fetchSpy)
     const { gitlabForge } = await import('../src/host/forge/gitlab/index.js')
     const forge = gitlabForge({ baseUrl: 'https://git.example.com', token: 't', botUsername: 'bot' }, { projectId: 1, mrIid: 2 }, { ignoreGlobs: DEFAULT_IGNORE_GLOBS })
-    expect(await forge.reviewScope()).toEqual({ files: 1, skipped: ['composer.lock', 'pub/static/x.js'] })
+    expect(await forge.reviewScope()).toEqual({ files: [{ path: 'app/code/X/A.php', bytes: 18 }], skipped: ['composer.lock', 'pub/static/x.js'] })
     const tools: Array<{ name: string; execute: (args: any, exec?: any) => Promise<any> }> = []
     await forge.mountAgentTools({ plugin: async (mod: any, cfg: any) => mod.apply({ tools: { register: (t: any) => tools.push(t) } }, cfg) } as any, {})
     const fileDiff = tools.find((t) => t.name === 'gitlab_get_file_diff')!
@@ -82,7 +82,7 @@ describe('engine with an all filtered merge request', () => {
     const calls: string[] = []
     const forge = {
       mrHeadSha: async () => 'abc123', mrBaseSha: async () => 'base', compare: async () => undefined,
-      reviewScope: async () => ({ files: 0, skipped: ['composer.lock', 'pub/static/x.js'] }),
+      reviewScope: async () => ({ files: [], skipped: ['composer.lock', 'pub/static/x.js'] }),
       postNote: async (body: string) => { bodies.push(body) }, replyToDiscussion: async () => {}, postFindings: async () => {},
       signals: () => ({ start: async () => { calls.push('start') }, finish: async (s: string) => { calls.push(`finish ${s}`) } }),
       mountAgentTools: async () => {},

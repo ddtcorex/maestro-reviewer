@@ -30,6 +30,8 @@ import { buildIncrementalBlock, planIncremental } from './incremental.js'
 import { loadedReviewProfile, type ReviewSkillProfile } from './skills-tool.js'
 import { REVIEW_SOURCE_KIND } from './source.js'
 import { cloneSourceRepo, defaultRun } from './ci-clone.js'
+import { DEFAULT_FANOUT, planChunks, runWithConcurrency, type Chunk, type FanoutSettings } from './chunking.js'
+import { mergeFindings } from './merge-findings.js'
 import { createStageTimer, sumUsage, usageFromSession, type AgentUsage, type TokenUsage } from './telemetry.js'
 import {
   agentOptionsForModel, assertSafeBranchName, assertTurnSucceededOrSalvage, auditorOutputFromSession, buildAuditorPrompt,
@@ -87,6 +89,10 @@ export interface EngineRunOptions {
   agentTimeoutMs: number
   /** The forge of this MR; defaults to GitLab at `gitlab`. */
   forge?: ReviewForge
+  /** Fan-out thresholds and parallelism (default DEFAULT_FANOUT). */
+  fanout?: FanoutSettings
+  /** Model for high risk fan-out parts; absent = one model for every part. */
+  deepModel?: ModelSelection
   /** Paths kept from the model (default DEFAULT_IGNORE_GLOBS); used only by the default GitLab forge. */
   ignoreGlobs?: readonly string[]
   /**
@@ -124,8 +130,11 @@ export interface AgentRunConfig {
 }
 
 /** The reviewer and auditor agent runs; separate so the run flow can be tested without agents. */
+/** One fan-out part: the reviewer sees only these files and leaves posting to the merge. */
+export interface ReviewChunk { label: string; files: string[] }
+
 export interface EngineAgents {
-  reviewer(worktreePath: string | undefined, payload: ReviewRequest, run: AgentRunConfig, reviewProfile?: ReviewSkillProfile, incrementalBlock?: string): Promise<ReviewOutcome>
+  reviewer(worktreePath: string | undefined, payload: ReviewRequest, run: AgentRunConfig, reviewProfile?: ReviewSkillProfile, incrementalBlock?: string, chunk?: ReviewChunk): Promise<ReviewOutcome>
   auditor(worktreePath: string, payload: ReviewRequest, run: AgentRunConfig, opts?: { staticOnly?: boolean }): Promise<string>
 }
 
@@ -161,8 +170,26 @@ export function summarizeReport(body: string | undefined): string | undefined {
   return `${(lastSpace > 80 ? cut.slice(0, lastSpace) : cut).trim()} …`
 }
 
+/** Posts findings one by one so one bad position never loses the rest. */
+export async function postFindingsSequentially(forge: ReviewForge, findings: ReviewFinding[]): Promise<{ postedNew: number; postedReplies: number; failures: string[] }> {
+  const failures: string[] = []
+  let postedNew = 0
+  let postedReplies = 0
+  for (const finding of findings) {
+    try {
+      await forge.postFindings([finding])
+      if (finding.status === 'new') postedNew++
+      else postedReplies++
+    } catch (err) {
+      const locator = finding.status === 'new' ? `${finding.path}:${finding.line}` : finding.discussionId
+      failures.push(`${locator}: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  }
+  return { postedNew, postedReplies, failures }
+}
+
 export function createEngineAgents(ctx: Context): EngineAgents {
-  async function reviewer(worktreePath: string | undefined, payload: ReviewRequest, run: AgentRunConfig, reviewProfile?: ReviewSkillProfile, incrementalBlock?: string): Promise<ReviewOutcome> {
+  async function reviewer(worktreePath: string | undefined, payload: ReviewRequest, run: AgentRunConfig, reviewProfile?: ReviewSkillProfile, incrementalBlock?: string, chunk?: ReviewChunk): Promise<ReviewOutcome> {
     // MR base SHA feeds the govard diff-scope lint command; undefined omits the
     // lint rule instead of sending a wasted govard invocation.
     const lintDefaultBase = await run.forge.mrBaseSha()
@@ -182,7 +209,7 @@ export function createEngineAgents(ctx: Context): EngineAgents {
             installModelSelection(agentCtx, { current: agentOptions, assembled: undefined })
             await agentCtx.plugin(ReviewToolPolicy, { onToolCall: run.onToolCall })
             await mountAgentPreset(ctx.agentPresets, agentCtx, 'dsh-maestro-reviewer')
-            await run.forge.mountAgentTools(agentCtx, { onDiffTruncated: () => { diffTruncated = true } })
+            await run.forge.mountAgentTools(agentCtx, { onDiffTruncated: () => { diffTruncated = true }, ...(chunk !== undefined ? { onlyPaths: chunk.files } : {}) })
             await agentCtx.plugin(ReviewFindingsTool, { onReport: (findings) => { capturedFindings = findings } })
             // Diff-only runs have no worktree; nothing to search there.
             if (worktreePath !== undefined) {
@@ -214,7 +241,7 @@ export function createEngineAgents(ctx: Context): EngineAgents {
           : null
         const scopePrompt = payload.scope.kind === 'discussion'
           ? buildReviewerScopePrompt({ scopeKind: 'discussion', discussionId: payload.scope.discussionId, path: payload.scope.path, line: payload.scope.line, profileInstruction, lint })
-          : buildReviewerScopePrompt({ scopeKind: 'full', mode: payload.mode, profileInstruction, lint, ...(incrementalBlock !== undefined ? { incrementalBlock } : {}) })
+          : buildReviewerScopePrompt({ scopeKind: 'full', mode: payload.mode, profileInstruction, lint, ...(incrementalBlock !== undefined ? { incrementalBlock } : {}), ...(chunk !== undefined ? { part: chunk } : {}) })
         handle.agent.followup(createUserMessage({
           content: [{ type: 'text', text: scopePrompt }],
           source: { kind: REVIEW_SOURCE_KIND },
@@ -236,19 +263,8 @@ export function createEngineAgents(ctx: Context): EngineAgents {
           return { summary: response, failures: [] }
         }
 
-        const failures: string[] = []
-        let postedNew = 0
-        let postedReplies = 0
-        for (const finding of capturedFindings) {
-          try {
-            await run.forge.postFindings([finding])
-            if (finding.status === 'new') postedNew++
-            else postedReplies++
-          } catch (err) {
-            const locator = finding.status === 'new' ? `${finding.path}:${finding.line}` : finding.discussionId
-            failures.push(`${locator}: ${err instanceof Error ? err.message : String(err)}`)
-          }
-        }
+        if (chunk !== undefined) return { summary: '', failures: [], findings: capturedFindings, models: [primaryOptions.model], deferredPost: true }
+        const { postedNew, postedReplies, failures } = await postFindingsSequentially(run.forge, capturedFindings)
         return { summary: reviewerSummary(postedNew, postedReplies, diffTruncated), failures, severityCounts: countFindingSeverities(capturedFindings), findings: capturedFindings, models: [primaryOptions.model] }
       } finally {
         run.onUsage('reviewer', agentOptions.model, usageFromSession(handle.agent.session))
@@ -425,8 +441,30 @@ export function createReviewEngine(ctx: Context, agents: EngineAgents = createEn
         await signals?.finish('completed')
         return { ok: true, summary, failures: [], durationMs: Date.now() - t0, ...telemetry() }
       }
+      let scopeFiles: Array<{ path: string; bytes: number }> | undefined
+      const fanout = opts.fanout ?? DEFAULT_FANOUT
+      /** One reviewer run, or parallel parts for a large MR whose findings are merged and posted once. */
+      const review = async (worktreePath: string | undefined, p: ReviewRequest, profile?: ReviewSkillProfile): Promise<ReviewOutcome> => {
+        const chunks = p.scope.kind === 'mr' && scopeFiles !== undefined ? planChunks(scopeFiles, fanout) : []
+        if (chunks.length <= 1) return agents.reviewer(worktreePath, p, agentRun, profile, incrementalBlock)
+        const runFor = (c: Chunk): AgentRunConfig => c.risk === 'high' && opts.deepModel !== undefined ? { ...agentRun, model: opts.deepModel } : agentRun
+        const settled = await runWithConcurrency(chunks.map((c) => () => agents.reviewer(worktreePath, p, runFor(c), profile, incrementalBlock, { label: c.id, files: c.files })), fanout.concurrency)
+        const done = settled.flatMap((r) => r.status === 'fulfilled' ? [r.value] : [])
+        const failed = settled.flatMap((r, i) => r.status === 'rejected' ? [{ chunk: chunks[i], reason: r.reason instanceof Error ? r.reason.message : String(r.reason) }] : [])
+        if (done.length === 0) throw new Error(`every review part failed: ${failed[0].reason}`)
+        const findings = mergeFindings(done.map((o) => o.findings ?? []))
+        const posted = await postFindingsSequentially(forge, findings)
+        const parts = [`Reviewed in ${chunks.length} parallel parts.`, ...failed.map((f) => `Part ${f.chunk.id} (${f.chunk.files.length} files) failed: ${f.reason}; its files were not reviewed.`)]
+        return {
+          summary: `${reviewerSummary(posted.postedNew, posted.postedReplies, false)} ${parts.join(' ')}`,
+          failures: [...done.flatMap((o) => o.failures), ...posted.failures],
+          severityCounts: countFindingSeverities(findings),
+          findings,
+          models: [...new Set(done.flatMap((o) => o.models ?? []))],
+        }
+      }
       const diffOnly = () => runDiffOnlyReview(payload, {
-        runReviewer: (p) => agents.reviewer(undefined, p, agentRun, payload.reviewProfile, incrementalBlock),
+        runReviewer: (p) => review(undefined, p, payload.reviewProfile),
         postComment,
         replyToDiscussion,
         writeFailedReport,
@@ -441,7 +479,7 @@ export function createReviewEngine(ctx: Context, agents: EngineAgents = createEn
           // An unreadable diff is left to the agents, which report it themselves.
           const scope = await forge.reviewScope().catch(() => undefined)
           timer.mark('fetch')
-          if (scope !== undefined && scope.files === 0) {
+          if (scope !== undefined && scope.files.length === 0) {
             const body = buildNothingReviewableComment(payload, { gitlabBaseUrl: gitlab.baseUrl, skipped: scope.skipped, ...(currentBaseSha !== undefined ? { baseSha: currentBaseSha } : {}) })
             agentsStarted = false
             await forge.postNote(body)
@@ -449,6 +487,7 @@ export function createReviewEngine(ctx: Context, agents: EngineAgents = createEn
             return await completed(summarizeReport(body))
           }
           skippedFiles = scope?.skipped
+          scopeFiles = scope?.files
         }
         if (access.kind === 'diff') {
           const diffBody = await diffOnly()
@@ -481,7 +520,7 @@ export function createReviewEngine(ctx: Context, agents: EngineAgents = createEn
               localRepoPath: cloneDir,
               ensureWorktree: ciEnsureWorktree,
               removeWorktree,
-              runReviewer: (worktreePath, p) => agents.reviewer(worktreePath, p, agentRun, profile, incrementalBlock),
+              runReviewer: (worktreePath, p) => review(worktreePath, p, profile),
               runAuditor: withAuditorDegrade((worktreePath, p) => agents.auditor(worktreePath, p, agentRun, { staticOnly: true })),
               postComment,
               replyToDiscussion,
@@ -504,7 +543,7 @@ export function createReviewEngine(ctx: Context, agents: EngineAgents = createEn
               ensureWorktree: access.ensureWorktree,
               removeWorktree: access.removeWorktree,
               ...(access.teardownEnvironment !== undefined ? { teardownEnvironment: access.teardownEnvironment } : {}),
-              runReviewer: (worktreePath, p) => agents.reviewer(worktreePath, p, agentRun, profile, incrementalBlock),
+              runReviewer: (worktreePath, p) => review(worktreePath, p, profile),
               runAuditor: access.auditor === 'static' ? withAuditorDegrade(runAuditor) : runAuditor,
               postComment,
               replyToDiscussion,

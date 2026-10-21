@@ -12,7 +12,7 @@ function fakeForge() {
   const forge = {
     mrHeadSha: vi.fn(async () => { calls.push('mrHeadSha'); return 'new' }),
     mrBaseSha: vi.fn(async () => { calls.push('mrBaseSha'); return 'base' }),
-    reviewScope: vi.fn(async () => { calls.push('reviewScope'); return { files: 1, skipped: [] } }),
+    reviewScope: vi.fn(async () => { calls.push('reviewScope'); return { files: [{ path: 'a.php', bytes: 10 }], skipped: [] } }),
     restrictToInterdiff: vi.fn(() => { calls.push('restrictToInterdiff') }),
     compare: vi.fn(async (from: string, to: string) => { calls.push(`compare ${from}..${to}`); return { commits: [{ short_id: 'c1', title: 'x' }], diffs: [{ new_path: 'a.php' }] } }),
     postNote: vi.fn(async () => { calls.push('postNote') }),

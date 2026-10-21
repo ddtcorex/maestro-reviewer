@@ -33,6 +33,8 @@ export interface ReviewerScopePromptOpts {
   lint: { worktreePath: string; base: string } | null
   /** What changed since the last completed review (re-reviews only). */
   incrementalBlock?: string
+  /** A fan-out part: the files this agent reviews. */
+  part?: { label: string; files: string[] }
 }
 
 /**
@@ -55,6 +57,7 @@ export function reviewerPromptParts(opts: ReviewerScopePromptOpts): { stable: st
   }
   const deletedFilesRule = 'DELETED FILES: a deleted file\'s diff only tells you what logic is gone — never file a finding positioned on a deleted file (there is no line left to fix). If removing it drops behavior that is not replicated elsewhere, report that as a finding against the file that should carry the replacement logic (or the closest call site), not the deleted file itself.'
   if (opts.incrementalBlock !== undefined) dynamic.push(opts.incrementalBlock)
+  if (opts.part !== undefined) dynamic.push(`This merge request is large and reviewed in parallel parts. You review part ${opts.part.label}: only these ${opts.part.files.length} file(s), and the diff tools serve only them. Other parts cover the rest, so do not report that files are missing.\n${opts.part.files.map((f) => `- ${f}`).join('\n')}`)
   return {
     stable: [`${opts.profileInstruction}Review this merge request (${opts.mode} mode). Call gitlab_list_own_review_threads and gitlab_get_mr_diff first, then gitlab_get_file_diff per file you inspect (inline results never spill), then call report_review_findings exactly once when done. DEDUP RULE: when a finding matches the substance of an existing own thread (same file and same underlying issue, even if worded differently — including resolved threads, whose reply reopens them), report it as {status: "reply", discussionId} instead of posting a new thread. Use status "new" only for issues with no matching thread. ${deletedFilesRule}`],
     dynamic,
@@ -298,6 +301,8 @@ export interface ReviewOutcome {
   findings?: ReviewFinding[]
   /** Model ids that produced this review. */
   models?: string[]
+  /** A fan-out part's findings, left for the merged post. */
+  deferredPost?: boolean
 }
 
 export function reviewerSummary(postedNew: number, postedReplies: number, diffTruncated: boolean): string {

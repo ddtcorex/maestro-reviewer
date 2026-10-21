@@ -45,7 +45,7 @@ export function gitlabForge(
     restrictToInterdiff: (files) => { interdiff = files },
     reviewScope: async () => {
       const scope = await loadDiffs()
-      return { files: scope.diffs.length, skipped: scope.skipped }
+      return { files: GitlabClient.diffFileList(scope.diffs), skipped: scope.skipped }
     },
     compare: (from, to) => fetchCompare(cfg.baseUrl, cfg.token, mr.projectId, from, to),
     postNote: (body) => post(`${mrApi}/notes`, body),
@@ -60,6 +60,7 @@ export function gitlabForge(
         token: cfg.token,
         botUsername: cfg.botUsername,
         loadDiffs,
+        ...(toolOpts.onlyPaths !== undefined ? { onlyPaths: toolOpts.onlyPaths } : {}),
         ...(toolOpts.onDiffTruncated !== undefined ? { onDiffTruncated: toolOpts.onDiffTruncated } : {}),
       })
     },
