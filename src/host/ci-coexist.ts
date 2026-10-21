@@ -27,8 +27,10 @@ export async function hasCompletedReviewForSha(
     return notes.some((n) => {
       if (n.author?.id !== botUserId) return false
       const m = typeof n.body === 'string' ? parseReviewMarker(n.body) : undefined
-      // A partial review left files unreviewed: it does not stand for this SHA.
-      return m?.sha.toLowerCase() === sha.toLowerCase() && m?.status === 'completed' && parseReviewMeta(n.body as string)?.partial !== true
+      // A partial review left files unreviewed: it does not stand for this SHA, unless the
+      // diff cap caused it (a rerun would hit the same cap).
+      const meta = m?.sha.toLowerCase() === sha.toLowerCase() && m?.status === 'completed' ? parseReviewMeta(n.body as string) : undefined
+      return m?.sha.toLowerCase() === sha.toLowerCase() && m?.status === 'completed' && (meta?.partial !== true || meta.capped === true)
     })
   } catch {
     return false

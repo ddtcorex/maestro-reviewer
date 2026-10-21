@@ -207,7 +207,7 @@ export async function runCiTrigger(
   // cache is per runner and races across concurrent jobs, so it is only a fallback
   // when GitLab cannot be read.
   const history = deps.history ?? { lastCompletedReview }
-  let prior: { headSha?: string; baseSha?: string; partial?: boolean; findings?: Array<{ code: string; fingerprint: string; severity: string }> } | undefined
+  let prior: { headSha?: string; baseSha?: string; partial?: boolean; capped?: boolean; findings?: Array<{ code: string; fingerprint: string; severity: string }> } | undefined
   let botUserId: number | undefined
   try {
     botUserId = await fetchBotUserId(deps.fetcher ?? fetch, config.gitlabBaseUrl, config.gitlabToken)
@@ -292,9 +292,10 @@ export async function runCiTrigger(
     const note = result.ok ? `Re-reviewed ${path === undefined ? 'the whole MR' : `\`${path}\``} at ${headSha.slice(0, 8)}; see the review comment.` : `The re-review failed: ${result.failures[0] ?? 'unknown error'}`
     await reply(rereview.discussionId, `${note}\n\n${commandMarker(rereview.noteId)}`).then(() => { answered++ })
       .catch((err: unknown) => console.warn(`[review] rereview answer not posted: ${err instanceof Error ? err.message : String(err)}`))
-  } else if (prior?.headSha === headSha && prior.partial !== true) {
+  } else if (prior?.headSha === headSha && (prior.partial !== true || prior.capped === true)) {
     // A rerun of a reviewed head must not slip past the gate: carry that review's severities.
-    // A partial review (a failed part, a capped diff, a path rereview) does not count: the whole MR runs again.
+    // A partial review (a failed part, a path rereview) does not count: the whole MR runs again.
+    // One cut by the diff cap does: a rerun would hit the same cap, at full cost, every pipeline.
     result = { ok: true, summary: `already reviewed at ${headSha}, skipping`, failures: [], durationMs: 0 }
   } else if (prior !== undefined && prior.headSha !== headSha && !config.rereviewOnPush) {
     result = { ok: true, summary: `new commits since ${prior.headSha} but REVIEW_ON_PUSH is not set, skipping`, failures: [], durationMs: 0 }

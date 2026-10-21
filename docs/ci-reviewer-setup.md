@@ -397,7 +397,10 @@ the head SHA (no runtime environment exists in the container).
 
 With `REVIEW_ON_PUSH=1` (project scope or `*`) every push with new commits is
 reviewed again. Without it, only the first review runs; the same head SHA never
-runs twice either way.
+runs twice either way, except after a partial review (a failed fan-out part,
+or a path-limited `/maestro rereview`): the next pipeline of that head reviews
+the whole MR. A review cut by GitLab's diff file cap still counts, since a
+rerun would hit the same cap.
 
 A re-review looks at the interdiff only (what changed since the last reviewed
 head) when the MR base is the one that review recorded and GitLab returns every

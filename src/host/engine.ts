@@ -323,7 +323,7 @@ export function createEngineAgents(ctx: Context): EngineAgents {
         return {
           postedFindings: posted,
           // A diff cut at MAX_DIFF_FILES left files unseen: the next re-review must be full.
-          ...(diffTruncated ? { partial: true } : {}), summary: summaryWithFloor(reviewerSummary(postedNew, postedReplies, diffTruncated), belowMinimum, run.minSeverity), failures, severityCounts: countFindingSeverities(capturedFindings), findings: capturedFindings, models: [primaryOptions.model] }
+          ...(diffTruncated ? { partial: true, capped: true } : {}), summary: summaryWithFloor(reviewerSummary(postedNew, postedReplies, diffTruncated), belowMinimum, run.minSeverity), failures, severityCounts: countFindingSeverities(capturedFindings), findings: capturedFindings, models: [primaryOptions.model] }
       } finally {
         run.onUsage('reviewer', agentOptions.model, usageFromSession(handle.agent.session))
         await handle.dispose()
@@ -577,7 +577,7 @@ export function createReviewEngine(ctx: Context, agents: EngineAgents = createEn
           postedFindings: posted.posted,
           models: [...new Set(done.flatMap((o) => o.models ?? []))],
           // The count covers failed parts only, so a capped diff leaves it out (it would undercount).
-          ...(failed.length > 0 || scopeTruncated ? { partial: true, ...(scopeTruncated ? {} : { unreviewed: failed.reduce((n, f) => n + f.chunk.files.length, 0) }) } : {}),
+          ...(failed.length > 0 || scopeTruncated ? { partial: true, ...(scopeTruncated ? { capped: true } : { unreviewed: failed.reduce((n, f) => n + f.chunk.files.length, 0) }) } : {}),
         }
       }
       const diffOnly = () => runDiffOnlyReview(payload, {

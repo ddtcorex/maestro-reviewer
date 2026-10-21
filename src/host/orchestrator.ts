@@ -324,6 +324,8 @@ export interface ReviewOutcome {
   deferredPost?: boolean
   /** Some files were not reviewed (a failed part, a capped diff). */
   partial?: boolean
+  /** The partial cause was GitLab's diff file cap. */
+  capped?: boolean
   /** How many files a failed part left unreviewed, when known. */
   unreviewed?: number
   /** The findings actually posted (muted and below-floor ones left out). */
@@ -348,10 +350,10 @@ interface UsageDeps {
   carryFindings?: ReviewMeta['findings']
 }
 
-function metaFor(payload: ReviewRequest, outcome: Pick<ReviewOutcome, 'findings' | 'models' | 'partial'>, deps: UsageDeps): ReviewMeta | undefined {
+function metaFor(payload: ReviewRequest, outcome: Pick<ReviewOutcome, 'findings' | 'models' | 'partial' | 'capped'>, deps: UsageDeps): ReviewMeta | undefined {
   if (payload.headSha === undefined) return undefined
   const usage = deps.usageTotal?.() ?? undefined
-  return buildReviewMeta({ headSha: payload.headSha, ...(deps.baseSha !== undefined ? { baseSha: deps.baseSha } : {}), mode: payload.mode, models: outcome.models ?? [], findings: outcome.findings ?? [], ...(usage !== undefined ? { usage } : {}), ...(outcome.partial === true || deps.pathLimited === true ? { partial: true } : {}), ...(deps.carryFindings !== undefined ? { carried: deps.carryFindings } : {}), ...(deps.muted !== undefined && deps.muted.length > 0 ? { muted: deps.muted } : {}) })
+  return buildReviewMeta({ headSha: payload.headSha, ...(deps.baseSha !== undefined ? { baseSha: deps.baseSha } : {}), mode: payload.mode, models: outcome.models ?? [], findings: outcome.findings ?? [], ...(usage !== undefined ? { usage } : {}), ...(outcome.partial === true || deps.pathLimited === true ? { partial: true } : {}), ...(outcome.capped === true ? { capped: true } : {}), ...(deps.carryFindings !== undefined ? { carried: deps.carryFindings } : {}), ...(deps.muted !== undefined && deps.muted.length > 0 ? { muted: deps.muted } : {}) })
 }
 
 /**

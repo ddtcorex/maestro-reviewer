@@ -105,17 +105,20 @@ describe('host worktree redaction (I3)', () => {
     expect(redactsWorkspace({ mode: 'deep', scope: mr }, 'static')).toBe(true)
   })
 
-  it('replaces a symlink to a file holding a secret with a redacted copy, leaving the target alone', async () => {
+  it('removes a symlink to a file outside the checkout, never copying the file in', async () => {
     const { symlink, lstat } = await import('node:fs/promises')
     const outside = await mkdtemp('/tmp/maestro-quality-target-')
     const root = await mkdtemp('/tmp/maestro-quality-')
     try {
-      await writeFile(join(outside, 'env.php'), "'password' => 'hunter2'\n")
-      await symlink(join(outside, 'env.php'), join(root, 'env.php'))
+      await writeFile(join(outside, 'environ'), 'LLM_KEY=abc-not-a-known-format\n')
+      await symlink(join(outside, 'environ'), join(root, 'notes.txt'))
+      await writeFile(join(root, 'real.php'), "'password' => 'hunter2'\n")
+      await symlink(join(root, 'real.php'), join(root, 'alias.php'))
       await redactWorktree(root)
-      expect((await lstat(join(root, 'env.php'))).isSymbolicLink()).toBe(false)
-      expect(await readFile(join(root, 'env.php'), 'utf8')).toContain('[REDACTED:env-secret]')
-      expect(await readFile(join(outside, 'env.php'), 'utf8')).toContain('hunter2')
+      await expect(lstat(join(root, 'notes.txt'))).rejects.toThrow(/ENOENT/)
+      expect((await lstat(join(root, 'alias.php'))).isSymbolicLink()).toBe(true)
+      expect(await readFile(join(root, 'alias.php'), 'utf8')).toContain('[REDACTED:env-secret]')
+      expect(await readFile(join(outside, 'environ'), 'utf8')).toContain('abc-not-a-known-format')
     } finally {
       await rm(root, { recursive: true, force: true })
       await rm(outside, { recursive: true, force: true })
