@@ -408,8 +408,10 @@ Each inline finding shows its code next to the severity (for example
 `/maestro dismiss SEC-XSS <reason>` anywhere on an MR, on the first line of
 the note. A code dismissed in at least 3 of the project's last 50 MRs is muted
 for the project: later reviews do not post it and name it in the comment.
-Blocking findings are never muted. A code counts once per MR, and the bot's
-own notes never count.
+Blocking findings and security codes (`SEC-*`) are never muted. Only authors
+with Developer access or above count, only for a code the bot raised in that
+same MR, once per MR; the bot's own notes never count. So a Guest, an outside
+commenter or a contributor cannot silence a finding.
 
 ### 5.5 Code Quality report
 

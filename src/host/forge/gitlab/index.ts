@@ -6,7 +6,7 @@ import { fetchCompare, fetchMrBaseSha, fetchMrDetailHeadSha, postReviewFindings,
 import { createReviewSignals } from './review-signals.js'
 import { DEFAULT_IGNORE_GLOBS, filterDiffs } from '../../diff-filter.js'
 import { redactDiff } from '../../redact.js'
-import { countDismissals } from '../../review-feedback.js'
+import { countDismissals, dismissalAuthors } from '../../review-feedback.js'
 import { runWithConcurrency } from '../../chunking.js'
 
 /** Every diff the agents see passes through the redactor; the hits stay with the forge. */
@@ -63,10 +63,20 @@ export function gitlabForge(
       const res = await GitlabClient.fetchWithTimeout(`${projectApi}/merge_requests?state=all&order_by=updated_at&sort=desc&per_page=${window}`, { headers })
       if (!res.ok) throw new Error(`GitLab API error ${res.status} listing merge requests`)
       const mrs = (await res.json() as Array<{ iid: number }>).slice(0, window)
-      const perMr = await runWithConcurrency(mrs.map((m) => async () => {
+      const lists = await runWithConcurrency(mrs.map((m) => async () => {
         const d = await GitlabClient.fetchWithTimeout(`${projectApi}/merge_requests/${m.iid}/discussions?per_page=100`, { headers })
-        return d.ok ? countDismissals(await d.json() as Array<{ notes?: [] }>, cfg.botUsername) : new Set<string>()
+        return d.ok ? await d.json() as Array<{ notes?: [] }> : []
       }), 5)
+      const discussions = lists.map((r) => (r.status === 'fulfilled' ? r.value : []))
+      // Only Developer or above may mute a code: a Guest or an outside commenter must not silence findings.
+      const authors = new Map<string, number>()
+      for (const list of discussions) for (const [name, id] of dismissalAuthors(list, cfg.botUsername)) authors.set(name, id)
+      const allowed = new Set<string>()
+      await runWithConcurrency([...authors].map(([name, id]) => async () => {
+        const r = await GitlabClient.fetchWithTimeout(`${projectApi}/members/all/${id}`, { headers })
+        if (r.ok && ((await r.json()) as { access_level?: number }).access_level! >= 30) allowed.add(name)
+      }), 5)
+      const perMr = discussions.map((list) => ({ status: 'fulfilled' as const, value: countDismissals(list, cfg.botUsername, (u) => allowed.has(u)) }))
       const stats = new Map<string, number>()
       for (const r of perMr) if (r.status === 'fulfilled') for (const code of r.value) stats.set(code, (stats.get(code) ?? 0) + 1)
       return stats
