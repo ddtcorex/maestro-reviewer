@@ -113,7 +113,7 @@ describe('childPipelineYaml', () => {
 
   it('keeps reports as artifacts', () => {
     const j = job(childPipelineYaml({ ...base, route: 'default', deep: false }))
-    expect(j.artifacts.paths).toEqual(['review-report.json', 'review-report.md'])
+    expect(j.artifacts.paths).toEqual(['review-report.json', 'review-report.md', 'gl-code-quality-report.json'])
     expect(j.artifacts.when).toBe('always')
   })
 })
