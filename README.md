@@ -47,6 +47,15 @@ through a small bridge job, with no DSH host and no project mapping.
   sets the profile, extra ignore globs, project rules, the minimum severity
   to post, the comment language and the fan-out thresholds; an MR cannot
   change the settings its own review runs with.
+- **Safe input.** Secrets and personal data are redacted before any model
+  call, and generated, vendored and lock files never reach the model; large
+  MRs are reviewed in parallel parts, re-pushes only by their interdiff.
+- **MR commands.** `/maestro explain`, `/maestro fix` (a GitLab suggestion
+  block), `/maestro rereview [path]` and `/maestro dismiss [CODE]`, answered
+  by the next review job; a code a project keeps dismissing is muted.
+- **Optional gate and reports.** `REVIEW_GATE=blocking` fails the review job
+  while the MR has an open blocking thread; a Code Quality artifact and a
+  scheduled periodic report (findings, tokens, tool calls per project).
 - **Quick** runs diff-only (or on a checkout when `REVIEW_PROFILE` names a
   framework); **deep** runs once per head SHA on the `maestro-review::deep`
   label, cloning the MR head with a static-only audit.
