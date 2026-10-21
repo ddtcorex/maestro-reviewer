@@ -2,7 +2,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { ReviewForge } from '../types.js'
 import { gitlabAuthHeaders } from './gitlab-auth.js'
 import * as GitlabClient from './gitlab-client.js'
-import { fetchCompare, fetchMrBaseSha, fetchMrDetailHeadSha, postReviewFindings, type GitlabFindingPoster } from './mr-api.js'
+import { fetchRepoFile, fetchCompare, fetchMrBaseSha, fetchMrDetailHeadSha, postReviewFindings, type GitlabFindingPoster } from './mr-api.js'
 import { createReviewSignals } from './review-signals.js'
 import { DEFAULT_IGNORE_GLOBS, filterDiffs } from '../../diff-filter.js'
 import { redactDiff } from '../../redact.js'
@@ -58,6 +58,7 @@ export function gitlabForge(
     mrHeadSha: () => fetchMrDetailHeadSha(cfg.baseUrl, cfg.token, mr.projectId, mr.mrIid),
     mrBaseSha: () => fetchMrBaseSha(cfg.baseUrl, cfg.token, mr.projectId, mr.mrIid),
     restrictToInterdiff: (files) => { interdiff = files },
+    readFile: (path, ref) => fetchRepoFile(fetch, { baseUrl: cfg.baseUrl, token: cfg.token, projectId: mr.projectId, ref, path }),
     feedback: async (window) => {
       const headers = gitlabAuthHeaders(cfg.token)
       const projectApi = `${cfg.baseUrl}/api/v4/projects/${mr.projectId}`

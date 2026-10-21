@@ -27,6 +27,7 @@ import { gitlabForge } from './forge/gitlab/index.js'
 import { SEVERITY_ORDER, countFindingSeverities, normalizeFindingSeverity } from './severity.js'
 import { REPO_CONFIG_PATH, configChangedInMr } from './repo-config.js'
 import { secretFindings } from './redact.js'
+import { checkDbSchemaWhitelist, detectFrameworkVersions, frameworkContextLine, whitelistFindings } from './composer-context.js'
 import { FEEDBACK_WINDOW, MUTE_THRESHOLD, mutedCodes } from './review-feedback.js'
 import { redactWorktree } from './redact-worktree.js'
 import type { FindingSeverity } from './review-findings-tool.js'
@@ -143,6 +144,8 @@ export interface AgentRunConfig {
   minSeverity?: FindingSeverity
   /** Codes the project keeps dismissing: not posted unless blocking. */
   mutedCodes?: ReadonlySet<string>
+  /** Framework versions line for the reviewer prompt. */
+  frameworkLine?: string
   /** Project rules and comment language for the reviewer prompt. */
   repoRules?: string[]
   language?: string
@@ -190,6 +193,23 @@ export function summarizeReport(body: string | undefined): string | undefined {
   const cut = cleaned.slice(0, 160)
   const lastSpace = cut.lastIndexOf(' ')
   return `${(lastSpace > 80 ? cut.slice(0, lastSpace) : cut).trim()} …`
+}
+
+const COMPOSER_MAX_BYTES = 5_000_000
+
+/** Framework versions from composer.lock at the head, else composer.json; never fails the review. */
+async function readFrameworkLine(forge: ReviewForge, ref: string): Promise<string | undefined> {
+  const parse = (text: string | undefined) => {
+    if (text === undefined || text.length > COMPOSER_MAX_BYTES) return undefined
+    try { return JSON.parse(text) as unknown } catch { return undefined }
+  }
+  try {
+    const lock = parse(await forge.readFile('composer.lock', ref))
+    const json = lock === undefined ? parse(await forge.readFile('composer.json', ref)) : undefined
+    return frameworkContextLine(detectFrameworkVersions(lock, json))
+  } catch {
+    return undefined
+  }
 }
 
 /** Posts findings one by one so one bad position never loses the rest. */
@@ -274,7 +294,7 @@ export function createEngineAgents(ctx: Context): EngineAgents {
           : null
         const scopePrompt = payload.scope.kind === 'discussion'
           ? buildReviewerScopePrompt({ scopeKind: 'discussion', discussionId: payload.scope.discussionId, path: payload.scope.path, line: payload.scope.line, profileInstruction, lint })
-          : buildReviewerScopePrompt({ scopeKind: 'full', mode: payload.mode, profileInstruction, lint, ...(incrementalBlock !== undefined ? { incrementalBlock } : {}), ...(chunk !== undefined ? { part: chunk } : {}), ...(run.repoRules !== undefined ? { repoRules: run.repoRules } : {}), ...(run.language !== undefined ? { language: run.language } : {}) })
+          : buildReviewerScopePrompt({ scopeKind: 'full', mode: payload.mode, profileInstruction, lint, ...(incrementalBlock !== undefined ? { incrementalBlock } : {}), ...(chunk !== undefined ? { part: chunk } : {}), ...(run.repoRules !== undefined ? { repoRules: run.repoRules } : {}), ...(run.language !== undefined ? { language: run.language } : {}), ...(run.frameworkLine !== undefined ? { frameworkLine: run.frameworkLine } : {}) })
         handle.agent.followup(createUserMessage({
           content: [{ type: 'text', text: scopePrompt }],
           source: { kind: REVIEW_SOURCE_KIND },
@@ -418,6 +438,7 @@ export function createReviewEngine(ctx: Context, agents: EngineAgents = createEn
       reviewScope: () => rawForge.reviewScope(),
       restrictToInterdiff: (files) => rawForge.restrictToInterdiff(files),
       feedback: (window) => rawForge.feedback(window),
+      readFile: (path, ref) => rawForge.readFile(path, ref),
       compare: (from, to) => rawForge.compare(from, to),
       postNote: (body) => timedPost(() => rawForge.postNote(body)),
       replyToDiscussion: (id, body) => timedPost(() => rawForge.replyToDiscussion(id, body)),
@@ -583,6 +604,14 @@ export function createReviewEngine(ctx: Context, agents: EngineAgents = createEn
           if (redactedCount > 0) {
             notices.push(`${redactedCount} values redacted before review (secrets and personal data): the model saw placeholders, never the values.`)
             await postFindingsSequentially(forge, secretFindings(redacted)).catch(() => undefined)
+          }
+          if (payload.headSha !== undefined) {
+            agentRun.frameworkLine = await readFrameworkLine(forge, payload.headSha)
+            if (agentRun.frameworkLine === undefined) delete agentRun.frameworkLine
+          }
+          if (scope !== undefined) {
+            const missing = whitelistFindings(checkDbSchemaWhitelist(scope.files.map((f) => f.path)))
+            if (missing.length > 0) await postFindingsSequentially(forge, missing).catch(() => undefined)
           }
           if (scope !== undefined && configChangedInMr(scope.files.map((f) => f.path))) {
             // The file is read from the target branch: a change here only applies after merge.
