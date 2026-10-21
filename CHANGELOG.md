@@ -1,5 +1,43 @@
 # Changelog
 
+## [0.18.0] - 2026-10-21
+
+Per-project settings, redaction, an operator gate, feedback, MR commands,
+framework context and a periodic report (#190, B4).
+
+### Added
+
+- `.maestro-review.yml`, read from the project's default branch: profile,
+  extra ignore globs, project rules, minimum severity to post, comment
+  language, fan-out thresholds. An MR that edits it gets `CFG-CHANGED`.
+- Redaction before the model: private keys, AWS, GitLab, GitHub and
+  OpenAI style tokens, JWTs, `KEY=value` and PHP array secrets, emails and
+  international phone numbers in diffs, the CI checkout, listed thread
+  replies and commit titles. A secret added by the MR gets
+  `SEC-SECRET-IN-DIFF` (blocking for token formats, major for `KEY=value`).
+- `gl-code-quality-report.json` artifact and `codequality` report, and the
+  operator gate `REVIEW_GATE=blocking`: every review job, skips included,
+  exits 3 while the MR has an open blocking review thread or the review was
+  partial. Resolving the thread is the override.
+- `/maestro dismiss [CODE]`: a code dismissed by Developers in 3 of the last
+  50 MRs is muted for the project (never blocking findings, never `SEC-*`).
+  Inline findings show their code.
+- `/maestro explain`, `/maestro fix` (a GitLab suggestion block) and
+  `/maestro rereview [path]`, answered by the next review job.
+- Framework context (Magento, Hyvä, PHP from composer at the head) in the
+  prompt, and `MAGENTO-DB-WHITELIST` for a schema change without whitelist.
+- A scheduled `report` job: `periodic-report.json` and `.md` over
+  `REVIEW_REPORT_DAYS` (default 7, at most 30), with tool calls.
+
+### Changed
+
+- Findings outside the diff are resolvable threads instead of plain notes.
+- Child review reports are kept 30 days (was 1 week).
+- Anything an agent writes to GitLab has HTML comments escaped.
+- `yaml` is a runtime dependency.
+- Engine: `ReviewEngine.answer()`; `ReviewForge` gains `feedback` and
+  `readFile`; `EngineRunOptions` gains `repo` and `carryFindings`.
+
 ## [0.17.0] - 2026-10-21
 
 CI review performance (#180): measured telemetry, less text to the model,
