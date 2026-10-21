@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.19.1] - 2026-10-21
+
+### Fixed
+
+- DeepSeek thinking models behind an OpenAI-compatible gateway no longer
+  fail a review now and then with `The reasoning_content in the thinking
+  mode must be passed back to the API` (#196). `REVIEW_LLM_CATALOG_PROVIDER`
+  names a provider pi-ai's catalog ships (for example `opencode-go`); the
+  route then reuses it, so the catalog's model settings apply and
+  `reasoning_content` is replayed on every assistant message. Set
+  `REVIEW_LLM_MODEL` to a catalog model id (for example `deepseek-v4-flash`).
+  The default route stays `custom-openai`, and a project route never
+  inherits the variable.
+
 ## [0.19.0] - 2026-10-21
 
 Host helpers for the DSH plugin, the deferred B3 and B4 minors, and faster,
