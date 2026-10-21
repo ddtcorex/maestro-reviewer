@@ -43,6 +43,10 @@ through a small bridge job, with no DSH host and no project mapping.
   any OpenAI-compatible endpoint), set as reviewer variables scoped
   `review/<project id>`; a require switch guarantees a paying project never
   falls back to the default key.
+- **Per-repository settings.** A `.maestro-review.yml` on the target branch
+  sets the profile, extra ignore globs, project rules, the minimum severity
+  to post, the comment language and the fan-out thresholds; an MR cannot
+  change the settings its own review runs with.
 - **Quick** runs diff-only (or on a checkout when `REVIEW_PROFILE` names a
   framework); **deep** runs once per head SHA on the `maestro-review::deep`
   label, cloning the MR head with a static-only audit.

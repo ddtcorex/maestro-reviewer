@@ -11,6 +11,8 @@ import type {} from '../engine-row.js'
 import { gitlabAuthHeaders } from '../forge/gitlab/gitlab-auth.js'
 import { resolveIgnoreGlobs } from '../diff-filter.js'
 import { DEFAULT_FANOUT, type FanoutSettings } from '../chunking.js'
+import { REPO_CONFIG_PATH, effectiveConfig, parseRepoConfig, type RepoReviewConfig } from '../repo-config.js'
+import { fetchRepoFile } from '../forge/gitlab/mr-api.js'
 import { fetchBotUserId, hasCompletedDeepReview, hasCompletedReviewForSha, hasRunningEyes, latestCompletedReview, removeDeepLabel } from '../ci-coexist.js'
 
 export const name = 'maestro-review-ci-trigger'
@@ -43,6 +45,9 @@ export interface CiEnvConfig {
   ignoreGlobs: string[]
   /** REVIEW_FANOUT_FILES / _BYTES / _CONCURRENCY over DEFAULT_FANOUT. */
   fanout: FanoutSettings
+  /** Only the REVIEW_IGNORE_GLOBS entries and fan-out values the environment sets, to layer over the repo file. */
+  envIgnoreGlobs: string[]
+  envFanout: Partial<FanoutSettings>
   /** REVIEW_DEEP_MODEL_PROVIDER + REVIEW_DEEP_MODEL: the model of high risk fan-out parts. */
   deepModel?: { provider: string; model: string }
 }
@@ -64,6 +69,8 @@ export const CiEnvConfig: z<CiEnvConfig> = z.object({
   ignoreGlobs: z.array(z.string()).required(),
   fanout: z.object({ files: z.natural().required(), bytes: z.natural().required(), concurrency: z.natural().required() }).required(),
   deepModel: z.union([z.object({ provider: z.string(), model: z.string() }), z.const(undefined)]),
+  envIgnoreGlobs: z.array(z.string()).required(),
+  envFanout: z.object({ files: z.natural(), bytes: z.natural(), concurrency: z.natural() }).required(),
 })
 
 /** A positive integer env value, or the default when unset; anything else fails the job naming the variable. */
@@ -111,6 +118,10 @@ export function parseCiEnvConfig(env: Record<string, string | undefined>): CiEnv
       bytes: positiveInt(env, 'REVIEW_FANOUT_BYTES', DEFAULT_FANOUT.bytes),
       concurrency: positiveInt(env, 'REVIEW_FANOUT_CONCURRENCY', DEFAULT_FANOUT.concurrency),
     },
+    envIgnoreGlobs: (env.REVIEW_IGNORE_GLOBS ?? '').split(',').map((g) => g.trim()).filter((g) => g !== ''),
+    envFanout: Object.fromEntries(([['files', 'REVIEW_FANOUT_FILES'], ['bytes', 'REVIEW_FANOUT_BYTES'], ['concurrency', 'REVIEW_FANOUT_CONCURRENCY']] as const)
+      .filter(([, name]) => (env[name] ?? '').trim() !== '')
+      .map(([key, name]) => [key, positiveInt(env, name, DEFAULT_FANOUT[key])])),
     ...(env.REVIEW_DEEP_MODEL ? { deepModel: { provider: env.REVIEW_DEEP_MODEL_PROVIDER as string, model: env.REVIEW_DEEP_MODEL } } : {}),
   })
 }
@@ -121,18 +132,18 @@ export async function fetchMrSourceBranch(config: CiEnvConfig, fetcher: typeof f
 }
 
 /** MR detail pieces CI needs in one call: source branch (worktree) + head SHA (push-gate) + project path (comment header/link). */
-export async function fetchMrDetail(config: CiEnvConfig, fetcher: typeof fetch = fetch): Promise<{ sourceBranch: string; headSha: string; projectPath: string }> {
+export async function fetchMrDetail(config: CiEnvConfig, fetcher: typeof fetch = fetch): Promise<{ sourceBranch: string; headSha: string; projectPath: string; targetBranch?: string }> {
   const url = `${config.gitlabBaseUrl}/api/v4/projects/${config.sourceProjectId}/merge_requests/${config.mrIid}`
   const res = await fetcher(url, { headers: gitlabAuthHeaders(config.gitlabToken) })
   if (!res.ok) throw new Error(`GitLab API error ${res.status}: ${await res.text()}`)
-  const body = await res.json() as { source_branch?: string; sha?: string; references?: { full?: string } }
+  const body = await res.json() as { source_branch?: string; target_branch?: string; sha?: string; references?: { full?: string } }
   if (typeof body.source_branch !== 'string') throw new Error('GitLab merge request response is missing source_branch')
   if (typeof body.sha !== 'string') throw new Error('GitLab merge request response is missing sha')
   // references.full looks like "group/sub/project!123" — the real path feeds the
   // comment header and View-MR link. Absent on old servers: fall back to project/<id>.
   const full = body.references?.full
   const projectPath = typeof full === 'string' && full.includes('!') ? full.slice(0, full.indexOf('!')) : `project/${config.sourceProjectId}`
-  return { sourceBranch: body.source_branch, headSha: body.sha, projectPath }
+  return { sourceBranch: body.source_branch, headSha: body.sha, projectPath, ...(typeof body.target_branch === 'string' ? { targetBranch: body.target_branch } : {}) }
 }
 
 /**
@@ -169,7 +180,24 @@ export async function runCiTrigger(
   const bootMs = Math.round(performance.now())
   const gateStart = Date.now()
   let gateMs: number | undefined
-  const { sourceBranch, headSha, projectPath } = await fetchMrDetail(config, deps.fetcher)
+  const { sourceBranch, headSha, projectPath, targetBranch } = await fetchMrDetail(config, deps.fetcher)
+  // Per-project settings from the target branch: an MR cannot relax its own review.
+  let file: RepoReviewConfig = {}
+  const warnings: string[] = []
+  if (targetBranch !== undefined) {
+    try {
+      const text = await fetchRepoFile(deps.fetcher ?? fetch, { baseUrl: config.gitlabBaseUrl, token: config.gitlabToken, projectId: config.sourceProjectId, ref: targetBranch, path: REPO_CONFIG_PATH })
+      if (text !== undefined) {
+        const parsed = parseRepoConfig(text)
+        file = parsed.config
+        warnings.push(...parsed.warnings)
+      }
+    } catch (err) {
+      warnings.push(`${REPO_CONFIG_PATH} could not be read (${err instanceof Error ? err.message : String(err)}); using the defaults`)
+    }
+  }
+  const eff = effectiveConfig({ ...(config.reviewProfile !== undefined ? { profile: config.reviewProfile } : {}), ignoreGlobs: config.envIgnoreGlobs, fanout: config.envFanout }, file)
+  const effConfig: CiEnvConfig = { ...config, reviewProfile: eff.profile, ignoreGlobs: eff.ignoreGlobs, fanout: eff.fanout }
   // Push-gate (mirror of the webhook autoRereviewOnPush semantics): the bridge fires
   // on every MR pipeline, so skip when this exact head SHA already completed — and
   // skip new pushes too unless REVIEW_ON_PUSH=1. A re-run then gets the H6 incremental
@@ -193,12 +221,13 @@ export async function runCiTrigger(
   // View-MR link, so prefer it over the synthetic project/<id> fallback.
   const options: EngineRunOptions = {
     gitlab: { baseUrl: config.gitlabBaseUrl, token: config.gitlabToken, botUsername: config.botUsername },
-    access: ciAccess(config),
-    reviewProfile: config.reviewProfile,
+    access: ciAccess(effConfig),
+    reviewProfile: effConfig.reviewProfile,
     model: ciModel(ctx, config),
     agentTimeoutMs: config.agentTimeoutMs,
-    ignoreGlobs: config.ignoreGlobs,
-    ...ciFanout(config),
+    ignoreGlobs: effConfig.ignoreGlobs,
+    ...ciFanout(effConfig),
+    repo: { rules: eff.rules, warnings, ...(eff.minSeverity !== undefined ? { minSeverity: eff.minSeverity } : {}), ...(eff.language !== undefined ? { language: eff.language } : {}) },
   }
   const runReview = () => { gateMs = Date.now() - gateStart; return ctx.reviewEngine.run({
     projectPath,
@@ -212,7 +241,7 @@ export async function runCiTrigger(
     trigger: 'mention',
     mode: config.mode,
     scope: { kind: 'mr' },
-    reviewProfile: config.reviewProfile,
+    reviewProfile: effConfig.reviewProfile,
   } satisfies ReviewRequest, options) }
   const coFetcher = deps.fetcher ?? fetch
   let result: ReviewResult

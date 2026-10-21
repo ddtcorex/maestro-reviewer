@@ -23,7 +23,9 @@ import { detectGovardLint } from './govard-lint-detection.js'
 import type { ReviewFinding } from './review-findings-tool.js'
 import type { ReviewForge } from './forge/types.js'
 import { gitlabForge } from './forge/gitlab/index.js'
-import { countFindingSeverities } from './severity.js'
+import { SEVERITY_ORDER, countFindingSeverities, normalizeFindingSeverity } from './severity.js'
+import { REPO_CONFIG_PATH, configChangedInMr } from './repo-config.js'
+import type { FindingSeverity } from './review-findings-tool.js'
 import type { ReviewRequest, ReviewResult } from './events.js'
 import { lastCompletedReview, recordReviewFinish, recordReviewStart } from './review-history.js'
 import { buildIncrementalBlock, planIncremental } from './incremental.js'
@@ -91,6 +93,8 @@ export interface EngineRunOptions {
   forge?: ReviewForge
   /** Fan-out thresholds and parallelism (default DEFAULT_FANOUT). */
   fanout?: FanoutSettings
+  /** Settings from the target branch's .maestro-review.yml (the caller reads and merges them). */
+  repo?: { rules?: string[]; minSeverity?: FindingSeverity; language?: string; warnings?: string[] }
   /** Model for high risk fan-out parts; absent = one model for every part. */
   deepModel?: ModelSelection
   /** Paths kept from the model (default DEFAULT_IGNORE_GLOBS); used only by the default GitLab forge. */
@@ -125,6 +129,11 @@ export interface AgentRunConfig {
   agentTimeoutMs: number
   /** Counts every tool call the run's agents attempt; the totals land in ReviewResult.toolCalls. */
   onToolCall: (toolName: string) => void
+  /** Findings below it are counted but not posted. */
+  minSeverity?: FindingSeverity
+  /** Project rules and comment language for the reviewer prompt. */
+  repoRules?: string[]
+  language?: string
   /** Records one agent session's token usage (null when the session reported none). */
   onUsage: (agent: AgentUsage['agent'], model: string, usage: TokenUsage | null) => void
 }
@@ -171,11 +180,15 @@ export function summarizeReport(body: string | undefined): string | undefined {
 }
 
 /** Posts findings one by one so one bad position never loses the rest. */
-export async function postFindingsSequentially(forge: ReviewForge, findings: ReviewFinding[]): Promise<{ postedNew: number; postedReplies: number; failures: string[] }> {
+export async function postFindingsSequentially(
+  forge: Pick<ReviewForge, 'postFindings'>, findings: ReviewFinding[], minSeverity?: FindingSeverity,
+): Promise<{ postedNew: number; postedReplies: number; failures: string[]; belowMinimum: number }> {
   const failures: string[] = []
   let postedNew = 0
   let postedReplies = 0
-  for (const finding of findings) {
+  const floor = minSeverity === undefined ? SEVERITY_ORDER.length : SEVERITY_ORDER.indexOf(minSeverity)
+  const kept = findings.filter((f) => SEVERITY_ORDER.indexOf(normalizeFindingSeverity(f.severity)) <= floor)
+  for (const finding of kept) {
     try {
       await forge.postFindings([finding])
       if (finding.status === 'new') postedNew++
@@ -185,7 +198,12 @@ export async function postFindingsSequentially(forge: ReviewForge, findings: Rev
       failures.push(`${locator}: ${err instanceof Error ? err.message : String(err)}`)
     }
   }
-  return { postedNew, postedReplies, failures }
+  return { postedNew, postedReplies, failures, belowMinimum: findings.length - kept.length }
+}
+
+/** Summary line, plus the count of findings below the project's minimum severity. */
+function summaryWithFloor(base: string, belowMinimum: number, minSeverity?: FindingSeverity): string {
+  return belowMinimum > 0 && minSeverity !== undefined ? `${base} ${belowMinimum} finding(s) below ${minSeverity} were counted but not posted.` : base
 }
 
 export function createEngineAgents(ctx: Context): EngineAgents {
@@ -241,7 +259,7 @@ export function createEngineAgents(ctx: Context): EngineAgents {
           : null
         const scopePrompt = payload.scope.kind === 'discussion'
           ? buildReviewerScopePrompt({ scopeKind: 'discussion', discussionId: payload.scope.discussionId, path: payload.scope.path, line: payload.scope.line, profileInstruction, lint })
-          : buildReviewerScopePrompt({ scopeKind: 'full', mode: payload.mode, profileInstruction, lint, ...(incrementalBlock !== undefined ? { incrementalBlock } : {}), ...(chunk !== undefined ? { part: chunk } : {}) })
+          : buildReviewerScopePrompt({ scopeKind: 'full', mode: payload.mode, profileInstruction, lint, ...(incrementalBlock !== undefined ? { incrementalBlock } : {}), ...(chunk !== undefined ? { part: chunk } : {}), ...(run.repoRules !== undefined ? { repoRules: run.repoRules } : {}), ...(run.language !== undefined ? { language: run.language } : {}) })
         handle.agent.followup(createUserMessage({
           content: [{ type: 'text', text: scopePrompt }],
           source: { kind: REVIEW_SOURCE_KIND },
@@ -264,8 +282,8 @@ export function createEngineAgents(ctx: Context): EngineAgents {
         }
 
         if (chunk !== undefined) return { summary: '', failures: [], findings: capturedFindings, models: [primaryOptions.model], deferredPost: true }
-        const { postedNew, postedReplies, failures } = await postFindingsSequentially(run.forge, capturedFindings)
-        return { summary: reviewerSummary(postedNew, postedReplies, diffTruncated), failures, severityCounts: countFindingSeverities(capturedFindings), findings: capturedFindings, models: [primaryOptions.model] }
+        const { postedNew, postedReplies, failures, belowMinimum } = await postFindingsSequentially(run.forge, capturedFindings, run.minSeverity)
+        return { summary: summaryWithFloor(reviewerSummary(postedNew, postedReplies, diffTruncated), belowMinimum, run.minSeverity), failures, severityCounts: countFindingSeverities(capturedFindings), findings: capturedFindings, models: [primaryOptions.model] }
       } finally {
         run.onUsage('reviewer', agentOptions.model, usageFromSession(handle.agent.session))
         await handle.dispose()
@@ -367,7 +385,11 @@ export function createReviewEngine(ctx: Context, agents: EngineAgents = createEn
       gitlab, forge, model: opts.model, agentTimeoutMs: opts.agentTimeoutMs,
       onToolCall: (toolName) => { toolCallCounts.set(toolName, (toolCallCounts.get(toolName) ?? 0) + 1) },
       onUsage: (agent, model, usage) => { usages.push({ agent, model, usage }) },
+      ...(opts.repo?.minSeverity !== undefined ? { minSeverity: opts.repo.minSeverity } : {}),
+      ...(opts.repo?.rules !== undefined && opts.repo.rules.length > 0 ? { repoRules: opts.repo.rules } : {}),
+      ...(opts.repo?.language !== undefined ? { language: opts.repo.language } : {}),
     }
+    const notices: string[] = [...(opts.repo?.warnings ?? [])]
     let agentsStarted = false
     /** Closes the stage timeline once and returns the run's telemetry. */
     const telemetry = () => {
@@ -455,10 +477,10 @@ export function createReviewEngine(ctx: Context, agents: EngineAgents = createEn
         const failed = settled.flatMap((r, i) => r.status === 'rejected' ? [{ chunk: chunks[i], reason: r.reason instanceof Error ? r.reason.message : String(r.reason) }] : [])
         if (done.length === 0) throw new Error(`every review part failed: ${failed[0].reason}`)
         const findings = mergeFindings(done.map((o) => o.findings ?? []))
-        const posted = await postFindingsSequentially(forge, findings)
+        const posted = await postFindingsSequentially(forge, findings, agentRun.minSeverity)
         const parts = [`Reviewed in ${chunks.length} parallel parts.`, ...failed.map((f) => `Part ${f.chunk.id} (${f.chunk.files.length} files) failed: ${f.reason}; its files were not reviewed.`)]
         return {
-          summary: `${reviewerSummary(posted.postedNew, posted.postedReplies, false)} ${parts.join(' ')}`,
+          summary: summaryWithFloor(`${reviewerSummary(posted.postedNew, posted.postedReplies, false)} ${parts.join(' ')}`, posted.belowMinimum, agentRun.minSeverity),
           failures: [...done.flatMap((o) => o.failures), ...posted.failures],
           severityCounts: countFindingSeverities(findings),
           findings,
@@ -474,6 +496,7 @@ export function createReviewEngine(ctx: Context, agents: EngineAgents = createEn
         gitlabBaseUrl: gitlab.baseUrl,
         usageTotal,
         skippedFiles,
+        notices,
         baseSha: currentBaseSha,
       } as unknown as DiffOnlyReviewDeps)
       let skippedFiles: string[] | undefined
@@ -491,6 +514,14 @@ export function createReviewEngine(ctx: Context, agents: EngineAgents = createEn
           }
           skippedFiles = scope?.skipped
           scopeFiles = scope?.files
+          if (scope !== undefined && configChangedInMr(scope.files.map((f) => f.path))) {
+            // The file is read from the target branch: a change here only applies after merge.
+            notices.push(`This MR changes ${REPO_CONFIG_PATH}: the change applies after merge; this review used the target branch's settings.`)
+            await postFindingsSequentially(forge, [{
+              status: 'new', path: REPO_CONFIG_PATH, line: 1, severity: 'minor', code: 'CFG-CHANGED', category: 'config',
+              body: `This MR changes the review settings in ${REPO_CONFIG_PATH}. They apply after merge; check that the change does not hide findings (ignore globs, minSeverity).`,
+            }]).catch(() => undefined)
+          }
         }
         if (access.kind === 'diff') {
           const diffBody = await diffOnly()
@@ -532,6 +563,7 @@ export function createReviewEngine(ctx: Context, agents: EngineAgents = createEn
               reviewProfile: profile,
               usageTotal,
               skippedFiles,
+              notices,
               baseSha: currentBaseSha,
             } as unknown as ReviewAndAuditDeps)
           } finally {
@@ -555,6 +587,7 @@ export function createReviewEngine(ctx: Context, agents: EngineAgents = createEn
               reviewProfile: profile,
               usageTotal,
               skippedFiles,
+              notices,
               baseSha: currentBaseSha,
             } as unknown as ReviewAndAuditDeps)
           } catch (err) {

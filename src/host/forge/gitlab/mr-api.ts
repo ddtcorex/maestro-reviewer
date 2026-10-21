@@ -223,3 +223,16 @@ export async function postReviewFindings(findings: ReviewFinding[], config: Gitl
     if (!response.ok) throw new Error(`GitLab API error ${response.status}: ${await response.text()}`)
   }
 }
+
+/** A file's text at `ref`, undefined when it does not exist there; throws on any other answer. */
+export async function fetchRepoFile(
+  fetcher: typeof fetch, opts: { baseUrl: string; token: string; projectId: number; ref: string; path: string },
+): Promise<string | undefined> {
+  const res = await fetcher(
+    `${opts.baseUrl}/api/v4/projects/${opts.projectId}/repository/files/${encodeURIComponent(opts.path)}/raw?ref=${encodeURIComponent(opts.ref)}`,
+    { headers: gitlabAuthHeaders(opts.token) },
+  )
+  if (res.status === 404) return undefined
+  if (!res.ok) throw new Error(`GitLab API error ${res.status} reading ${opts.path}`)
+  return await res.text()
+}

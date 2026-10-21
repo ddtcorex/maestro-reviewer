@@ -13,6 +13,7 @@ describe('parseCiEnvConfig', () => {
       sourceProjectId: 123, mrIid: 456, mode: 'quick', dryRun: false, rereviewOnPush: false, deepRequested: false, agentTimeoutMs: 1_200_000,
       ignoreGlobs: [...DEFAULT_IGNORE_GLOBS],
       fanout: { files: 25, bytes: 150_000, concurrency: 3 },
+      envIgnoreGlobs: [], envFanout: {},
     })
   })
 
@@ -304,6 +305,7 @@ describe('ci engine options', () => {
       agentTimeoutMs: 1_200_000,
       ignoreGlobs: [...DEFAULT_IGNORE_GLOBS],
       fanout: { files: 25, bytes: 150_000, concurrency: 3 },
+      repo: { rules: [], warnings: [] },
     })
   })
 })
