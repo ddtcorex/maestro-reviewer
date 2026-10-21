@@ -140,11 +140,66 @@ describe('fan-out over a capped diff (I4)', () => {
 })
 
 describe('a failed command answer', () => {
-  it('is not replied to, so the next review job tries again', async () => {
-    const { answerCommands } = await import('../src/host/ci-commands.js')
-    const reply = vi.fn(async () => {})
-    const n = await answerCommands([{ discussionId: 'd', noteId: 3, command: { kind: 'explain' }, finding: { path: 'a', line: 1, body: 'x' } }] as any, { answer: async () => { throw new Error('rate limited') }, reply })
+  const cmd = (attempts: number) => ({ discussionId: 'd', noteId: 3, attempts, command: { kind: 'explain' }, finding: { path: 'a', line: 1, body: 'x' } })
+  const fail = async () => { throw new Error('rate limited') }
+
+  it('gets a retry note, so the next review job tries again', async () => {
+    const { answerCommands, commandMarker, retryMarker } = await import('../src/host/ci-commands.js')
+    const reply = vi.fn(async (_d: string, _b: string) => {})
+    const n = await answerCommands([cmd(0)] as any, { answer: fail, reply })
     expect(n).toBe(0)
-    expect(reply).not.toHaveBeenCalled()
+    expect(reply.mock.calls[0][1]).toContain(retryMarker(3))
+    expect(reply.mock.calls[0][1]).not.toContain(commandMarker(3))
+    expect(reply.mock.calls[0][1]).toMatch(/rate limited/)
+  })
+
+  it('is answered with the error once it has failed MAX_ANSWER_ATTEMPTS times', async () => {
+    const { answerCommands, commandMarker, MAX_ANSWER_ATTEMPTS } = await import('../src/host/ci-commands.js')
+    const reply = vi.fn(async (_d: string, _b: string) => {})
+    const n = await answerCommands([cmd(MAX_ANSWER_ATTEMPTS - 1)] as any, { answer: fail, reply })
+    expect(n).toBe(1)
+    expect(reply.mock.calls[0][1]).toContain(commandMarker(3))
+    expect(reply.mock.calls[0][1]).toMatch(/after 3 attempts/)
+  })
+})
+
+describe('pending command order', () => {
+  it('counts retries and puts fresh commands ahead of ones that keep failing', async () => {
+    const { findPendingCommands, retryMarker, MAX_COMMANDS_PER_RUN } = await import('../src/host/ci-commands.js')
+    const BOT = 7
+    const dev = (id: number, body: string) => ({ id, author: { id: 50 }, body })
+    const old = Array.from({ length: MAX_COMMANDS_PER_RUN }, (_, i) => ({ id: `d${i}`, notes: [dev(10 + i, '/maestro explain'), { id: 100 + i, author: { id: BOT }, body: `Could not answer yet\n\n${retryMarker(10 + i)}` }] }))
+    const fresh = { id: 'dn', notes: [dev(90, '/maestro explain')] }
+    const fetcher = vi.fn(async (url: string) => url.includes('/members/all/')
+      ? new Response(JSON.stringify({ access_level: 30 }), { status: 200 })
+      : new Response(JSON.stringify(url.includes('page=1') ? [...old, fresh] : []), { status: 200, headers: { 'x-next-page': '' } }))
+    const p = await findPendingCommands(fetcher as any, { baseUrl: 'https://g', token: 't', projectId: 1, mrIid: 2, botUserId: BOT })
+    expect(p[0]).toMatchObject({ noteId: 90, attempts: 0 })
+    expect(p[1]).toMatchObject({ noteId: 10, attempts: 1 })
+    expect(p).toHaveLength(MAX_COMMANDS_PER_RUN)
+  })
+})
+
+describe('deterministic findings when open threads cannot be read', () => {
+  it('posts the blocking ones and holds back the rest', async () => {
+    const posted: any[] = []
+    const forge = forgeWith({
+      reviewScope: async () => ({ files: [{ path: 'm/etc/db_schema.xml', bytes: 1 }], skipped: [] }),
+      openFindingKeys: async () => { throw new Error('GitLab API error 502') },
+      postFindings: async (fs: any[]) => { posted.push(...fs) },
+    })
+    await run(forge, async () => ({ summary: 'ok', failures: [] }))
+    expect(posted.map((f) => f.code)).not.toContain('MAGENTO-DB-WHITELIST')
+  })
+})
+
+describe('deterministicToPost', () => {
+  it('without the open threads keeps only blocking findings; with them drops what is already open', async () => {
+    const { deterministicToPost } = await import('../src/host/review-feedback.js')
+    const sec = { code: 'SEC-SECRET-IN-DIFF', path: '.env', severity: 'blocking' }
+    const wl = { code: 'MAGENTO-DB-WHITELIST', path: 'etc/db_schema.xml', severity: 'minor' }
+    expect(deterministicToPost([sec, wl], undefined)).toEqual([sec])
+    expect(deterministicToPost([sec, wl], new Set(['MAGENTO-DB-WHITELIST@etc/db_schema.xml']))).toEqual([sec])
+    expect(deterministicToPost([sec, wl], new Set())).toEqual([sec, wl])
   })
 })

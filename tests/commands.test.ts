@@ -47,9 +47,9 @@ describe('findPendingCommands', () => {
     ], { 30: 30, 40: 20 })
     const pending = await findPendingCommands(fetcher as any, { baseUrl: 'https://g', token: 't', projectId: 1, mrIid: 2, botUserId: BOT_ID })
     expect(pending).toEqual([
-      { noteId: 2, discussionId: 'd1', command: { kind: 'fix' }, finding: { path: 'a.phtml', line: 12, code: 'SEC-XSS', body: expect.stringContaining('Unescaped output.') } },
-      { noteId: 8, discussionId: 'd4', command: { kind: 'rereview', path: 'app/' } },
-      { noteId: 11, discussionId: 'd7', command: { kind: 'explain' } },
+      { noteId: 2, attempts: 0, discussionId: 'd1', command: { kind: 'fix' }, finding: { path: 'a.phtml', line: 12, code: 'SEC-XSS', body: expect.stringContaining('Unescaped output.') } },
+      { noteId: 8, attempts: 0, discussionId: 'd4', command: { kind: 'rereview', path: 'app/' } },
+      { noteId: 11, attempts: 0, discussionId: 'd7', command: { kind: 'explain' } },
     ])
   })
 })

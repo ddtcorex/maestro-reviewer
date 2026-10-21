@@ -439,6 +439,9 @@ after writing it (the same as the deep label):
 
 Only authors with Developer access or above are answered; each command is
 answered once (the bot's reply carries a hidden marker), at most 5 per run.
+An answer that fails (a provider error, a timeout) gets a short "tries again"
+note and stays pending for the next job; commands with fewer failed attempts
+go first, and after 3 failed attempts the command is answered with the error.
 
 ### 5.6 Framework context and the schema whitelist
 

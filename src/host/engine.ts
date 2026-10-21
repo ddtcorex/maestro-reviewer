@@ -28,7 +28,7 @@ import { SEVERITY_ORDER, countFindingSeverities, normalizeFindingSeverity } from
 import { REPO_CONFIG_PATH, configChangedInMr } from './repo-config.js'
 import { secretFindings } from './redact.js'
 import { checkDbSchemaWhitelist, detectFrameworkVersions, frameworkContextLine, whitelistFindings } from './composer-context.js'
-import { FEEDBACK_WINDOW, MUTE_THRESHOLD, hasOpenThread, mutedCodes } from './review-feedback.js'
+import { FEEDBACK_WINDOW, MUTE_THRESHOLD, deterministicToPost, mutedCodes } from './review-feedback.js'
 import { redactWorktree, redactsWorkspace } from './redact-worktree.js'
 import type { FindingSeverity } from './review-findings-tool.js'
 import type { ReviewRequest, ReviewResult } from './events.js'
@@ -598,8 +598,11 @@ export function createReviewEngine(ctx: Context, agents: EngineAgents = createEn
       let mutedList: string[] | undefined
       /** Engine-made findings: never twice while the same code and path has an open thread. */
       const postDeterministic = async (found: ReviewFinding[]): Promise<void> => {
-        const open = await forge.openFindingKeys().catch(() => new Set<string>())
-        const fresh = found.filter((f) => !hasOpenThread(f, open))
+        const open = await forge.openFindingKeys().catch((err: unknown) => {
+          console.warn(`[review] open finding threads unreadable, posting blocking engine findings only: ${err instanceof Error ? err.message : String(err)}`)
+          return undefined
+        })
+        const fresh = deterministicToPost(found, open)
         const r = await postFindingsSequentially(forge, fresh).catch(() => undefined)
         if (r !== undefined) deterministicPosted.push(...r.posted)
       }
