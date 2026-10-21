@@ -22,6 +22,7 @@ import * as ReviewToolPolicy from './tool-policy.js'
 import { detectGovardLint } from './govard-lint-detection.js'
 import type { ReviewFinding } from './review-findings-tool.js'
 import type { ReviewForge } from './forge/types.js'
+import type { ReviewMeta } from './review-marker.js'
 import { gitlabForge } from './forge/gitlab/index.js'
 import { SEVERITY_ORDER, countFindingSeverities, normalizeFindingSeverity } from './severity.js'
 import { REPO_CONFIG_PATH, configChangedInMr } from './repo-config.js'
@@ -94,6 +95,8 @@ export interface EngineRunOptions {
   agentTimeoutMs: number
   /** The forge of this MR; defaults to GitLab at `gitlab`. */
   forge?: ReviewForge
+  /** Findings of an earlier full review of this head, kept in the metadata of a path-limited review. */
+  carryFindings?: ReviewMeta['findings']
   /** Fan-out thresholds and parallelism (default DEFAULT_FANOUT). */
   fanout?: FanoutSettings
   /** Settings from the target branch's .maestro-review.yml (the caller reads and merges them). */
@@ -548,6 +551,8 @@ export function createReviewEngine(ctx: Context, agents: EngineAgents = createEn
         skippedFiles,
         notices,
         get muted() { return mutedList },
+        pathLimited: payload.pathPrefix !== undefined,
+        ...(opts.carryFindings !== undefined ? { carryFindings: opts.carryFindings } : {}),
         baseSha: currentBaseSha,
       } as unknown as DiffOnlyReviewDeps)
       let skippedFiles: string[] | undefined
@@ -633,6 +638,8 @@ export function createReviewEngine(ctx: Context, agents: EngineAgents = createEn
               skippedFiles,
               notices,
               get muted() { return mutedList },
+              pathLimited: payload.pathPrefix !== undefined,
+              ...(opts.carryFindings !== undefined ? { carryFindings: opts.carryFindings } : {}),
               baseSha: currentBaseSha,
             } as unknown as ReviewAndAuditDeps)
           } finally {
@@ -658,6 +665,8 @@ export function createReviewEngine(ctx: Context, agents: EngineAgents = createEn
               skippedFiles,
               notices,
               get muted() { return mutedList },
+              pathLimited: payload.pathPrefix !== undefined,
+              ...(opts.carryFindings !== undefined ? { carryFindings: opts.carryFindings } : {}),
               baseSha: currentBaseSha,
             } as unknown as ReviewAndAuditDeps)
           } catch (err) {

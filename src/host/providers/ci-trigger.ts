@@ -216,7 +216,7 @@ export async function runCiTrigger(
   // cache is per runner and races across concurrent jobs, so it is only a fallback
   // when GitLab cannot be read.
   const history = deps.history ?? { lastCompletedReview }
-  let prior: { headSha?: string; baseSha?: string; partial?: boolean; findings?: Array<{ severity: string }> } | undefined
+  let prior: { headSha?: string; baseSha?: string; partial?: boolean; findings?: Array<{ code: string; fingerprint: string; severity: string }> } | undefined
   let botUserId: number | undefined
   try {
     botUserId = await fetchBotUserId(deps.fetcher ?? fetch, config.gitlabBaseUrl, config.gitlabToken)
@@ -254,7 +254,7 @@ export async function runCiTrigger(
     reviewProfile: effConfig.reviewProfile,
     ...extra,
   })
-  const runReview = (extra: Partial<ReviewRequest> = {}) => { gateMs = Date.now() - gateStart; return ctx.reviewEngine.run(request(extra), options) }
+  const runReview = (extra: Partial<ReviewRequest> = {}, more: Partial<EngineRunOptions> = {}) => { gateMs = Date.now() - gateStart; return ctx.reviewEngine.run(request(extra), { ...options, ...more }) }
   const coFetcher = deps.fetcher ?? fetch
   // MR commands wait for the next review job; answer them before the push-gate decides.
   const reply = async (discussionId: string, body: string) => {
@@ -298,8 +298,15 @@ export async function runCiTrigger(
     }
   } else if (rereview !== undefined) {
     // An explicit request: past the push-gate, limited to its path.
-    const path = rereview.command.kind === 'rereview' ? rereview.command.path : undefined
-    result = await runReview(path !== undefined ? { pathPrefix: path } : {})
+    // A path-limited rereview must not weaken the gate: it needs a full review of this head to
+    // carry (its severities stay in the gate and the metadata), else the whole MR is reviewed.
+    const asked = rereview.command.kind === 'rereview' ? rereview.command.path : undefined
+    const full = prior?.headSha === headSha && prior.findings !== undefined ? prior.findings : undefined
+    const path = asked !== undefined && full !== undefined ? asked : undefined
+    result = path !== undefined && full !== undefined
+      ? await runReview({ pathPrefix: path }, { carryFindings: full })
+      : await runReview()
+    if (full !== undefined && path !== undefined) result = { ...result, gateSeverities: [...(result.gateSeverities ?? []), ...full.map((f) => f.severity)] }
     const note = result.ok ? `Re-reviewed ${path === undefined ? 'the whole MR' : `\`${path}\``} at ${headSha.slice(0, 8)}; see the review comment.` : `The re-review failed: ${result.failures[0] ?? 'unknown error'}`
     await reply(rereview.discussionId, `${note}\n\n${commandMarker(rereview.noteId)}`).then(() => { answered++ })
       .catch((err: unknown) => console.warn(`[review] rereview answer not posted: ${err instanceof Error ? err.message : String(err)}`))

@@ -423,7 +423,7 @@ after writing it (the same as the deep label):
 |---|---|---|
 | `/maestro explain` | a reply in a review finding thread | what the problem is, why it matters, what a fix looks like |
 | `/maestro fix` | a reply in a review finding thread | a GitLab suggestion block for that line, applied only when a developer accepts it; the bot never pushes |
-| `/maestro rereview [path]` | anywhere on the MR | a new review now, past the push-gate, limited to files under `path` when given |
+| `/maestro rereview [path]` | anywhere on the MR | a new review now, past the push-gate, limited to files under `path` when given. A path only narrows the review when this head already has a full review, whose findings stay in the gate and the metadata; otherwise the whole MR is reviewed. A narrowed review is marked partial, so the next re-review covers the whole MR. |
 
 Only authors with Developer access or above are answered; each command is
 answered once (the bot's reply carries a hidden marker), at most 5 per run.

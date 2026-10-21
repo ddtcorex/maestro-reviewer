@@ -123,3 +123,59 @@ describe('forge path restriction', () => {
     expect((await forge.reviewScope()).files.map((f) => f.path)).toEqual(['app/code/A.php'])
   })
 })
+
+describe('a path-limited rereview never weakens the gate', () => {
+  const runWith = async (priorHead: string, priorSeverity: string, command: string) => {
+    const { parseCiEnvConfig, runCiTrigger, ciExitCode } = await import('../src/host/providers/ci-trigger.js')
+    const { encodeReviewMeta } = await import('../src/host/review-marker.js')
+    const cfg = parseCiEnvConfig({ GITLAB_HOST: 'h', REVIEW_GITLAB_TOKEN: 't', SOURCE_PROJECT_ID: '1', MR_IID: '2', REVIEW_GATE: 'blocking', REVIEW_ON_PUSH: '1' })
+    const meta = encodeReviewMeta({ v: 1, headSha: priorHead, mode: 'quick', models: [], findings: [{ code: 'SEC-X', fingerprint: 'fp1', severity: priorSeverity }], at: 't' })
+    const fetcher = vi.fn(async (url: string, init: RequestInit = {}) => {
+      if ((init.method ?? 'GET') !== 'GET') return new Response('{}', { status: 201 })
+      if (url.endsWith('/user')) return new Response(JSON.stringify({ id: BOT_ID }), { status: 200 })
+      if (url.includes('/discussions?')) return new Response(JSON.stringify(new URL(url).searchParams.get('page') === '1' ? [{ id: 'd4', notes: [n(8, 30, command)] }] : []), { status: 200, headers: { 'x-next-page': '' } })
+      if (url.includes('/members/all/')) return new Response(JSON.stringify({ access_level: 30 }), { status: 200 })
+      if (url.includes('/notes')) return new Response(JSON.stringify([{ author: { id: BOT_ID }, body: meta }]), { status: 200 })
+      if (url.includes('/repository/files/')) return new Response('', { status: 404 })
+      if (url.includes('/award_emoji')) return new Response('[]', { status: 200 })
+      return new Response(JSON.stringify({ source_branch: 'b', target_branch: 'main', sha: 'abc' }), { status: 200 })
+    })
+    const engine = { run: vi.fn(async () => ({ ok: true, summary: 'reviewed', failures: [], durationMs: 1, findings: [] })), answer: vi.fn() }
+    const result = await runCiTrigger({ reviewEngine: engine } as any, cfg, { fetcher: fetcher as any, writeFile: (async () => {}) as any })
+    return { engine, code: ciExitCode(result, cfg) }
+  }
+
+  it('carries the full review of the same head into the gate and the metadata', async () => {
+    const { engine, code } = await runWith('abc', 'blocking', '/maestro rereview lib/')
+    expect(code).toBe(3)
+    const [req, opts] = engine.run.mock.calls[0] as any[]
+    expect(req.pathPrefix).toBe('lib/')
+    expect(opts.carryFindings).toEqual([{ code: 'SEC-X', fingerprint: 'fp1', severity: 'blocking' }])
+  })
+
+  it('reviews the whole MR when no full review of this head exists', async () => {
+    const { engine } = await runWith('old', 'blocking', '/maestro rereview lib/')
+    expect((engine.run.mock.calls[0] as any[])[0].pathPrefix).toBeUndefined()
+  })
+})
+
+describe('engine metadata of a path-limited review', () => {
+  it('is partial and keeps the carried findings', async () => {
+    const { parseReviewMeta } = await import('../src/host/review-marker.js')
+    const notes: string[] = []
+    const forge = {
+      mrHeadSha: async () => 'abc', mrBaseSha: async () => 'b', compare: async () => undefined, restrictToInterdiff: () => {}, feedback: async () => new Map(),
+      reviewScope: async () => ({ files: [{ path: 'lib/a.php', bytes: 1 }], skipped: [] }),
+      postNote: async (b: string) => { notes.push(b) }, replyToDiscussion: async () => {}, postFindings: async () => {},
+      signals: () => ({ start: async () => {}, finish: async () => {} }), mountAgentTools: async () => {},
+    }
+    const { createReviewEngine } = await import('../src/host/engine.js')
+    await createReviewEngine({} as any, { reviewer: vi.fn(async () => ({ summary: 'ok', failures: [], findings: [{ status: 'new', path: 'lib/a.php', line: 1, body: 'b', severity: 'minor', code: 'RIG-L' }] })), auditor: vi.fn() } as any).run(
+      { projectPath: 'g/p', projectId: 1, mrIid: 2, sourceBranch: 'b', headSha: 'abc', trigger: 'mention', mode: 'quick', scope: { kind: 'mr' }, pathPrefix: 'lib/' } as any,
+      { gitlab: { baseUrl: 'https://g', token: 't', botUsername: 'bot' }, access: { kind: 'diff' }, model: { provider: 'p', model: 'm' } as any, agentTimeoutMs: 1000, forge: forge as any, carryFindings: [{ code: 'SEC-X', fingerprint: 'fp1', severity: 'blocking' }] },
+    )
+    const meta = parseReviewMeta(notes[0])!
+    expect(meta.partial).toBe(true)
+    expect(meta.findings.map((f) => f.code).sort()).toEqual(['RIG-L', 'SEC-X'])
+  })
+})
