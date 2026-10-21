@@ -33,4 +33,4 @@ allowBuilds:
 # 2026-09-18). The Docker build additionally passes
 # --config.minimumReleaseAge=0.
 minimumReleaseAgeExclude:
-  - '@ddtcorex/maestro-reviewer@0.17.0'
+  - '@ddtcorex/maestro-reviewer@0.18.0'
