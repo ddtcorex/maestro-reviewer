@@ -261,7 +261,7 @@ for any name from [4.5](#45-pinned-by-the-pipeline-never-define).
 | `REVIEW_LLM_API` | no (default `openai-completions`) | protected | Wire protocol: `openai-completions` or `openai-responses`. |
 | `REVIEW_MODEL_PROVIDER`, `REVIEW_MODEL` | no, set both or neither | protected | Pin a model on the default route: provider `deepseek-official` (baked route) or `custom-openai` (bring-your-own route) plus a model id, for example `deepseek-official` + `deepseek-v4-pro`. Ignored on a project route. |
 | `REVIEW_REQUIRE_PROJECT_KEY` | no | protected | `1` at `*`: no project ever falls back to the default key; a project without its own key gets one "AI review is not configured" note and no model call. A project's scoped `0` opts it out. |
-| `REVIEW_MODE`, `REVIEW_PROFILE`, `REVIEW_ON_PUSH` | no | protected | Defaults for every project, same meaning as in 4.3. |
+| `REVIEW_MODE`, `REVIEW_PROFILE`, `REVIEW_ON_PUSH`, `REVIEW_IGNORE_GLOBS` | no | protected | Defaults for every project, same meaning as in 4.3. |
 | `REVIEW_ACCEPT_PRIVILEGED_BOT` | no, temporary only | protected | `1`: a bot that is Developer or above on the config project, or Maintainer or above on the reviewer project, only logs a warning instead of failing `resolve`. For the period before a dedicated bot user exists (for example a Maintainer's own token). It accepts the risk the check exists for: an agent reading untrusted MR content holds a token that can read every key and change the pipeline file. Administrators stay refused; every other check stays. Delete it as soon as a dedicated bot is in place. |
 
 ### 4.3 Per source project settings, scope `review/<source project id>`
@@ -274,6 +274,7 @@ Use the numeric project id (shown on the project's overview page), for example
 | `REVIEW_MODE` | `quick` (default), `deep` | `deep` makes every review of this project a deep one (costly); usually leave `quick` and request deep per MR with the label (5.2). |
 | `REVIEW_PROFILE` | `magento2`, `laravel`, `symfony`, `wordpress`, `generic` | Framework checklist. Unset or `generic`: diff-only review. A framework profile clones the source at the head SHA and reviews the checkout. An unknown value fails the job. |
 | `REVIEW_ON_PUSH` | `1` | Re-review new pushes with an incremental-changes block. Unset: only the first review of an MR runs. |
+| `REVIEW_IGNORE_GLOBS` | comma-separated globs, for example `docs/**, **/*.svg` | Extra paths kept from the model, added to the defaults: `**/package-lock.json`, `**/pnpm-lock.yaml`, `**/yarn.lock`, `**/composer.lock`, `**/*.min.js`, `**/*.min.css`, `**/*.map`, `**/generated/**`, `pub/static/**`, `var/**`, `**/__snapshots__/**`, `**/i18n/*.csv`. A deleted file is matched on its old path. Skipped files are listed in the review comment; an MR whose every file matches gets one "Nothing reviewable" comment and no model call. A checkout review can still read a skipped file from the worktree. |
 | `REVIEW_LLM_PROVIDER` | `openai`, `anthropic`, `gemini`, `openrouter`, `deepseek`, `custom` | The project's own provider; a preset fills the base URL ([table](#provider-presets)), `custom` needs `REVIEW_LLM_BASE_URL`. |
 | `REVIEW_LLM_API_KEY` | the project's key (masked, expand off) | Bills this project's reviews to its own key. |
 | `REVIEW_LLM_MODEL` | model id | Required with a project key; there is no default model per preset. |

@@ -33,7 +33,7 @@ import { cloneSourceRepo, defaultRun } from './ci-clone.js'
 import { createStageTimer, sumUsage, usageFromSession, type AgentUsage, type TokenUsage } from './telemetry.js'
 import {
   agentOptionsForModel, assertSafeBranchName, assertTurnSucceededOrSalvage, auditorOutputFromSession, buildAuditorPrompt,
-  buildReviewerScopePrompt, getTurnErrorMessage, isBranchNotFoundError,
+  buildNothingReviewableComment, buildReviewerScopePrompt, getTurnErrorMessage, isBranchNotFoundError,
   isUnsupportedReasoningError, mountAgentPreset, reviewerSummary, runDiffOnlyReview, runReviewAndAudit,
   whenIdleWithTimeout, withAuditorDegrade,
   type DiffOnlyReviewDeps, type ReviewAndAuditDeps, type ReviewOutcome,
@@ -80,6 +80,8 @@ export interface EngineRunOptions {
   agentTimeoutMs: number
   /** The forge of this MR; defaults to GitLab at `gitlab`. */
   forge?: ReviewForge
+  /** Paths kept from the model (default DEFAULT_IGNORE_GLOBS); used only by the default GitLab forge. */
+  ignoreGlobs?: readonly string[]
   /**
    * Final status of a run, with the review duration measured from the MR
    * signals start. Called once per run, except for a deduped worktree run;
@@ -323,10 +325,11 @@ export function createReviewEngine(ctx: Context, agents: EngineAgents = createEn
       const start = Date.now()
       try { return await call() } finally { postMs += Date.now() - start }
     }
-    const rawForge = opts.forge ?? gitlabForge(gitlab, payload)
+    const rawForge = opts.forge ?? gitlabForge(gitlab, payload, opts.ignoreGlobs !== undefined ? { ignoreGlobs: opts.ignoreGlobs } : {})
     const forge: ReviewForge = {
       mrHeadSha: () => rawForge.mrHeadSha(),
       mrBaseSha: () => rawForge.mrBaseSha(),
+      reviewScope: () => rawForge.reviewScope(),
       compare: (from, to) => rawForge.compare(from, to),
       postNote: (body) => timedPost(() => rawForge.postNote(body)),
       replyToDiscussion: (id, body) => timedPost(() => rawForge.replyToDiscussion(id, body)),
@@ -409,8 +412,23 @@ export function createReviewEngine(ctx: Context, agents: EngineAgents = createEn
         writeFailedReport,
         gitlabBaseUrl: gitlab.baseUrl,
         usageTotal,
+        skippedFiles,
       } as unknown as DiffOnlyReviewDeps)
+      let skippedFiles: string[] | undefined
       try {
+        if (payload.scope.kind === 'mr') {
+          // An unreadable diff is left to the agents, which report it themselves.
+          const scope = await forge.reviewScope().catch(() => undefined)
+          timer.mark('fetch')
+          if (scope !== undefined && scope.files === 0) {
+            const body = buildNothingReviewableComment(payload, { gitlabBaseUrl: gitlab.baseUrl, skipped: scope.skipped })
+            agentsStarted = false
+            await forge.postNote(body)
+            timer.add('post', postMs)
+            return await completed(summarizeReport(body))
+          }
+          skippedFiles = scope?.skipped
+        }
         if (access.kind === 'diff') {
           const diffBody = await diffOnly()
           // A deduped diff run returns '' and is still recorded as completed (unchanged behaviour).
@@ -450,6 +468,7 @@ export function createReviewEngine(ctx: Context, agents: EngineAgents = createEn
               gitlabBaseUrl: gitlab.baseUrl,
               reviewProfile: profile,
               usageTotal,
+              skippedFiles,
             } as unknown as ReviewAndAuditDeps)
           } finally {
             await defaultRun('rm', ['-rf', cloneDir]).catch(() => {})
@@ -471,6 +490,7 @@ export function createReviewEngine(ctx: Context, agents: EngineAgents = createEn
               gitlabBaseUrl: gitlab.baseUrl,
               reviewProfile: profile,
               usageTotal,
+              skippedFiles,
             } as unknown as ReviewAndAuditDeps)
           } catch (err) {
             const isBranchNotFound = (err as { code?: string })?.code === 'BRANCH_NOT_FOUND' || isBranchNotFoundError(err)

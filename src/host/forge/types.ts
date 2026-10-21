@@ -32,6 +32,8 @@ export interface ReviewForge {
   mrHeadSha(): Promise<string | undefined>
   /** Merge base SHA, or undefined when it cannot be read (never throws). */
   mrBaseSha(): Promise<string | undefined>
+  /** Files the review may see after the ignore globs, and the paths they removed; throws when the diff cannot be read. */
+  reviewScope(): Promise<{ files: number; skipped: string[] }>
   /** What changed between two SHAs, or undefined when it cannot be read (never throws). */
   compare(from: string, to: string): Promise<CompareResult | undefined>
   postNote(body: string): Promise<void>

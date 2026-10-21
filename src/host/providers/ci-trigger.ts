@@ -9,6 +9,7 @@ import type {} from '@deepseek-ai/dsh-agent-default-model'
 import type { CodeAccess, EngineRunOptions } from '../engine.js'
 import type {} from '../engine-row.js'
 import { gitlabAuthHeaders } from '../forge/gitlab/gitlab-auth.js'
+import { resolveIgnoreGlobs } from '../diff-filter.js'
 import { fetchBotUserId, hasCompletedDeepReview, hasCompletedReviewForSha, hasRunningEyes, latestCompletedReview, removeDeepLabel } from '../ci-coexist.js'
 
 export const name = 'maestro-review-ci-trigger'
@@ -37,6 +38,8 @@ export interface CiEnvConfig {
   rereviewOnPush: boolean
   /** The MR carries the deep label (written by the resolve job): one deep review per head SHA. */
   deepRequested: boolean
+  /** Paths kept from the model: the defaults plus REVIEW_IGNORE_GLOBS. */
+  ignoreGlobs: string[]
 }
 
 export const CiEnvConfig: z<CiEnvConfig> = z.object({
@@ -53,6 +56,7 @@ export const CiEnvConfig: z<CiEnvConfig> = z.object({
   reviewProfile: z.union([z.const('magento2'), z.const('laravel'), z.const('symfony'), z.const('wordpress'), z.const('generic')]),
   rereviewOnPush: z.boolean().default(false),
   deepRequested: z.boolean().default(false),
+  ignoreGlobs: z.array(z.string()).required(),
 })
 
 /**
@@ -86,6 +90,7 @@ export function parseCiEnvConfig(env: Record<string, string | undefined>): CiEnv
     reviewProfile: env.REVIEW_PROFILE as ReviewSkillProfile | undefined,
     rereviewOnPush: env.REVIEW_ON_PUSH === '1',
     deepRequested: env.REVIEW_DEEP_REQUESTED === '1',
+    ignoreGlobs: resolveIgnoreGlobs(env),
   })
 }
 
@@ -166,6 +171,7 @@ export async function runCiTrigger(
     reviewProfile: config.reviewProfile,
     model: ciModel(ctx, config),
     agentTimeoutMs: config.agentTimeoutMs,
+    ignoreGlobs: config.ignoreGlobs,
   }
   const runReview = () => { gateMs = Date.now() - gateStart; return ctx.reviewEngine.run({
     projectPath,

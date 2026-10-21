@@ -16,7 +16,12 @@ export interface Config {
   botUsername: string
   /** Called once when the MR diff exceeds MAX_DIFF_FILES and was cut. */
   onDiffTruncated?: () => void
+  /** The forge's shared, already filtered diff load; absent = fetch every file here. */
+  loadDiffs?: () => Promise<ReviewDiffs>
 }
+
+/** The MR diffs a review may see, and the paths the ignore globs removed. */
+export interface ReviewDiffs { diffs: GitlabDiff[]; skipped: string[]; truncated: boolean }
 
 export const Config: z<Config> = z.object({
   baseUrl: z.string().required(),
@@ -25,6 +30,7 @@ export const Config: z<Config> = z.object({
   token: z.string().role('secret').required(),
   botUsername: z.string().required(),
   onDiffTruncated: z.function(),
+  loadDiffs: z.function(),
 })
 
 /** Hard cap on diff files fetched for one review. */
@@ -63,6 +69,7 @@ export interface GitlabDiff {
   old_path: string
   new_path: string
   diff: string
+  deleted_file?: boolean
 }
 
 export interface DiffFileEntry {
@@ -181,10 +188,12 @@ export function apply(ctx: Context, config: Config): void {
   let cachedDiffs: GitlabDiff[] | undefined
 
   let diffsTruncated = false
+  let skippedPaths: string[] = []
   async function getDiffs(): Promise<GitlabDiff[]> {
     if (cachedDiffs !== undefined) return cachedDiffs
-    const all = await fetchAllDiffs(fetch, apiBase, headers)
+    const all = config.loadDiffs !== undefined ? await config.loadDiffs() : { ...await fetchAllDiffs(fetch, apiBase, headers), skipped: [] }
     cachedDiffs = all.diffs
+    skippedPaths = all.skipped
     diffsTruncated = all.truncated
     if (all.truncated) config.onDiffTruncated?.()
     return cachedDiffs
@@ -233,6 +242,9 @@ export function apply(ctx: Context, config: Config): void {
     async execute(args) {
       const diffs = await getDiffs()
       const text = selectFileDiff(diffs, args.path)
+      if (text === undefined && skippedPaths.includes(args.path)) {
+        throw new Error(`path filtered from this review (generated, vendored or lock file): ${args.path}`)
+      }
       if (text === undefined) {
         throw new Error(`path not in this MR diff: ${args.path}`)
       }
