@@ -36,6 +36,16 @@ export function hasOpenThread(f: { code?: string; path?: string; severity?: unkn
   return open.has(normalizeFindingSeverity(f.severity) === 'blocking' ? `${f.code}@${f.path}@blocking` : `${f.code}@${f.path}`)
 }
 
+/**
+ * Pure. The engine-made findings to post. Without the open threads (a read
+ * error) only blocking ones go out: a duplicate blocking thread is noise, a
+ * missing one is a gate that passes.
+ */
+export function deterministicToPost<T extends { code?: string; path?: string; severity?: unknown }>(found: T[], open: ReadonlySet<string> | undefined): T[] {
+  if (open === undefined) return found.filter((f) => normalizeFindingSeverity(f.severity) === 'blocking')
+  return found.filter((f) => !hasOpenThread(f, open))
+}
+
 export function findingCodeMarker(code: string): string {
   return `<!-- maestro-finding code=${code} -->`
 }

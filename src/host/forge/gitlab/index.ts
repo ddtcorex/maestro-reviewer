@@ -65,7 +65,8 @@ export function gitlabForge(
       const headers = gitlabAuthHeaders(cfg.token)
       for (let page = 1; page <= 20; page++) {
         const res = await GitlabClient.fetchWithTimeout(`${mrApi}/discussions?per_page=100&page=${page}`, { headers })
-        if (!res.ok) break
+        // A partial read would hide open threads and repost them: fail instead, the caller degrades.
+        if (!res.ok) throw new Error(`GitLab API error ${res.status} reading discussions`)
         const batch = await res.json() as Array<{ notes?: Array<{ author?: { username?: string }; body?: string; resolved?: boolean; position?: { new_path?: string } }> }>
         for (const d of batch) {
           const first = d.notes?.[0]
