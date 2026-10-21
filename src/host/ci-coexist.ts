@@ -27,7 +27,8 @@ export async function hasCompletedReviewForSha(
     return notes.some((n) => {
       if (n.author?.id !== botUserId) return false
       const m = typeof n.body === 'string' ? parseReviewMarker(n.body) : undefined
-      return m?.sha.toLowerCase() === sha.toLowerCase() && m?.status === 'completed'
+      // A partial review left files unreviewed: it does not stand for this SHA.
+      return m?.sha.toLowerCase() === sha.toLowerCase() && m?.status === 'completed' && parseReviewMeta(n.body as string)?.partial !== true
     })
   } catch {
     return false

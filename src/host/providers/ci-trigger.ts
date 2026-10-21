@@ -292,10 +292,11 @@ export async function runCiTrigger(
     const note = result.ok ? `Re-reviewed ${path === undefined ? 'the whole MR' : `\`${path}\``} at ${headSha.slice(0, 8)}; see the review comment.` : `The re-review failed: ${result.failures[0] ?? 'unknown error'}`
     await reply(rereview.discussionId, `${note}\n\n${commandMarker(rereview.noteId)}`).then(() => { answered++ })
       .catch((err: unknown) => console.warn(`[review] rereview answer not posted: ${err instanceof Error ? err.message : String(err)}`))
-  } else if (prior?.headSha === headSha) {
+  } else if (prior?.headSha === headSha && prior.partial !== true) {
     // A rerun of a reviewed head must not slip past the gate: carry that review's severities.
+    // A partial review (a failed part, a capped diff, a path rereview) does not count: the whole MR runs again.
     result = { ok: true, summary: `already reviewed at ${headSha}, skipping`, failures: [], durationMs: 0 }
-  } else if (prior !== undefined && !config.rereviewOnPush) {
+  } else if (prior !== undefined && prior.headSha !== headSha && !config.rereviewOnPush) {
     result = { ok: true, summary: `new commits since ${prior.headSha} but REVIEW_ON_PUSH is not set, skipping`, failures: [], durationMs: 0 }
   } else if (await hasCompletedReviewForSha(coFetcher, config.gitlabBaseUrl, config.gitlabToken, config.sourceProjectId, config.mrIid, headSha, botUserId)) {
     // Coexistence (CI yields to webhook): the CI history store is invisible to
