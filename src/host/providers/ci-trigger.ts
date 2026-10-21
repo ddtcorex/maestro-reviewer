@@ -15,7 +15,7 @@ import { REPO_CONFIG_PATH, effectiveConfig, parseRepoConfig, type RepoReviewConf
 import { fetchRepoFile } from '../forge/gitlab/mr-api.js'
 import { toCodeQuality, type ReviewGate } from '../codequality.js'
 import { openBlockingThreads } from '../ci-gate.js'
-import { sanitizeAgentText } from '../forge/gitlab/gitlab-client.js'
+import { sanitizeAgentText, timedFetcher } from '../forge/gitlab/gitlab-client.js'
 import { buildCommandPrompt, commandMarker, findPendingCommands, type PendingCommand } from '../ci-commands.js'
 import { fetchBotUserId, hasCompletedDeepReview, hasCompletedReviewForSha, hasRunningEyes, latestCompletedReview, removeDeepLabel } from '../ci-coexist.js'
 
@@ -97,6 +97,8 @@ function positiveInt(env: Record<string, string | undefined>, name: string, fall
 export function parseCiEnvConfig(env: Record<string, string | undefined>): CiEnvConfig {
   if (env.GITLAB_HOST === undefined) throw new Error('missing GITLAB_HOST')
   if (env.REVIEW_GITLAB_TOKEN === undefined) throw new Error('missing REVIEW_GITLAB_TOKEN')
+  if ((env.REVIEW_DEEP_MODEL ?? '') !== '' && (env.REVIEW_DEEP_MODEL_PROVIDER ?? '') === '') throw new Error('REVIEW_DEEP_MODEL needs REVIEW_DEEP_MODEL_PROVIDER')
+  if ((env.REVIEW_DEEP_MODEL_PROVIDER ?? '') !== '' && (env.REVIEW_DEEP_MODEL ?? '') === '') throw new Error('REVIEW_DEEP_MODEL_PROVIDER needs REVIEW_DEEP_MODEL')
   if (env.REVIEW_GATE !== undefined && env.REVIEW_GATE !== '' && env.REVIEW_GATE !== 'off' && env.REVIEW_GATE !== 'blocking') {
     throw new Error(`unsupported REVIEW_GATE "${env.REVIEW_GATE}" (supported: off, blocking)`)
   }
@@ -266,7 +268,7 @@ export async function runCiTrigger(
     ...extra,
   })
   const runReview = (extra: Partial<ReviewRequest> = {}, more: Partial<EngineRunOptions> = {}) => { gateMs = Date.now() - gateStart; return ctx.reviewEngine.run(request(extra), { ...options, ...more }) }
-  const coFetcher = deps.fetcher ?? fetch
+  const coFetcher = timedFetcher(deps.fetcher ?? fetch)
   // MR commands wait for the next review job; answer them before the push-gate decides.
   const reply = async (discussionId: string, body: string) => {
     const res = await coFetcher(`${config.gitlabBaseUrl}/api/v4/projects/${config.sourceProjectId}/merge_requests/${config.mrIid}/discussions/${encodeURIComponent(discussionId)}/notes`, {
@@ -307,6 +309,8 @@ export async function runCiTrigger(
       await removeDeepLabel(coFetcher, { baseUrl: config.gitlabBaseUrl, token: config.gitlabToken, projectId: config.sourceProjectId, mrIid: config.mrIid })
         .catch((err: unknown) => console.warn(`[review] could not remove the deep label: ${err instanceof Error ? err.message : String(err)}`))
     }
+  } else if (rereview !== undefined && await hasRunningEyes(coFetcher, config.gitlabBaseUrl, config.gitlabToken, config.sourceProjectId, config.mrIid, botUserId)) {
+    result = { ok: true, summary: 'another review is running, the rereview waits for the next job', failures: [], durationMs: 0 }
   } else if (rereview !== undefined) {
     // An explicit request: past the push-gate, limited to its path.
     // A path-limited rereview must not weaken the gate: it needs a full review of this head to
@@ -343,7 +347,9 @@ export async function runCiTrigger(
   // in the CI job's working directory where `artifacts:` picks them up.
   const reportDir = process.env.REVIEW_REPORT_DIR?.trim() || '.'
   const stages = { ...result.stages, boot: bootMs, fetch: (result.stages?.fetch ?? 0) + (gateMs ?? Date.now() - gateStart) }
-  const report = { ...result, stages, projectId: config.sourceProjectId, mrIid: config.mrIid, mode: config.mode, generatedAt: new Date().toISOString() }
+  // Code, severity and place only: finding bodies (quoted code, explanations) stay in the MR, not in a 30 day artifact.
+  const slim = result.findings?.map((f) => ({ code: f.code ?? f.category ?? 'none', severity: f.severity ?? 'minor', ...(f.path !== undefined ? { path: f.path } : {}), ...(f.line !== undefined ? { line: f.line } : {}) }))
+  const report = { ...result, ...(slim !== undefined ? { findings: slim } : {}), stages, projectId: config.sourceProjectId, mrIid: config.mrIid, mode: config.mode, generatedAt: new Date().toISOString() }
   await writeFile(join(reportDir, 'review-report.json'), JSON.stringify(report, null, 2), 'utf-8')
   // Always written, `[]` when the run posted nothing, so the artifact report never goes missing.
   await writeFile(join(reportDir, 'gl-code-quality-report.json'), JSON.stringify(toCodeQuality(result.findings ?? []), null, 2), 'utf-8')
@@ -358,8 +364,9 @@ export async function runCiTrigger(
  * included) or this review was partial; else 0. An unreadable MR fails closed.
  */
 export async function ciExitCode(
-  result: ReviewResult, config: Pick<CiEnvConfig, 'gate' | 'gitlabBaseUrl' | 'gitlabToken' | 'sourceProjectId' | 'mrIid'>, fetcher: typeof fetch = fetch,
+  result: ReviewResult, config: Pick<CiEnvConfig, 'gate' | 'gitlabBaseUrl' | 'gitlabToken' | 'sourceProjectId' | 'mrIid'>, rawFetcher: typeof fetch = fetch,
 ): Promise<0 | 1 | 3> {
+  const fetcher = timedFetcher(rawFetcher)
   if (!result.ok) return 1
   if (config.gate !== 'blocking') return 0
   if (result.partial === true) { console.error('[review] gate: some files were not reviewed (a failed part), failing closed'); return 3 }

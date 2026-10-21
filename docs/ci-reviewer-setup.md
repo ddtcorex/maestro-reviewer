@@ -157,6 +157,12 @@ with outside contributors get a reviewer project of their own.
    MRs in the source projects as **Developer**.
 6. Create the tokens (3.3) and the variables ([section 4](#4-variable-reference)).
 
+**Runner:** the review job expects one job per container (the Docker or
+Kubernetes executor): it clones into fixed paths under `/tmp`
+(`/tmp/maestro-review-worktree`, kept constant so the model's cached prompt
+prefix holds across MRs). A shell executor running two review jobs at once on
+one host would make them collide.
+
 ### 3.3 Bot identity and tokens
 
 Every note the reviewer posts is attributed to the owner of

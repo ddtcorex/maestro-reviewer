@@ -108,6 +108,22 @@ export function selectFileDiff(diffs: GitlabDiff[], path: string): string | unde
   return `--- ${d.old_path}\n+++ ${d.new_path}\n${d.diff}`
 }
 
+/** A fetcher whose every call aborts after `ms`; for injected fetchers (CI trigger, command lookup, gate). */
+export function timedFetcher(fetcher: typeof fetch, ms = 15_000): typeof fetch {
+  return (async (url: string | URL | Request, init: RequestInit = {}) => {
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), ms)
+    try {
+      return await fetcher(url, { ...init, signal: controller.signal })
+    } catch (err) {
+      if ((err as Error)?.name === 'AbortError') throw new Error(`GitLab API timeout after ${ms}ms`)
+      throw err
+    } finally {
+      clearTimeout(timer)
+    }
+  }) as typeof fetch
+}
+
 /**
  * `fetch` with a hard ceiling: aborts the request after `ms` (default 15s)
  * and throws `GitLab API timeout after <ms>ms` on abort. The timer is always

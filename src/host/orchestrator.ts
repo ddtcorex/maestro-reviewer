@@ -318,6 +318,8 @@ export interface ReviewOutcome {
   deferredPost?: boolean
   /** Some files were not reviewed (a failed part, a capped diff). */
   partial?: boolean
+  /** The findings actually posted (muted and below-floor ones left out). */
+  postedFindings?: ReviewFinding[]
 }
 
 export function reviewerSummary(postedNew: number, postedReplies: number, diffTruncated: boolean): string {

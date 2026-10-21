@@ -20,7 +20,9 @@ export function filterDiffs<T extends FilterableDiff>(diffs: T[], globs: readonl
   const skipped: string[] = []
   for (const diff of diffs) {
     const path = diff.deleted_file === true ? diff.old_path : diff.new_path
-    if (globs.some((glob) => matchesGlob(path, glob))) skipped.push(path)
+    // `**` never crosses a dot directory in matchesGlob; also try the path with its dot segments undotted.
+    const undotted = path.split('/').map((seg) => seg.startsWith('.') ? `_${seg.slice(1)}` : seg).join('/')
+    if (globs.some((glob) => matchesGlob(path, glob) || matchesGlob(undotted, glob))) skipped.push(path)
     else kept.push(diff)
   }
   return { kept, skipped }

@@ -1,4 +1,4 @@
-import { mkdir, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { join } from 'node:path'
@@ -198,7 +198,7 @@ export function summarizeReport(body: string | undefined): string | undefined {
 const COMPOSER_MAX_BYTES = 5_000_000
 
 /** Framework versions from composer.lock at the head, else composer.json; never fails the review. */
-async function readFrameworkLine(forge: ReviewForge, ref: string): Promise<string | undefined> {
+async function readFrameworkLine(forge: Required<ReviewForge>, ref: string): Promise<string | undefined> {
   const parse = (text: string | undefined) => {
     if (text === undefined || text.length > COMPOSER_MAX_BYTES) return undefined
     try { return JSON.parse(text) as unknown } catch { return undefined }
@@ -215,7 +215,7 @@ async function readFrameworkLine(forge: ReviewForge, ref: string): Promise<strin
 /** Posts findings one by one so one bad position never loses the rest. */
 export async function postFindingsSequentially(
   forge: Pick<ReviewForge, 'postFindings'>, findings: ReviewFinding[], filter: { minSeverity?: FindingSeverity; muted?: ReadonlySet<string> } = {},
-): Promise<{ postedNew: number; postedReplies: number; failures: string[]; belowMinimum: number; muted: number }> {
+): Promise<{ postedNew: number; postedReplies: number; failures: string[]; belowMinimum: number; muted: number; posted: ReviewFinding[] }> {
   const failures: string[] = []
   let postedNew = 0
   let postedReplies = 0
@@ -223,9 +223,11 @@ export async function postFindingsSequentially(
   const aboveFloor = findings.filter((f) => SEVERITY_ORDER.indexOf(normalizeFindingSeverity(f.severity)) <= floor)
   // Blocking findings are never muted: a project cannot dismiss its way past a blocker.
   const kept = aboveFloor.filter((f) => f.code === undefined || filter.muted?.has(f.code) !== true || normalizeFindingSeverity(f.severity) === 'blocking')
+  const posted: ReviewFinding[] = []
   for (const finding of kept) {
     try {
       await forge.postFindings([finding])
+      posted.push(finding)
       if (finding.status === 'new') postedNew++
       else postedReplies++
     } catch (err) {
@@ -233,7 +235,7 @@ export async function postFindingsSequentially(
       failures.push(`${locator}: ${err instanceof Error ? err.message : String(err)}`)
     }
   }
-  return { postedNew, postedReplies, failures, belowMinimum: findings.length - aboveFloor.length, muted: aboveFloor.length - kept.length }
+  return { postedNew, postedReplies, failures, belowMinimum: findings.length - aboveFloor.length, muted: aboveFloor.length - kept.length, posted }
 }
 
 /** Summary line, plus the count of findings below the project's minimum severity. */
@@ -317,8 +319,11 @@ export function createEngineAgents(ctx: Context): EngineAgents {
         }
 
         if (chunk !== undefined) return { summary: '', failures: [], findings: capturedFindings, models: [primaryOptions.model], deferredPost: true }
-        const { postedNew, postedReplies, failures, belowMinimum } = await postFindingsSequentially(run.forge, capturedFindings, { minSeverity: run.minSeverity, muted: run.mutedCodes })
-        return { summary: summaryWithFloor(reviewerSummary(postedNew, postedReplies, diffTruncated), belowMinimum, run.minSeverity), failures, severityCounts: countFindingSeverities(capturedFindings), findings: capturedFindings, models: [primaryOptions.model] }
+        const { postedNew, postedReplies, failures, belowMinimum, posted } = await postFindingsSequentially(run.forge, capturedFindings, { minSeverity: run.minSeverity, muted: run.mutedCodes })
+        return {
+          postedFindings: posted,
+          // A diff cut at MAX_DIFF_FILES left files unseen: the next re-review must be full.
+          ...(diffTruncated ? { partial: true } : {}), summary: summaryWithFloor(reviewerSummary(postedNew, postedReplies, diffTruncated), belowMinimum, run.minSeverity), failures, severityCounts: countFindingSeverities(capturedFindings), findings: capturedFindings, models: [primaryOptions.model] }
       } finally {
         run.onUsage('reviewer', agentOptions.model, usageFromSession(handle.agent.session))
         await handle.dispose()
@@ -387,11 +392,13 @@ export function createEngineAgents(ctx: Context): EngineAgents {
 
   async function answer(payload: ReviewRequest, run: AgentRunConfig, prompt: string): Promise<string> {
     const agentOptions = agentOptionsForModel(run.model)
+    // Its own workspace: the diff tool spills there, never into a shared /tmp.
+    const answerDir = await mkdtemp(join(tmpdir(), 'maestro-answer-'))
     let handle: AgentHandle
     try {
       handle = await ctx.agents.create({
         sessionId: SessionId(`maestro-answer-${payload.mrIid}-${Date.now()}`),
-        meta: { cwd: tmpdir() },
+        meta: { cwd: answerDir },
         agentOptions,
         setup: async (agentCtx) => {
           installModelSelection(agentCtx, { current: agentOptions, assembled: undefined })
@@ -414,6 +421,7 @@ export function createEngineAgents(ctx: Context): EngineAgents {
     } finally {
       run.onUsage('reviewer', agentOptions.model, usageFromSession(handle.agent.session))
       await handle.dispose()
+      await rm(answerDir, { recursive: true, force: true }).catch(() => {})
     }
   }
 
@@ -433,13 +441,15 @@ export function createReviewEngine(ctx: Context, agents: EngineAgents = createEn
       try { return await call() } finally { postMs += Date.now() - start }
     }
     const rawForge = opts.forge ?? gitlabForge(gitlab, payload, { ...(opts.ignoreGlobs !== undefined ? { ignoreGlobs: opts.ignoreGlobs } : {}), ...(payload.pathPrefix !== undefined ? { pathPrefix: payload.pathPrefix } : {}) })
-    const forge: ReviewForge = {
+    const forge: Required<ReviewForge> = {
       mrHeadSha: () => rawForge.mrHeadSha(),
       mrBaseSha: () => rawForge.mrBaseSha(),
       reviewScope: () => rawForge.reviewScope(),
-      restrictToInterdiff: (files) => rawForge.restrictToInterdiff(files),
-      feedback: (window) => rawForge.feedback(window),
-      readFile: (path, ref) => rawForge.readFile(path, ref),
+      // Optional forge members fall back to "unsupported": no interdiff, no feedback, no file reads.
+      restrictToInterdiff: (files) => { rawForge.restrictToInterdiff?.(files) },
+      feedback: (window) => rawForge.feedback?.(window) ?? Promise.resolve(new Map<string, number>()),
+      readFile: (path, ref) => rawForge.readFile?.(path, ref) ?? Promise.resolve(undefined),
+      openFindingKeys: () => rawForge.openFindingKeys?.() ?? Promise.resolve(new Set<string>()),
       compare: (from, to) => rawForge.compare(from, to),
       postNote: (body) => timedPost(() => rawForge.postNote(body)),
       replyToDiscussion: (id, body) => timedPost(() => rawForge.replyToDiscussion(id, body)),
@@ -462,6 +472,7 @@ export function createReviewEngine(ctx: Context, agents: EngineAgents = createEn
     let agentsStarted = false
     let runFindings: ReviewFinding[] | undefined
     let runPartial = false
+    const deterministicPosted: ReviewFinding[] = []
     /** Closes the stage timeline once and returns the run's telemetry. */
     const telemetry = () => {
       if (agentsStarted) {
@@ -500,14 +511,14 @@ export function createReviewEngine(ctx: Context, agents: EngineAgents = createEn
           const plan = payload.scope.kind === 'mr' && payload.mode === 'quick'
             ? planIncremental({ headSha: priorHeadSha, ...(payload.priorBaseSha !== undefined ? { baseSha: payload.priorBaseSha } : {}), ...(payload.priorPartial === true ? { partial: true } : {}) }, { headSha: currentHeadSha, ...(currentBaseSha !== undefined ? { baseSha: currentBaseSha } : {}) }, compare)
             : undefined
-          if (plan?.kind === 'interdiff') {
+          if (plan?.kind === 'interdiff' && rawForge.restrictToInterdiff !== undefined) {
             forge.restrictToInterdiff(plan.files)
             incrementalBlock = buildIncrementalBlock(compare, priorHeadSha, currentHeadSha, { interdiff: true })
           } else if (plan?.kind === 'full' && plan.reason === 'base changed') {
             // A compare across a rebase mixes in the target's changes: review it all, no hint.
             console.log(`[review] full review: ${plan.reason} since ${priorHeadSha.slice(0, 12)}`)
           } else {
-            if (plan !== undefined) console.log(`[review] full review: ${plan.reason} since ${priorHeadSha.slice(0, 12)}`)
+            if (plan !== undefined) console.log(`[review] full review: ${plan.kind === 'full' ? plan.reason : 'this forge serves no interdiff'} since ${priorHeadSha.slice(0, 12)}`)
             incrementalBlock = buildIncrementalBlock(compare, priorHeadSha, currentHeadSha)
           }
         }
@@ -541,7 +552,7 @@ export function createReviewEngine(ctx: Context, agents: EngineAgents = createEn
       /** One reviewer run, or parallel parts for a large MR whose findings are merged and posted once. */
       const review = async (worktreePath: string | undefined, p: ReviewRequest, profile?: ReviewSkillProfile): Promise<ReviewOutcome> => {
         const outcome = await reviewParts(worktreePath, p, profile)
-        runFindings = outcome.findings
+        runFindings = [...(outcome.postedFindings ?? outcome.findings ?? []), ...deterministicPosted]
         runPartial = outcome.partial === true
         return outcome
       }
@@ -552,7 +563,7 @@ export function createReviewEngine(ctx: Context, agents: EngineAgents = createEn
         const settled = await runWithConcurrency(chunks.map((c) => () => agents.reviewer(worktreePath, p, runFor(c), profile, incrementalBlock, { label: c.id, files: c.files })), fanout?.concurrency ?? DEFAULT_FANOUT.concurrency)
         const done = settled.flatMap((r) => r.status === 'fulfilled' ? [r.value] : [])
         const failed = settled.flatMap((r, i) => r.status === 'rejected' ? [{ chunk: chunks[i], reason: r.reason instanceof Error ? r.reason.message : String(r.reason) }] : [])
-        if (done.length === 0) throw new Error(`every review part failed: ${failed[0].reason}`)
+        if (done.length === 0) throw new Error(`every review part failed: ${[...new Set(failed.map((f) => f.reason))].join('; ')}`)
         const findings = mergeFindings(done.map((o) => o.findings ?? []))
         const posted = await postFindingsSequentially(forge, findings, { minSeverity: agentRun.minSeverity, muted: agentRun.mutedCodes })
         const parts = [`Reviewed in ${chunks.length} parallel parts.`, ...failed.map((f) => `Part ${f.chunk.id} (${f.chunk.files.length} files) failed: ${f.reason}; its files were not reviewed.`)]
@@ -561,6 +572,7 @@ export function createReviewEngine(ctx: Context, agents: EngineAgents = createEn
           failures: [...done.flatMap((o) => o.failures), ...posted.failures],
           severityCounts: countFindingSeverities(findings),
           findings,
+          postedFindings: posted.posted,
           models: [...new Set(done.flatMap((o) => o.models ?? []))],
           ...(failed.length > 0 ? { partial: true } : {}),
         }
@@ -581,6 +593,13 @@ export function createReviewEngine(ctx: Context, agents: EngineAgents = createEn
       } as unknown as DiffOnlyReviewDeps)
       let skippedFiles: string[] | undefined
       let mutedList: string[] | undefined
+      /** Engine-made findings: never twice while the same code and path has an open thread. */
+      const postDeterministic = async (found: ReviewFinding[]): Promise<void> => {
+        const open = await forge.openFindingKeys().catch(() => new Set<string>())
+        const fresh = found.filter((f) => !open.has(`${f.code}@${f.path}`))
+        const r = await postFindingsSequentially(forge, fresh).catch(() => undefined)
+        if (r !== undefined) deterministicPosted.push(...r.posted)
+      }
       try {
         if (payload.scope.kind === 'mr') {
           // An unreadable diff is left to the agents, which report it themselves.
@@ -606,7 +625,7 @@ export function createReviewEngine(ctx: Context, agents: EngineAgents = createEn
           const redactedCount = redacted.reduce((n, f) => n + f.hits.length, 0)
           if (redactedCount > 0) {
             notices.push(`${redactedCount} values redacted before review (secrets and personal data): the model saw placeholders, never the values.`)
-            await postFindingsSequentially(forge, secretFindings(redacted)).catch(() => undefined)
+            await postDeterministic(secretFindings(redacted))
           }
           if (payload.headSha !== undefined) {
             agentRun.frameworkLine = await readFrameworkLine(forge, payload.headSha)
@@ -614,16 +633,16 @@ export function createReviewEngine(ctx: Context, agents: EngineAgents = createEn
           }
           if (scope !== undefined) {
             const missing = whitelistFindings(checkDbSchemaWhitelist(scope.files.map((f) => f.path)))
-            if (missing.length > 0) await postFindingsSequentially(forge, missing).catch(() => undefined)
+            if (missing.length > 0) await postDeterministic(missing)
           }
           // Only a caller that read the settings (the CI trigger) can say which ones this review used.
           if (opts.repo !== undefined && scope !== undefined && configChangedInMr(scope.files.map((f) => f.path))) {
             // The file is read from the target branch: a change here only applies after merge.
             notices.push(`This MR changes ${REPO_CONFIG_PATH}: the change applies after merge; this review used the target branch's settings.`)
-            await postFindingsSequentially(forge, [{
+            await postDeterministic([{
               status: 'new', path: REPO_CONFIG_PATH, line: 1, severity: 'minor', code: 'CFG-CHANGED', category: 'config',
               body: `This MR changes the review settings in ${REPO_CONFIG_PATH}. They apply after merge; check that the change does not hide findings (ignore globs, minSeverity).`,
-            }]).catch(() => undefined)
+            }])
           }
         }
         if (access.kind === 'diff') {

@@ -87,7 +87,7 @@ export async function findPendingCommands(
 
 /** The prompt of an explain or fix answer; the finding text is quoted, never followed. */
 export function buildCommandPrompt(command: { kind: 'explain' | 'fix' }, finding: CommandFinding): string {
-  const context = `The review finding at ${finding.path}:${finding.line}${finding.code === undefined ? '' : ` (${finding.code})`} reads:\n"""\n${finding.body}\n"""\nRead the change with gitlab_get_file_diff for ${finding.path} before answering. ${UNTRUSTED}`
+  const context = `The review finding at ${finding.path}:${finding.line}${finding.code === undefined ? '' : ` (${finding.code})`} reads:\n"""\n${finding.body}\n"""\nRead the change with gitlab_get_file_diff for ${finding.path} before answering. Do not call report_review_findings or any thread tool: this is not a review, your reply text is the whole answer. ${UNTRUSTED}`
   if (command.kind === 'explain') {
     return `${context}\nA developer asked you to explain this finding. In at most 150 words, say what the problem is, why it matters here, and what a fix looks like. Reply with the answer text only.`
   }

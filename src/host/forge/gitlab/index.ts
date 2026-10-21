@@ -60,6 +60,22 @@ export function gitlabForge(
     mrHeadSha: () => fetchMrDetailHeadSha(cfg.baseUrl, cfg.token, mr.projectId, mr.mrIid),
     mrBaseSha: () => fetchMrBaseSha(cfg.baseUrl, cfg.token, mr.projectId, mr.mrIid),
     restrictToInterdiff: (files) => { interdiff = files },
+    openFindingKeys: async () => {
+      const keys = new Set<string>()
+      const headers = gitlabAuthHeaders(cfg.token)
+      for (let page = 1; page <= 20; page++) {
+        const res = await GitlabClient.fetchWithTimeout(`${mrApi}/discussions?per_page=100&page=${page}`, { headers })
+        if (!res.ok) break
+        const batch = await res.json() as Array<{ notes?: Array<{ author?: { username?: string }; body?: string; resolved?: boolean; position?: { new_path?: string } }> }>
+        for (const d of batch) {
+          const first = d.notes?.[0]
+          const code = /<!-- maestro-finding code=([A-Z][A-Z0-9-]{2,40}) -->/.exec(first?.body ?? '')?.[1]
+          if (first?.author?.username === cfg.botUsername && first.resolved !== true && code !== undefined && first.position?.new_path !== undefined) keys.add(`${code}@${first.position.new_path}`)
+        }
+        if (batch.length < 100) break
+      }
+      return keys
+    },
     readFile: (path, ref) => fetchRepoFile(fetch, { baseUrl: cfg.baseUrl, token: cfg.token, projectId: mr.projectId, ref, path }),
     feedback: async (window) => {
       const headers = gitlabAuthHeaders(cfg.token)
