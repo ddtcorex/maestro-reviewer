@@ -120,3 +120,35 @@ describe('runCiTrigger push-gate from GitLab state', () => {
     expect(ctx.reviewEngine.run).not.toHaveBeenCalled()
   })
 })
+
+describe('a partial review of the same head (I2)', () => {
+  const fakeWriteFile = (async () => {}) as unknown as typeof import('node:fs/promises').writeFile
+  const partialBody = (sha: string) => `## Review\n\n${reviewMarker(sha, 'webhook')}\n${encodeReviewMeta({ ...meta(sha), partial: true })}`
+
+  it('does not count as reviewed: the CI job reviews the whole MR', async () => {
+    const { parseCiEnvConfig, runCiTrigger } = await import('../src/host/providers/ci-trigger.js')
+    const cfg = parseCiEnvConfig({ GITLAB_HOST: 'h', REVIEW_GITLAB_TOKEN: 'tok', SOURCE_PROJECT_ID: '1', MR_IID: '2' })
+    const ctx = { reviewEngine: { run: vi.fn(async () => ({ ok: true, summary: 'done', failures: [], durationMs: 5 })) } }
+    await runCiTrigger(ctx as never, cfg, { fetcher: gitlab([[note(1, BOT, partialBody('cafe01'))]], { mrSha: 'cafe01' }).fetcher, writeFile: fakeWriteFile, history: { lastCompletedReview: vi.fn(async () => undefined) } })
+    expect(ctx.reviewEngine.run).toHaveBeenCalledTimes(1)
+    expect((ctx.reviewEngine.run.mock.calls[0] as unknown[])[0]).not.toHaveProperty('pathPrefix')
+  })
+})
+
+describe('a partial review caused by the diff cap', () => {
+  const fakeWriteFile = (async () => {}) as unknown as typeof import('node:fs/promises').writeFile
+  it('stands for its head: rerunning would hit the same cap', async () => {
+    const { parseCiEnvConfig, runCiTrigger } = await import('../src/host/providers/ci-trigger.js')
+    const body = `## Review\n\n${reviewMarker('cafe01', 'ci-quick')}\n${encodeReviewMeta({ ...meta('cafe01'), partial: true, capped: true })}`
+    const cfg = parseCiEnvConfig({ GITLAB_HOST: 'h', REVIEW_GITLAB_TOKEN: 'tok', SOURCE_PROJECT_ID: '1', MR_IID: '2' })
+    const ctx = { reviewEngine: { run: vi.fn(async () => ({ ok: true, summary: 'done', failures: [], durationMs: 5 })) } }
+    const r = await runCiTrigger(ctx as never, cfg, { fetcher: gitlab([[note(1, BOT, body)]], { mrSha: 'cafe01' }).fetcher, writeFile: fakeWriteFile, history: { lastCompletedReview: vi.fn(async () => undefined) } })
+    expect(ctx.reviewEngine.run).not.toHaveBeenCalled()
+    expect(r.summary).toMatch(/already reviewed at cafe01/)
+  })
+
+  it('is recorded in the metadata by the engine', async () => {
+    const { buildReviewMeta, parseReviewMeta, encodeReviewMeta: enc } = await import('../src/host/review-marker.js')
+    expect(parseReviewMeta(enc(buildReviewMeta({ headSha: 'ab', mode: 'quick', models: [], findings: [], partial: true, capped: true })))?.capped).toBe(true)
+  })
+})

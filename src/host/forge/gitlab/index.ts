@@ -6,7 +6,7 @@ import { fetchRepoFile, fetchCompare, fetchMrBaseSha, fetchMrDetailHeadSha, post
 import { createReviewSignals } from './review-signals.js'
 import { DEFAULT_IGNORE_GLOBS, filterDiffs } from '../../diff-filter.js'
 import { redactDiff } from '../../redact.js'
-import { countDismissals, dismissalAuthors } from '../../review-feedback.js'
+import { countDismissals, dismissalAuthors, openFindingKeys } from '../../review-feedback.js'
 import { runWithConcurrency } from '../../chunking.js'
 
 /** Every diff the agents see passes through the redactor; the hits stay with the forge. */
@@ -60,6 +60,22 @@ export function gitlabForge(
     mrHeadSha: () => fetchMrDetailHeadSha(cfg.baseUrl, cfg.token, mr.projectId, mr.mrIid),
     mrBaseSha: () => fetchMrBaseSha(cfg.baseUrl, cfg.token, mr.projectId, mr.mrIid),
     restrictToInterdiff: (files) => { interdiff = files },
+    openFindingKeys: async () => {
+      const keys = new Set<string>()
+      const headers = gitlabAuthHeaders(cfg.token)
+      for (let page = 1; page <= 20; page++) {
+        const res = await GitlabClient.fetchWithTimeout(`${mrApi}/discussions?per_page=100&page=${page}`, { headers })
+        if (!res.ok) break
+        const batch = await res.json() as Array<{ notes?: Array<{ author?: { username?: string }; body?: string; resolved?: boolean; position?: { new_path?: string } }> }>
+        for (const d of batch) {
+          const first = d.notes?.[0]
+          const code = /<!-- maestro-finding code=([A-Z][A-Z0-9-]{2,40}) -->/.exec(first?.body ?? '')?.[1]
+          if (first?.author?.username === cfg.botUsername && first.resolved !== true && code !== undefined && first.position?.new_path !== undefined) for (const k of openFindingKeys(code, first.position.new_path, first.body ?? '')) keys.add(k)
+        }
+        if (batch.length < 100) break
+      }
+      return keys
+    },
     readFile: (path, ref) => fetchRepoFile(fetch, { baseUrl: cfg.baseUrl, token: cfg.token, projectId: mr.projectId, ref, path }),
     feedback: async (window) => {
       const headers = gitlabAuthHeaders(cfg.token)
@@ -87,7 +103,7 @@ export function gitlabForge(
     },
     reviewScope: async () => {
       const scope = await loadDiffs()
-      return { files: GitlabClient.diffFileList(scope.diffs), skipped: scope.skipped, redacted: scope.redacted ?? [] }
+      return { files: GitlabClient.diffFileList(scope.diffs), skipped: scope.skipped, redacted: scope.redacted ?? [], ...(scope.truncated ? { truncated: true } : {}) }
     },
     compare: (from, to) => fetchCompare(cfg.baseUrl, cfg.token, mr.projectId, from, to),
     postNote: (body) => post(`${mrApi}/notes`, body),

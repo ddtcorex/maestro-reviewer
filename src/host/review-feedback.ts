@@ -1,4 +1,5 @@
 import { parseCommand } from './commands.js'
+import { normalizeFindingSeverity, severityPrefix } from './severity.js'
 
 /**
  * Feedback loop (spec section 7, F2): a finding code a project keeps
@@ -11,6 +12,29 @@ export const MUTE_THRESHOLD = 3
 export const FEEDBACK_WINDOW = 50
 
 const MARKER = /<!-- maestro-finding code=([A-Z][A-Z0-9-]{2,40}) -->/
+
+/** Codes the engine itself raises: the model never sees or answers their threads. */
+export const ENGINE_FINDING_CODES: ReadonlySet<string> = new Set(['SEC-SECRET-IN-DIFF', 'MAGENTO-DB-WHITELIST', 'CFG-CHANGED'])
+
+/** Pure. The finding code a note body carries, if any. */
+export function findingCodeOf(body: string | undefined): string | undefined {
+  return MARKER.exec(body ?? '')?.[1]
+}
+
+/**
+ * Pure. The dedupe keys of an open bot thread: `<code>@<path>`, plus
+ * `<code>@<path>@blocking` when its first note is blocking, so an open major
+ * thread never hides a blocking finding of the same code and path.
+ */
+export function openFindingKeys(code: string, path: string, firstBody: string): string[] {
+  return [`${code}@${path}`, ...(firstBody.includes(severityPrefix('blocking')) ? [`${code}@${path}@blocking`] : [])]
+}
+
+/** Pure. Whether a deterministic finding already has a matching open thread. */
+export function hasOpenThread(f: { code?: string; path?: string; severity?: unknown }, open: ReadonlySet<string>): boolean {
+  if (f.code === undefined || f.path === undefined) return false
+  return open.has(normalizeFindingSeverity(f.severity) === 'blocking' ? `${f.code}@${f.path}@blocking` : `${f.code}@${f.path}`)
+}
 
 export function findingCodeMarker(code: string): string {
   return `<!-- maestro-finding code=${code} -->`

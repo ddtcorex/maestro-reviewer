@@ -71,8 +71,8 @@ export function whitelistFindings(modules: Array<{ module: string }>): ReviewFin
   return modules.map(({ module }) => {
     const prefix = module === '.' ? '' : `${module}/`
     return {
-      status: 'new', path: `${prefix}etc/db_schema.xml`, line: 1, severity: 'major', category: 'magento', code: 'MAGENTO-DB-WHITELIST',
-      body: `This MR changes the declarative schema of \`${module}\` without updating \`${prefix}etc/db_schema_whitelist.json\`. Without the whitelist, setup:upgrade cannot drop or rename what this change removes. Regenerate it with \`bin/magento setup:db-declaration:generate-whitelist --module-name=<Vendor_Module>\` and commit it.`,
+      status: 'new', path: `${prefix}etc/db_schema.xml`, line: 1, severity: 'minor', category: 'magento', code: 'MAGENTO-DB-WHITELIST',
+      body: `This MR changes the declarative schema of \`${module}\` without updating \`${prefix}etc/db_schema_whitelist.json\`. Adding a table or column works without it, but setup:upgrade only drops or renames what the whitelist lists, so a later removal of what this change adds would silently stay in the database. Regenerate it with \`bin/magento setup:db-declaration:generate-whitelist --module-name=<Vendor_Module>\` and commit it.`,
     }
   })
 }

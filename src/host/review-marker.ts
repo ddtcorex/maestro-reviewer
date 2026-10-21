@@ -46,6 +46,8 @@ export interface ReviewMeta {
   truncated?: boolean
   /** The review did not see every file (a failed fan-out part, a capped diff): the next one must be full. */
   partial?: boolean
+  /** The partial cause was GitLab's diff file cap: a rerun of this head would hit it again. */
+  capped?: boolean
   at: string
 }
 
@@ -85,6 +87,7 @@ function isReviewMeta(x: unknown): x is ReviewMeta {
   if (m.muted !== undefined && (!Array.isArray(m.muted) || !m.muted.every(isStr))) return false
   if (m.truncated !== undefined && typeof m.truncated !== 'boolean') return false
   if (m.partial !== undefined && typeof m.partial !== 'boolean') return false
+  if (m.capped !== undefined && typeof m.capped !== 'boolean') return false
   return true
 }
 
@@ -114,6 +117,7 @@ export function buildReviewMeta(opts: {
   findings: ReviewFinding[]
   usage?: { input: number; output: number; cached: number }
   partial?: boolean
+  capped?: boolean
   muted?: string[]
   /** Findings of an earlier review of this head that this (narrower) review must not drop. */
   carried?: ReviewMeta['findings']
@@ -127,6 +131,7 @@ export function buildReviewMeta(opts: {
     models: opts.models,
     ...(opts.usage !== undefined ? { usage: opts.usage } : {}),
     ...(opts.partial === true ? { partial: true } : {}),
+    ...(opts.capped === true ? { capped: true } : {}),
     ...(opts.muted !== undefined && opts.muted.length > 0 ? { muted: opts.muted } : {}),
     findings: [
       ...opts.findings.map(f => ({ code: f.code ?? 'none', fingerprint: findingFingerprint(f), severity: f.severity ?? 'minor' })),

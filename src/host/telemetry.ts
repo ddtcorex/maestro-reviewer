@@ -44,6 +44,10 @@ export interface AgentUsage { agent: 'reviewer' | 'auditor'; model: string; usag
  * deletes the session log. Null when no message carried usage.
  */
 export function usageFromSession(session: unknown): TokenUsage | null {
+  try { return readUsage(session) } catch { return null }
+}
+
+function readUsage(session: unknown): TokenUsage | null {
   let found = false
   const total: TokenUsage = { input: 0, output: 0, cached: 0 }
   for (const event of readSessionEvents(session)) {

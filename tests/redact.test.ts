@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { redact, redactDiff, secretFindings } from '../src/host/redact.js'
@@ -94,7 +94,9 @@ describe('redactWorktree', () => {
     const outside = mkdtempSync('/tmp/maestro-outside-')
     writeFileSync(join(outside, 'secret.env'), 'API_TOKEN=keepme\n')
     symlinkSync(join(outside, 'secret.env'), join(root, 'linked.env'))
+    // A link out of the checkout is removed, never followed or copied; its target stays as it was.
     expect(await redactWorktree(root)).toEqual({ files: 1, hits: 1 })
+    expect(existsSync(join(root, 'linked.env'))).toBe(false)
     expect(readFileSync(join(root, 'app/etc/env.php'), 'utf8')).toContain('[REDACTED:env-secret]')
     expect(readFileSync(join(root, '.git/config'), 'utf8')).toContain('hunter2')
     expect(readFileSync(join(outside, 'secret.env'), 'utf8')).toContain('keepme')

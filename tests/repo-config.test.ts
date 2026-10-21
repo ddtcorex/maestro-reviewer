@@ -104,7 +104,7 @@ describe('engine with repository settings', () => {
     const { posted, notes } = await runEngine(['a.php', REPO_CONFIG_PATH], {}, async () => ({ summary: '0 new inline comment(s), 0 thread(s) updated.', failures: [] }))
     expect(posted.map((f) => f.code)).toEqual(['CFG-CHANGED'])
     expect(posted[0]).toMatchObject({ status: 'new', path: REPO_CONFIG_PATH, line: 1 })
-    expect(notes[0]).toContain('applies after merge')
+    expect(notes[0]).toContain('applies once it is on the default branch')
   })
 
   it('hands minSeverity and the warnings to the run, and names the warnings in the comment', async () => {

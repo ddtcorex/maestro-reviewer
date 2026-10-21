@@ -6,8 +6,9 @@ import type { ReviewSkillProfile } from './skills-tool.js'
 
 /**
  * Per-project review settings from `.maestro-review.yml` (spec section 7,
- * F1). The file is read from the MR target branch, the merged and already
- * reviewed state, never from the head: an author must not widen the ignore
+ * F1). The file is read from the project's default branch, the merged and
+ * already reviewed state, never from the head or a target branch the author
+ * picked: an author must not widen the ignore
  * globs or raise the minimum severity to hide their own change. The merge
  * gate is not a file field. Any invalid content means no settings plus one
  * warning, never a failed review.
@@ -80,7 +81,8 @@ export interface EnvReviewOverrides {
 export interface EffectiveReviewConfig {
   profile?: ReviewSkillProfile
   ignoreGlobs: string[]
-  fanout: FanoutSettings
+  /** Set only when the environment or the file sets a fan-out value: a single agent reviews otherwise. */
+  fanout?: FanoutSettings
   minSeverity?: FindingSeverity
   rules: string[]
   language?: string
@@ -92,7 +94,7 @@ export function effectiveConfig(env: EnvReviewOverrides, file: RepoReviewConfig)
   return {
     ...(profile !== undefined ? { profile } : {}),
     ignoreGlobs: resolveIgnoreGlobs({ REVIEW_IGNORE_GLOBS: env.ignoreGlobs.join(',') }, file.ignore ?? []),
-    fanout: { ...DEFAULT_FANOUT, ...file.fanout, ...env.fanout },
+    ...(file.fanout !== undefined || Object.keys(env.fanout).length > 0 ? { fanout: { ...DEFAULT_FANOUT, ...file.fanout, ...env.fanout } } : {}),
     ...(file.minSeverity !== undefined ? { minSeverity: file.minSeverity } : {}),
     rules: file.rules ?? [],
     ...(file.language !== undefined ? { language: file.language } : {}),

@@ -35,7 +35,7 @@ export interface ReviewerScopePromptOpts {
   incrementalBlock?: string
   /** A fan-out part: the files this agent reviews. */
   part?: { label: string; files: string[] }
-  /** Project rules from the target branch's .maestro-review.yml. */
+  /** Project rules from the default branch's .maestro-review.yml. */
   repoRules?: string[]
   /** Language tag for the findings and replies. */
   language?: string
@@ -65,11 +65,11 @@ export function reviewerPromptParts(opts: ReviewerScopePromptOpts): { stable: st
   const deletedFilesRule = 'DELETED FILES: a deleted file\'s diff only tells you what logic is gone — never file a finding positioned on a deleted file (there is no line left to fix). If removing it drops behavior that is not replicated elsewhere, report that as a finding against the file that should carry the replacement logic (or the closest call site), not the deleted file itself.'
   if (opts.incrementalBlock !== undefined) dynamic.push(opts.incrementalBlock)
   if (opts.frameworkLine !== undefined) dynamic.push(opts.frameworkLine)
-  if (opts.repoRules !== undefined && opts.repoRules.length > 0) dynamic.push(`PROJECT RULES (from .maestro-review.yml on the target branch), apply them as review criteria:\n${opts.repoRules.map((r) => `- ${r}`).join('\n')}`)
+  if (opts.repoRules !== undefined && opts.repoRules.length > 0) dynamic.push(`PROJECT RULES (from .maestro-review.yml on the default branch), apply them as review criteria:\n${opts.repoRules.map((r) => `- ${r}`).join('\n')}`)
   if (opts.language !== undefined) dynamic.push(`Write every finding and reply in the language ${opts.language}.`)
   if (opts.part !== undefined) dynamic.push(`This merge request is large and reviewed in parallel parts. You review part ${opts.part.label}: only these ${opts.part.files.length} file(s), and the diff tools serve only them. Other parts cover the rest, so do not report that files are missing.\n${opts.part.files.map((f) => `- ${f}`).join('\n')}`)
   return {
-    stable: [`${opts.profileInstruction}Review this merge request (${opts.mode} mode). Call gitlab_list_own_review_threads and gitlab_get_mr_diff first, then gitlab_get_file_diff per file you inspect (inline results never spill), then call report_review_findings exactly once when done. DEDUP RULE: when a finding matches the substance of an existing own thread (same file and same underlying issue, even if worded differently — including resolved threads, whose reply reopens them), report it as {status: "reply", discussionId} instead of posting a new thread. Use status "new" only for issues with no matching thread. ${deletedFilesRule}`],
+    stable: [`${opts.profileInstruction}Review this merge request (${opts.mode} mode). Call gitlab_list_own_review_threads and gitlab_get_mr_diff first, then gitlab_get_file_diff per file you inspect (inline results never spill), then call report_review_findings exactly once when done. NO WEB ACCESS: framework and vendor sources are not in the checkout and cannot be fetched; judge framework behaviour from the repository and what you know, and say so in a finding that rests on an unverified framework detail. DEDUP RULE: when a finding matches the substance of an existing own thread (same file and same underlying issue, even if worded differently — including resolved threads, whose reply reopens them), report it as {status: "reply", discussionId} instead of posting a new thread. Use status "new" only for issues with no matching thread. ${deletedFilesRule}`],
     dynamic,
   }
 }
@@ -104,12 +104,14 @@ export function buildReviewComment(opts: {
   skipped?: string[]
   /** Short notes shown under the findings (settings warnings, config changes). */
   notices?: string[]
+  /** Some files were not reviewed: a failed fan-out part (with its file count) or a capped diff. */
+  partial?: { unreviewed?: number }
 }): string {
   const mrUrl = `${opts.gitlabBaseUrl.replace(/\/$/, '')}/${opts.projectPath}/-/merge_requests/${opts.mrIid}`
   const title = opts.isDiffOnly === true ? '## 🤖 Maestro Review — Diff-only' : '## 🤖 Maestro Review'
   const metaBits: string[] = []
   metaBits.push(`**\`${opts.projectPath}\` !${opts.mrIid}**`)
-  metaBits.push('✅ Completed')
+  metaBits.push(opts.partial !== undefined ? '⚠️ Partial' : '✅ Completed')
   metaBits.push(`\`${opts.mode}\``)
   if (opts.profile !== undefined) metaBits.push(`\`${opts.profile}\``)
   if (opts.durationMs !== undefined && opts.durationMs > 0) {
@@ -138,7 +140,11 @@ export function buildReviewComment(opts: {
   const failuresBlock = opts.failures.length > 0
     ? `\n\n<details>\n<summary>⚠️ Failed to post (${opts.failures.length})</summary>\n\n${opts.failures.map((f) => `- \`${f}\``).join('\n')}\n\n</details>`
     : ''
-  const noticesBlock = opts.notices !== undefined && opts.notices.length > 0 ? `\n\n${opts.notices.map((n) => `> ${n}`).join('\n>\n')}` : ''
+  const notices = [
+    ...(opts.partial !== undefined ? [`⚠️ **Partial review:** ${opts.partial.unreviewed !== undefined ? `${opts.partial.unreviewed} file(s) were` : 'some files were'} not reviewed. Push again or mention the reviewer to retry.`] : []),
+    ...(opts.notices ?? []),
+  ]
+  const noticesBlock = notices.length > 0 ? `\n\n${notices.map((n) => `> ${n}`).join('\n>\n')}` : ''
   const skippedBlock = opts.skipped !== undefined && opts.skipped.length > 0 ? `\n\n${skippedFilesBlock(opts.skipped)}` : ''
   const footer = `\n\n---\n\n<sub>Generated by Maestro · [View MR →](${mrUrl})</sub>`
   const markerLine = opts.marker === undefined
@@ -318,6 +324,16 @@ export interface ReviewOutcome {
   deferredPost?: boolean
   /** Some files were not reviewed (a failed part, a capped diff). */
   partial?: boolean
+  /** The partial cause was GitLab's diff file cap. */
+  capped?: boolean
+  /** How many files a failed part left unreviewed, when known. */
+  unreviewed?: number
+  /** The findings actually posted (muted and below-floor ones left out). */
+  postedFindings?: ReviewFinding[]
+}
+
+function partialOf(outcome: Pick<ReviewOutcome, 'partial' | 'unreviewed'>): { partial?: { unreviewed?: number } } {
+  return outcome.partial === true ? { partial: outcome.unreviewed !== undefined ? { unreviewed: outcome.unreviewed } : {} } : {}
 }
 
 export function reviewerSummary(postedNew: number, postedReplies: number, diffTruncated: boolean): string {
@@ -334,10 +350,10 @@ interface UsageDeps {
   carryFindings?: ReviewMeta['findings']
 }
 
-function metaFor(payload: ReviewRequest, outcome: Pick<ReviewOutcome, 'findings' | 'models' | 'partial'>, deps: UsageDeps): ReviewMeta | undefined {
+function metaFor(payload: ReviewRequest, outcome: Pick<ReviewOutcome, 'findings' | 'models' | 'partial' | 'capped'>, deps: UsageDeps): ReviewMeta | undefined {
   if (payload.headSha === undefined) return undefined
   const usage = deps.usageTotal?.() ?? undefined
-  return buildReviewMeta({ headSha: payload.headSha, ...(deps.baseSha !== undefined ? { baseSha: deps.baseSha } : {}), mode: payload.mode, models: outcome.models ?? [], findings: outcome.findings ?? [], ...(usage !== undefined ? { usage } : {}), ...(outcome.partial === true || deps.pathLimited === true ? { partial: true } : {}), ...(deps.carryFindings !== undefined ? { carried: deps.carryFindings } : {}), ...(deps.muted !== undefined && deps.muted.length > 0 ? { muted: deps.muted } : {}) })
+  return buildReviewMeta({ headSha: payload.headSha, ...(deps.baseSha !== undefined ? { baseSha: deps.baseSha } : {}), mode: payload.mode, models: outcome.models ?? [], findings: outcome.findings ?? [], ...(usage !== undefined ? { usage } : {}), ...(outcome.partial === true || deps.pathLimited === true ? { partial: true } : {}), ...(outcome.capped === true ? { capped: true } : {}), ...(deps.carryFindings !== undefined ? { carried: deps.carryFindings } : {}), ...(deps.muted !== undefined && deps.muted.length > 0 ? { muted: deps.muted } : {}) })
 }
 
 /**
@@ -566,6 +582,7 @@ export async function runReviewAndAudit(payload: ReviewRequest, deps: ReviewAndA
               meta,
               skipped: (deps as unknown as { skippedFiles?: string[] }).skippedFiles,
               notices: (deps as unknown as { notices?: string[] }).notices,
+              ...partialOf(settled[0].value),
             })
           : `## 🤖 Maestro Review\n\n**\`${payload.projectPath}\` !${payload.mrIid}** · ✅ Completed · \`${payload.mode}\`${(deps as unknown as { reviewProfile?: string }).reviewProfile !== undefined ? ` · \`${(deps as unknown as { reviewProfile: string }).reviewProfile}\`` : ''}\n\n${summaryText}${failures.length > 0 ? `\n\n<details>\n<summary>⚠️ Failed to post (${failures.length})</summary>\n\n${failures.map((f) => `- \`${f}\``).join('\n')}\n\n</details>` : ''}`
         sections.push(richOpts)
@@ -633,6 +650,7 @@ export async function runDiffOnlyReview(payload: ReviewRequest, deps: DiffOnlyRe
           meta: metaFor(payload, outcome, deps as UsageDeps),
           skipped: (deps as unknown as { skippedFiles?: string[] }).skippedFiles,
           notices: (deps as unknown as { notices?: string[] }).notices,
+          ...partialOf(outcome),
         })
       : `## 🤖 Maestro Review — Diff-only\n\n> **Scope:** Diff-only — reviewed the GitLab diff without a local checkout, Magento environment, static analysis, or tests. For a full review, add this project in Settings → Maestro and mention again.\n\n${summary}${failures.length > 0 ? `\n\n<details>\n<summary>⚠️ Failed to post (${failures.length})</summary>\n\n${failures.map((f) => `- \`${f}\``).join('\n')}\n\n</details>` : ''}`
     const body = diffBody

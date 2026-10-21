@@ -157,6 +157,12 @@ with outside contributors get a reviewer project of their own.
    MRs in the source projects as **Developer**.
 6. Create the tokens (3.3) and the variables ([section 4](#4-variable-reference)).
 
+**Runner:** the review job expects one job per container (the Docker or
+Kubernetes executor): it clones into fixed paths under `/tmp`
+(`/tmp/maestro-review-worktree`, kept constant so the model's cached prompt
+prefix holds across MRs). A shell executor running two review jobs at once on
+one host would make them collide.
+
 ### 3.3 Bot identity and tokens
 
 Every note the reviewer posts is attributed to the owner of
@@ -278,7 +284,7 @@ Use the numeric project id (shown on the project's overview page), for example
 | `REVIEW_PROFILE` | `magento2`, `laravel`, `symfony`, `wordpress`, `generic` | Framework checklist. Unset or `generic`: diff-only review. A framework profile clones the source at the head SHA and reviews the checkout. An unknown value fails the job. |
 | `REVIEW_ON_PUSH` | `1` | Re-review new pushes with an incremental-changes block. Unset: only the first review of an MR runs. |
 | `REVIEW_IGNORE_GLOBS` | comma-separated globs, for example `docs/**, **/*.svg` | Extra paths kept from the model, added to the defaults: `**/package-lock.json`, `**/pnpm-lock.yaml`, `**/yarn.lock`, `**/composer.lock`, `**/*.min.js`, `**/*.min.css`, `**/*.map`, `**/generated/**`, `pub/static/**`, `var/**`, `**/__snapshots__/**`, `**/i18n/*.csv`. A deleted file is matched on its old path. Skipped files are listed in the review comment; an MR whose every file matches gets one "Nothing reviewable" comment and no model call. A checkout review can still read a skipped file from the worktree. |
-| `REVIEW_FANOUT_FILES`, `REVIEW_FANOUT_BYTES` | positive integers, default `25` files and `150000` bytes of diff | Above either threshold the MR is reviewed in parallel parts: files are grouped by module (`app/code/<Vendor>/<Module>`, `app/design/<area>/<Vendor>`, else the first two directories), high risk files apart from the rest, each part within both thresholds (a single larger file is its own part); at most 6 parts, so a very large MR gets larger parts rather than a longer job. Parts skip the govard lint rule, which covers the whole MR. A review with a failed part is marked partial, and the next re-review covers the whole MR. Findings are merged, deduped and posted once; the comment says `Reviewed in N parallel parts` and names any part that failed. The review fails only when every part fails. |
+| `REVIEW_FANOUT_FILES`, `REVIEW_FANOUT_BYTES` | positive integers; unset by default (one agent reviews the whole MR). Setting any `REVIEW_FANOUT_*` variable, or `fanout` in `.maestro-review.yml`, turns fan-out on with the others at `25` files and `150000` bytes of diff | Off by default because on a checkout every part explores the codebase again: on a real 90 file Magento MR, five parts took longer and cost more than one agent. Above either threshold the MR is reviewed in parallel parts: files are grouped by module (`app/code/<Vendor>/<Module>`, `app/design/<area>/<Vendor>`, else the first two directories), high risk files apart from the rest, each part within both thresholds (a single larger file is its own part); at most 6 parts, so a very large MR gets larger parts rather than a longer job. Parts skip the govard lint rule, which covers the whole MR. A review with a failed part is marked partial, and the next re-review covers the whole MR. Findings are merged, deduped and posted once; the comment says `Reviewed in N parallel parts` and names any part that failed. The review fails only when every part fails. |
 | `REVIEW_FANOUT_CONCURRENCY` | positive integer, default `3` | How many parts run at once. |
 | `REVIEW_LLM_PROVIDER` | `openai`, `anthropic`, `gemini`, `openrouter`, `deepseek`, `custom` | The project's own provider; a preset fills the base URL ([table](#provider-presets)), `custom` needs `REVIEW_LLM_BASE_URL`. |
 | `REVIEW_LLM_API_KEY` | the project's key (masked, expand off) | Bills this project's reviews to its own key. |
@@ -340,7 +346,8 @@ A source project can keep review settings in a `.maestro-review.yml` at its
 root. The reviewer reads it from the project's **default branch**, never from
 the MR or the branch it targets (an author chooses the target), so an author
 cannot loosen the review of their own change. An MR that edits the file gets a
-`CFG-CHANGED` finding and a note that the change applies after merge.
+`CFG-CHANGED` finding and a note that the change applies once it is on the
+default branch.
 
 ```yaml
 profile: magento2            # magento2 | laravel | symfony | wordpress | generic
@@ -390,7 +397,10 @@ the head SHA (no runtime environment exists in the container).
 
 With `REVIEW_ON_PUSH=1` (project scope or `*`) every push with new commits is
 reviewed again. Without it, only the first review runs; the same head SHA never
-runs twice either way.
+runs twice either way, except after a partial review (a failed fan-out part,
+or a path-limited `/maestro rereview`): the next pipeline of that head reviews
+the whole MR. A review cut by GitLab's diff file cap still counts, since a
+rerun would hit the same cap.
 
 A re-review looks at the interdiff only (what changed since the last reviewed
 head) when the MR base is the one that review recorded and GitLab returns every
@@ -435,7 +445,11 @@ The reviewer reads `composer.lock` at the MR head (or, without a lock,
 `composer.json`'s `require`) and tells the model the Magento, Hyvä and PHP
 versions in use, so findings fit those versions. An MR that changes a
 module's `etc/db_schema.xml` without its `etc/db_schema_whitelist.json` gets
-a major `MAGENTO-DB-WHITELIST` finding with the command that regenerates it.
+a minor `MAGENTO-DB-WHITELIST` finding with the command that regenerates it
+(an addition works without it, but a later removal of what it adds is not
+dropped from the database). The model does not see the engine's own threads
+(`MAGENTO-DB-WHITELIST`, `SEC-SECRET-IN-DIFF`, `CFG-CHANGED`), so it never replies to or
+regrades them.
 
 ### 5.7 Code Quality report
 
@@ -457,7 +471,11 @@ tokens (AWS, GitLab, GitHub, OpenAI style), JWTs, `KEY=value` secrets
 `'password' => '...'` in `app/etc/env.php`, email addresses and international
 phone numbers (`+<country> ...`) with placeholders such as
 `[REDACTED:gitlab-token]`. This covers the diff tools and, for a checkout
-review, the files of the checkout. The comment says how many values were
+review, the secrets in the files of the checkout (emails and phone numbers
+are masked in the diff only). Review agents have no web tools (`web_fetch`,
+`web_search`): they were slow and an easy way out for what an agent reads.
+The `bash` tool still reaches the network (the lint needs it), so this
+narrows the exfiltration path, it does not close it. The comment says how many values were
 redacted, never the values, and a secret added by the MR gets a blocking
 `SEC-SECRET-IN-DIFF` finding naming its kind and line.
 
@@ -469,8 +487,10 @@ and commit titles are redacted too; anything the agents write to GitLab has
 its HTML comments escaped, so no agent text can forge a review marker.
 
 Limits: phone numbers in a national format and lowercase `password: value`
-lines are not recognised; the review of the DSH host flow (webhook) does not
-redact its local checkout; and in a CI checkout the git history (`git log -p`,
+lines are not recognised; the DSH host flow (webhook) redacts its worktree
+only when no runtime audit runs (a runtime audit needs the real files), and a
+review stops if that redaction fails; and in
+a CI checkout the git history (`git log -p`,
 `git diff <base>..HEAD`) still holds the raw values because the lint needs
 it, so a secret is only as safe as the agent's refusal to read history.
 

@@ -36,6 +36,8 @@ export function buildIncrementalBlock(
   return lines.join('\n')
 }
 
+const COMPARE_FILE_LIMIT = 1000
+
 export type IncrementalPlan =
   | { kind: 'interdiff'; files: InterdiffFile[] }
   | { kind: 'full'; reason: 'base changed' | 'prior base unknown' | 'prior head unreachable' | 'interdiff too large' | 'prior review partial' }
@@ -55,6 +57,8 @@ export function planIncremental(
   if (prior.baseSha === undefined || current.baseSha === undefined) return { kind: 'full', reason: 'prior base unknown' }
   if (prior.baseSha !== current.baseSha) return { kind: 'full', reason: 'base changed' }
   if (compare === undefined) return { kind: 'full', reason: 'prior head unreachable' }
+  // GitLab stops at its compare limits without marking every dropped file: treat the edge as too large.
+  if (compare.compare_timeout === true || (compare.diffs?.length ?? 0) >= COMPARE_FILE_LIMIT) return { kind: 'full', reason: 'interdiff too large' }
   const files: InterdiffFile[] = []
   for (const d of compare.diffs ?? []) {
     if (d.too_large === true || d.collapsed === true || typeof d.diff !== 'string' || typeof d.new_path !== 'string') return { kind: 'full', reason: 'interdiff too large' }

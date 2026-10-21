@@ -11,12 +11,12 @@ import type {} from '../engine-row.js'
 import { gitlabAuthHeaders } from '../forge/gitlab/gitlab-auth.js'
 import { resolveIgnoreGlobs } from '../diff-filter.js'
 import { DEFAULT_FANOUT, type FanoutSettings } from '../chunking.js'
-import { REPO_CONFIG_PATH, effectiveConfig, parseRepoConfig, type RepoReviewConfig } from '../repo-config.js'
-import { fetchRepoFile } from '../forge/gitlab/mr-api.js'
+import { effectiveConfig } from '../repo-config.js'
 import { toCodeQuality, type ReviewGate } from '../codequality.js'
 import { openBlockingThreads } from '../ci-gate.js'
-import { sanitizeAgentText } from '../forge/gitlab/gitlab-client.js'
-import { buildCommandPrompt, commandMarker, findPendingCommands, type PendingCommand } from '../ci-commands.js'
+import { timedFetcher } from '../forge/gitlab/gitlab-client.js'
+import { answerCommands, commandMarker, findPendingCommands, replyToCommand, type PendingCommand } from '../ci-commands.js'
+import { loadRepoSettings } from '../ci-repo-settings.js'
 import { fetchBotUserId, hasCompletedDeepReview, hasCompletedReviewForSha, hasRunningEyes, latestCompletedReview, removeDeepLabel } from '../ci-coexist.js'
 
 export const name = 'maestro-review-ci-trigger'
@@ -47,8 +47,8 @@ export interface CiEnvConfig {
   deepRequested: boolean
   /** Paths kept from the model: the defaults plus REVIEW_IGNORE_GLOBS. */
   ignoreGlobs: string[]
-  /** REVIEW_FANOUT_FILES / _BYTES / _CONCURRENCY over DEFAULT_FANOUT. */
-  fanout: FanoutSettings
+  /** REVIEW_FANOUT_FILES / _BYTES / _CONCURRENCY over DEFAULT_FANOUT; unset (one agent) when none is set. */
+  fanout?: FanoutSettings
   /** Only the REVIEW_IGNORE_GLOBS entries and fan-out values the environment sets, to layer over the repo file. */
   envIgnoreGlobs: string[]
   envFanout: Partial<FanoutSettings>
@@ -73,7 +73,7 @@ export const CiEnvConfig: z<CiEnvConfig> = z.object({
   rereviewOnPush: z.boolean().default(false),
   deepRequested: z.boolean().default(false),
   ignoreGlobs: z.array(z.string()).required(),
-  fanout: z.object({ files: z.natural().required(), bytes: z.natural().required(), concurrency: z.natural().required() }).required(),
+  fanout: z.union([z.object({ files: z.natural().required(), bytes: z.natural().required(), concurrency: z.natural().required() }), z.const(undefined)]),
   deepModel: z.union([z.object({ provider: z.string(), model: z.string() }), z.const(undefined)]),
   gate: z.union([z.const('off'), z.const('blocking')]).default('off'),
   envIgnoreGlobs: z.array(z.string()).required(),
@@ -97,12 +97,19 @@ function positiveInt(env: Record<string, string | undefined>, name: string, fall
 export function parseCiEnvConfig(env: Record<string, string | undefined>): CiEnvConfig {
   if (env.GITLAB_HOST === undefined) throw new Error('missing GITLAB_HOST')
   if (env.REVIEW_GITLAB_TOKEN === undefined) throw new Error('missing REVIEW_GITLAB_TOKEN')
+  if ((env.REVIEW_DEEP_MODEL ?? '') !== '' && (env.REVIEW_DEEP_MODEL_PROVIDER ?? '') === '') throw new Error('REVIEW_DEEP_MODEL needs REVIEW_DEEP_MODEL_PROVIDER')
+  if ((env.REVIEW_DEEP_MODEL_PROVIDER ?? '') !== '' && (env.REVIEW_DEEP_MODEL ?? '') === '') throw new Error('REVIEW_DEEP_MODEL_PROVIDER needs REVIEW_DEEP_MODEL')
   if (env.REVIEW_GATE !== undefined && env.REVIEW_GATE !== '' && env.REVIEW_GATE !== 'off' && env.REVIEW_GATE !== 'blocking') {
     throw new Error(`unsupported REVIEW_GATE "${env.REVIEW_GATE}" (supported: off, blocking)`)
   }
   if (env.REVIEW_PROFILE !== undefined && !(REVIEW_PROFILES as readonly string[]).includes(env.REVIEW_PROFILE)) {
     throw new Error(`unsupported REVIEW_PROFILE "${env.REVIEW_PROFILE}" (supported: ${REVIEW_PROFILES.join(', ')})`)
   }
+  // Fan-out is opt-in: on a checkout every part explores the codebase again, which
+  // measured slower and costlier than one agent on a real 90 file MR.
+  const envFanout: Partial<FanoutSettings> = Object.fromEntries(([['files', 'REVIEW_FANOUT_FILES'], ['bytes', 'REVIEW_FANOUT_BYTES'], ['concurrency', 'REVIEW_FANOUT_CONCURRENCY']] as const)
+    .filter(([, name]) => (env[name] ?? '').trim() !== '')
+    .map(([key, name]) => [key, positiveInt(env, name, DEFAULT_FANOUT[key])]))
   return CiEnvConfig({
     gitlabBaseUrl: `https://${env.GITLAB_HOST}`,
     gitlabHost: env.GITLAB_HOST.trim(),
@@ -123,16 +130,10 @@ export function parseCiEnvConfig(env: Record<string, string | undefined>): CiEnv
     rereviewOnPush: env.REVIEW_ON_PUSH === '1',
     deepRequested: env.REVIEW_DEEP_REQUESTED === '1',
     ignoreGlobs: resolveIgnoreGlobs(env),
-    fanout: {
-      files: positiveInt(env, 'REVIEW_FANOUT_FILES', DEFAULT_FANOUT.files),
-      bytes: positiveInt(env, 'REVIEW_FANOUT_BYTES', DEFAULT_FANOUT.bytes),
-      concurrency: positiveInt(env, 'REVIEW_FANOUT_CONCURRENCY', DEFAULT_FANOUT.concurrency),
-    },
     gate: env.REVIEW_GATE === 'blocking' ? 'blocking' : 'off',
     envIgnoreGlobs: (env.REVIEW_IGNORE_GLOBS ?? '').split(',').map((g) => g.trim()).filter((g) => g !== ''),
-    envFanout: Object.fromEntries(([['files', 'REVIEW_FANOUT_FILES'], ['bytes', 'REVIEW_FANOUT_BYTES'], ['concurrency', 'REVIEW_FANOUT_CONCURRENCY']] as const)
-      .filter(([, name]) => (env[name] ?? '').trim() !== '')
-      .map(([key, name]) => [key, positiveInt(env, name, DEFAULT_FANOUT[key])])),
+    envFanout,
+    ...(Object.keys(envFanout).length > 0 ? { fanout: { ...DEFAULT_FANOUT, ...envFanout } } : {}),
     ...(env.REVIEW_DEEP_MODEL ? { deepModel: { provider: env.REVIEW_DEEP_MODEL_PROVIDER as string, model: env.REVIEW_DEEP_MODEL } } : {}),
   })
 }
@@ -157,13 +158,6 @@ export async function fetchMrDetail(config: CiEnvConfig, fetcher: typeof fetch =
   return { sourceBranch: body.source_branch, headSha: body.sha, projectPath, ...(typeof body.target_branch === 'string' ? { targetBranch: body.target_branch } : {}) }
 }
 
-async function fetchDefaultBranch(config: CiEnvConfig, fetcher: typeof fetch): Promise<string | undefined> {
-  const res = await fetcher(`${config.gitlabBaseUrl}/api/v4/projects/${config.sourceProjectId}`, { headers: gitlabAuthHeaders(config.gitlabToken) })
-  if (!res.ok) return undefined
-  const body = await res.json() as { default_branch?: unknown }
-  return typeof body.default_branch === 'string' ? body.default_branch : undefined
-}
-
 /**
  * How CI reaches the code: quick with no or the generic profile reads the
  * diff only (no clone cost); a framework profile and every deep review clone
@@ -176,7 +170,7 @@ export function ciAccess(config: CiEnvConfig): CodeAccess {
 
 /** The fan-out engine options of the job. */
 export function ciFanout(config: CiEnvConfig): Pick<EngineRunOptions, 'fanout' | 'deepModel'> {
-  return { fanout: config.fanout, ...(config.deepModel !== undefined ? { deepModel: config.deepModel } : {}) }
+  return { ...(config.fanout !== undefined ? { fanout: config.fanout } : {}), ...(config.deepModel !== undefined ? { deepModel: config.deepModel } : {}) }
 }
 
 /** The pinned model, else the host default (no Settings UI in CI). */
@@ -201,24 +195,10 @@ export async function runCiTrigger(
   const { sourceBranch, headSha, projectPath } = await fetchMrDetail(config, deps.fetcher)
   // Per-project settings from the project's default branch: the author chooses the MR target,
   // so a target branch they pushed could carry settings that relax their own review.
-  let file: RepoReviewConfig = {}
-  const warnings: string[] = []
-  const defaultBranch = await fetchDefaultBranch(config, deps.fetcher ?? fetch).catch(() => undefined)
-  if (defaultBranch === undefined) warnings.push(`${REPO_CONFIG_PATH} not read: the project's default branch is unknown; using the defaults`)
-  else {
-    try {
-      const text = await fetchRepoFile(deps.fetcher ?? fetch, { baseUrl: config.gitlabBaseUrl, token: config.gitlabToken, projectId: config.sourceProjectId, ref: defaultBranch, path: REPO_CONFIG_PATH })
-      if (text !== undefined) {
-        const parsed = parseRepoConfig(text)
-        file = parsed.config
-        warnings.push(...parsed.warnings)
-      }
-    } catch (err) {
-      warnings.push(`${REPO_CONFIG_PATH} could not be read (${err instanceof Error ? err.message : String(err)}); using the defaults`)
-    }
-  }
+  const { file, warnings } = await loadRepoSettings(timedFetcher(deps.fetcher ?? fetch), { baseUrl: config.gitlabBaseUrl, token: config.gitlabToken, projectId: config.sourceProjectId })
   const eff = effectiveConfig({ ...(config.reviewProfile !== undefined ? { profile: config.reviewProfile } : {}), ignoreGlobs: config.envIgnoreGlobs, fanout: config.envFanout }, file)
-  const effConfig: CiEnvConfig = { ...config, reviewProfile: eff.profile, ignoreGlobs: eff.ignoreGlobs, fanout: eff.fanout }
+  const { fanout: _envOnly, ...rest } = config
+  const effConfig: CiEnvConfig = { ...rest, reviewProfile: eff.profile, ignoreGlobs: eff.ignoreGlobs, ...(eff.fanout !== undefined ? { fanout: eff.fanout } : {}) }
   // Push-gate (mirror of the webhook autoRereviewOnPush semantics): the bridge fires
   // on every MR pipeline, so skip when this exact head SHA already completed — and
   // skip new pushes too unless REVIEW_ON_PUSH=1. A re-run then gets the H6 incremental
@@ -227,7 +207,7 @@ export async function runCiTrigger(
   // cache is per runner and races across concurrent jobs, so it is only a fallback
   // when GitLab cannot be read.
   const history = deps.history ?? { lastCompletedReview }
-  let prior: { headSha?: string; baseSha?: string; partial?: boolean; findings?: Array<{ code: string; fingerprint: string; severity: string }> } | undefined
+  let prior: { headSha?: string; baseSha?: string; partial?: boolean; capped?: boolean; findings?: Array<{ code: string; fingerprint: string; severity: string }> } | undefined
   let botUserId: number | undefined
   try {
     botUserId = await fetchBotUserId(deps.fetcher ?? fetch, config.gitlabBaseUrl, config.gitlabToken)
@@ -266,28 +246,18 @@ export async function runCiTrigger(
     ...extra,
   })
   const runReview = (extra: Partial<ReviewRequest> = {}, more: Partial<EngineRunOptions> = {}) => { gateMs = Date.now() - gateStart; return ctx.reviewEngine.run(request(extra), { ...options, ...more }) }
-  const coFetcher = deps.fetcher ?? fetch
+  const coFetcher = timedFetcher(deps.fetcher ?? fetch)
   // MR commands wait for the next review job; answer them before the push-gate decides.
-  const reply = async (discussionId: string, body: string) => {
-    const res = await coFetcher(`${config.gitlabBaseUrl}/api/v4/projects/${config.sourceProjectId}/merge_requests/${config.mrIid}/discussions/${encodeURIComponent(discussionId)}/notes`, {
-      method: 'POST', headers: { ...gitlabAuthHeaders(config.gitlabToken), 'content-type': 'application/json' }, body: JSON.stringify({ body }),
-    })
-    if (!res.ok) throw new Error(`GitLab ${res.status} posting a command answer`)
-  }
+  const reply = (discussionId: string, body: string) => replyToCommand(coFetcher, { baseUrl: config.gitlabBaseUrl, token: config.gitlabToken, projectId: config.sourceProjectId, mrIid: config.mrIid }, discussionId, body)
   let pending: PendingCommand[] = []
   if (botUserId !== undefined) {
     pending = await findPendingCommands(coFetcher, { baseUrl: config.gitlabBaseUrl, token: config.gitlabToken, projectId: config.sourceProjectId, mrIid: config.mrIid, botUserId })
       .catch((err: unknown) => { console.warn(`[review] MR commands unreadable: ${err instanceof Error ? err.message : String(err)}`); return [] })
   }
-  let answered = 0
-  for (const c of pending) {
-    if (c.command.kind === 'rereview') continue
-    const text = c.finding === undefined
-      ? '`/maestro explain` and `/maestro fix` work as a reply inside a review finding thread; `/maestro rereview [path]` works anywhere.'
-      : await ctx.reviewEngine.answer(request(), options, buildCommandPrompt(c.command, c.finding)).catch((err: unknown) => `Could not answer: ${err instanceof Error ? err.message : String(err)}`)
-    await reply(c.discussionId, `${sanitizeAgentText(text)}\n\n${commandMarker(c.noteId)}`).then(() => { answered++ })
-      .catch((err: unknown) => console.warn(`[review] command answer not posted: ${err instanceof Error ? err.message : String(err)}`))
-  }
+  let answered = await answerCommands(pending, {
+    answer: (prompt) => ctx.reviewEngine.answer !== undefined ? ctx.reviewEngine.answer(request(), options, prompt) : Promise.reject(new Error('this engine cannot answer commands')),
+    reply,
+  })
   const rereview = pending.find((c) => c.command.kind === 'rereview')
   let result: ReviewResult
   if (config.deepRequested) {
@@ -307,6 +277,8 @@ export async function runCiTrigger(
       await removeDeepLabel(coFetcher, { baseUrl: config.gitlabBaseUrl, token: config.gitlabToken, projectId: config.sourceProjectId, mrIid: config.mrIid })
         .catch((err: unknown) => console.warn(`[review] could not remove the deep label: ${err instanceof Error ? err.message : String(err)}`))
     }
+  } else if (rereview !== undefined && await hasRunningEyes(coFetcher, config.gitlabBaseUrl, config.gitlabToken, config.sourceProjectId, config.mrIid, botUserId)) {
+    result = { ok: true, summary: 'another review is running, the rereview waits for the next job', failures: [], durationMs: 0 }
   } else if (rereview !== undefined) {
     // An explicit request: past the push-gate, limited to its path.
     // A path-limited rereview must not weaken the gate: it needs a full review of this head to
@@ -320,10 +292,12 @@ export async function runCiTrigger(
     const note = result.ok ? `Re-reviewed ${path === undefined ? 'the whole MR' : `\`${path}\``} at ${headSha.slice(0, 8)}; see the review comment.` : `The re-review failed: ${result.failures[0] ?? 'unknown error'}`
     await reply(rereview.discussionId, `${note}\n\n${commandMarker(rereview.noteId)}`).then(() => { answered++ })
       .catch((err: unknown) => console.warn(`[review] rereview answer not posted: ${err instanceof Error ? err.message : String(err)}`))
-  } else if (prior?.headSha === headSha) {
+  } else if (prior?.headSha === headSha && (prior.partial !== true || prior.capped === true)) {
     // A rerun of a reviewed head must not slip past the gate: carry that review's severities.
+    // A partial review (a failed part, a path rereview) does not count: the whole MR runs again.
+    // One cut by the diff cap does: a rerun would hit the same cap, at full cost, every pipeline.
     result = { ok: true, summary: `already reviewed at ${headSha}, skipping`, failures: [], durationMs: 0 }
-  } else if (prior !== undefined && !config.rereviewOnPush) {
+  } else if (prior !== undefined && prior.headSha !== headSha && !config.rereviewOnPush) {
     result = { ok: true, summary: `new commits since ${prior.headSha} but REVIEW_ON_PUSH is not set, skipping`, failures: [], durationMs: 0 }
   } else if (await hasCompletedReviewForSha(coFetcher, config.gitlabBaseUrl, config.gitlabToken, config.sourceProjectId, config.mrIid, headSha, botUserId)) {
     // Coexistence (CI yields to webhook): the CI history store is invisible to
@@ -343,7 +317,9 @@ export async function runCiTrigger(
   // in the CI job's working directory where `artifacts:` picks them up.
   const reportDir = process.env.REVIEW_REPORT_DIR?.trim() || '.'
   const stages = { ...result.stages, boot: bootMs, fetch: (result.stages?.fetch ?? 0) + (gateMs ?? Date.now() - gateStart) }
-  const report = { ...result, stages, projectId: config.sourceProjectId, mrIid: config.mrIid, mode: config.mode, generatedAt: new Date().toISOString() }
+  // Code, severity and place only: finding bodies (quoted code, explanations) stay in the MR, not in a 30 day artifact.
+  const slim = result.findings?.map((f) => ({ code: f.code ?? f.category ?? 'none', severity: f.severity ?? 'minor', ...(f.path !== undefined ? { path: f.path } : {}), ...(f.line !== undefined ? { line: f.line } : {}) }))
+  const report = { ...result, ...(slim !== undefined ? { findings: slim } : {}), stages, projectId: config.sourceProjectId, mrIid: config.mrIid, mode: config.mode, generatedAt: new Date().toISOString() }
   await writeFile(join(reportDir, 'review-report.json'), JSON.stringify(report, null, 2), 'utf-8')
   // Always written, `[]` when the run posted nothing, so the artifact report never goes missing.
   await writeFile(join(reportDir, 'gl-code-quality-report.json'), JSON.stringify(toCodeQuality(result.findings ?? []), null, 2), 'utf-8')
@@ -358,8 +334,9 @@ export async function runCiTrigger(
  * included) or this review was partial; else 0. An unreadable MR fails closed.
  */
 export async function ciExitCode(
-  result: ReviewResult, config: Pick<CiEnvConfig, 'gate' | 'gitlabBaseUrl' | 'gitlabToken' | 'sourceProjectId' | 'mrIid'>, fetcher: typeof fetch = fetch,
+  result: ReviewResult, config: Pick<CiEnvConfig, 'gate' | 'gitlabBaseUrl' | 'gitlabToken' | 'sourceProjectId' | 'mrIid'>, rawFetcher: typeof fetch = fetch,
 ): Promise<0 | 1 | 3> {
+  const fetcher = timedFetcher(rawFetcher)
   if (!result.ok) return 1
   if (config.gate !== 'blocking') return 0
   if (result.partial === true) { console.error('[review] gate: some files were not reviewed (a failed part), failing closed'); return 3 }

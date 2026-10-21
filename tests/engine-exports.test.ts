@@ -15,6 +15,12 @@ const PLUGIN_SURFACE: Record<string, string[]> = {
   'lib/govard-lint-detection.js': ['govardOnPath'],
   'lib/orchestrator.js': ['assertSafeBranchName', 'declineUnmappedDeepReview', 'isBranchNotFoundError'],
   'lib/review-history.js': ['hasCompletedReview', 'pruneHistory', 'recordReviewFinish', 'recordReviewStart', 'listReviews'],
+  'lib/ci-commands.js': ['answerCommands', 'findPendingCommands', 'replyToCommand', 'commandMarker'],
+  'lib/ci-repo-settings.js': ['loadRepoSettings'],
+  'lib/commands.js': ['parseCommand'],
+  'lib/ci-coexist.js': ['fetchBotUserId', 'latestCompletedReview'],
+  'lib/repo-config.js': ['effectiveConfig'],
+  'lib/forge/gitlab/gitlab-client.js': ['timedFetcher'],
   'lib/events.js': [],
   'lib/skills-tool.js': [],
 }

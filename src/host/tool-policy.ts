@@ -7,7 +7,7 @@ export const name = 'maestro-review-tool-policy'
  * Host-level tools that leak into every agent but make no sense for a review
  * agent: review sessions must stay read-only on the worktree and side-effect
  * free on the harness (no personal memory writes, no todo lists, no plugin
- * marketplace suggestions, no sidebar UI, no nested subagents).
+ * marketplace suggestions, no sidebar UI, no nested subagents, no web).
  *
  * Deny-listed rather than allow-listed on purpose: DSH has no per-agent tool
  * scoping yet, and a reviewer genuinely needs the shared search/read/gitlab
@@ -21,6 +21,10 @@ export const REVIEW_DENIED_TOOLS: readonly string[] = [
   'sidebar_open',
   'subagent_claude_code',
   'subagent_codex',
+  // No web tools: they cost minutes per review, and they are the easiest way
+  // out for what a prompt injection makes the agent read (bash remains).
+  'web_fetch',
+  'web_search',
 ]
 
 /** Pure predicate: returns the denial reason for denied tools, else undefined. */
