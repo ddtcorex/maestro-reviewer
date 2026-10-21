@@ -16,27 +16,49 @@ export function findingCodeMarker(code: string): string {
   return `<!-- maestro-finding code=${code} -->`
 }
 
-interface Note { author?: { username?: string }; body?: string; system?: boolean }
+interface Note { author?: { username?: string; id?: number }; body?: string; system?: boolean }
 
-/** Pure. The codes dismissed in one MR's discussions; a bare dismiss in a bot thread takes that thread's code. */
-export function countDismissals(discussions: Array<{ notes?: Note[] }>, botUsername: string): Set<string> {
+const threadCodeOf = (notes: Note[], botUsername: string) =>
+  notes[0]?.author?.username === botUsername ? MARKER.exec(notes[0].body ?? '')?.[1] : undefined
+
+/** Pure. The non-bot authors of dismiss commands, by username, for the caller's access check. */
+export function dismissalAuthors(discussions: Array<{ notes?: Note[] }>, botUsername: string): Map<string, number> {
+  const authors = new Map<string, number>()
+  for (const d of discussions) {
+    for (const n of d.notes ?? []) {
+      const name = n.author?.username
+      if (n.system === true || name === undefined || name === botUsername || typeof n.author?.id !== 'number') continue
+      if (parseCommand(n.body ?? '')?.kind === 'dismiss') authors.set(name, n.author.id)
+    }
+  }
+  return authors
+}
+
+/**
+ * Pure. The codes dismissed in one MR's discussions. Only `authorized`
+ * authors count (the caller checks Developer access), and only codes the bot
+ * raised in that same MR: nobody can dismiss a code that was never shown. A
+ * bare dismiss in a bot thread takes that thread's code.
+ */
+export function countDismissals(discussions: Array<{ notes?: Note[] }>, botUsername: string, authorized: (username: string) => boolean): Set<string> {
+  const raised = new Set(discussions.map((d) => threadCodeOf(d.notes ?? [], botUsername)).filter((c): c is string => c !== undefined))
   const codes = new Set<string>()
   for (const d of discussions) {
     const notes = d.notes ?? []
-    const first = notes[0]
-    const threadCode = first?.author?.username === botUsername ? MARKER.exec(first.body ?? '')?.[1] : undefined
+    const threadCode = threadCodeOf(notes, botUsername)
     for (const n of notes) {
-      if (n.system === true || n.author?.username === botUsername) continue
+      const name = n.author?.username
+      if (n.system === true || name === undefined || name === botUsername || !authorized(name)) continue
       const cmd = parseCommand(n.body ?? '')
       if (cmd?.kind !== 'dismiss') continue
       const code = cmd.code ?? threadCode
-      if (code !== undefined) codes.add(code)
+      if (code !== undefined && raised.has(code)) codes.add(code)
     }
   }
   return codes
 }
 
-/** Pure. Codes dismissed in at least `threshold` MRs. */
+/** Pure. Codes dismissed in at least `threshold` MRs; security codes (SEC-*) are never muted. */
 export function mutedCodes(stats: Map<string, number>, threshold = MUTE_THRESHOLD): Set<string> {
-  return new Set([...stats].filter(([, n]) => n >= threshold).map(([code]) => code))
+  return new Set([...stats].filter(([code, n]) => n >= threshold && !code.startsWith('SEC-')).map(([code]) => code))
 }

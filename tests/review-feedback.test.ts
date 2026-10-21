@@ -25,16 +25,33 @@ const thread = (code: string | undefined, ...replies: Array<[string, string]>) =
   notes: [note(BOT, `🔵 Minor\n\nissue${code ? `\n\n${findingCodeMarker(code)}` : ''}`), ...replies.map(([a, b]) => note(a, b))],
 })
 
+describe('dismissal authorization', () => {
+  it('ignores dismissals of codes the bot never raised in that MR, and authors below Developer', () => {
+    const mr = [
+      thread('RIG-A', ['dev', '/maestro dismiss'], ['guest', '/maestro dismiss']),
+      { notes: [note('dev', '/maestro dismiss RIG-NEVER-RAISED')] },
+    ]
+    expect(countDismissals(mr, BOT, (u) => u === 'dev')).toEqual(new Set(['RIG-A']))
+    expect(countDismissals(mr, BOT, () => false)).toEqual(new Set())
+  })
+
+  it('never mutes a security code', () => {
+    expect(mutedCodes(new Map([['SEC-XSS', 9], ['RIG-A', 3]]))).toEqual(new Set(['RIG-A']))
+  })
+})
+
 describe('countDismissals', () => {
   it('counts each code at most once per MR, from non-bot authors, resolving a bare dismiss from the thread', () => {
     const mr = [
       thread('RIG-A', ['dev', '/maestro dismiss'], ['dev2', '/maestro dismiss']),
       thread('RIG-B', ['dev', '/maestro dismiss RIG-C wrong code named']),
+      thread('RIG-C'),
       thread('RIG-D', [BOT, '/maestro dismiss']),
+      thread('RIG-E'),
       { notes: [note('dev', '/maestro dismiss RIG-E reason')] },
       thread(undefined, ['dev', '/maestro dismiss']),
     ]
-    expect(countDismissals(mr, BOT)).toEqual(new Set(['RIG-A', 'RIG-C', 'RIG-E']))
+    expect(countDismissals(mr, BOT, () => true)).toEqual(new Set(['RIG-A', 'RIG-C', 'RIG-E']))
   })
 })
 
@@ -51,13 +68,17 @@ describe('gitlab forge feedback', () => {
     vi.stubGlobal('fetch', vi.fn(async (url: string) => {
       calls.push(url)
       if (/\/merge_requests\?/.test(url)) return new Response(JSON.stringify([1, 2, 3, 4].map((iid) => ({ iid }))), { status: 200 })
+      if (/\/members\/all\//.test(url)) return url.endsWith('/members/all/11') ? new Response(JSON.stringify({ access_level: 30 }), { status: 200 }) : new Response(JSON.stringify({ access_level: 10 }), { status: 200 })
       const iid = Number(/merge_requests\/(\d+)\/discussions/.exec(url)?.[1])
-      return new Response(JSON.stringify(iid <= 3 ? [thread('RIG-A', ['dev', '/maestro dismiss'])] : []), { status: 200 })
+      const dev = { author: { username: 'dev', id: 11 }, body: '/maestro dismiss', system: false }
+      const guest = { author: { username: 'guest', id: 12 }, body: '/maestro dismiss', system: false }
+      return new Response(JSON.stringify(iid <= 3 ? [{ notes: [thread('RIG-A').notes[0], dev] }, { notes: [thread('RIG-G').notes[0], guest] }] : []), { status: 200 })
     }))
     const { gitlabForge } = await import('../src/host/forge/gitlab/index.js')
     const forge = gitlabForge({ baseUrl: 'https://g', token: 't', botUsername: BOT }, { projectId: 5, mrIid: 9 })
     expect(await forge.feedback(3)).toEqual(new Map([['RIG-A', 3]]))
     expect(calls.filter((u) => u.includes('/discussions'))).toHaveLength(3)
+    expect(calls.filter((u) => u.includes('/members/all/'))).toHaveLength(2)
     expect(calls[0]).toContain('per_page=3')
   })
 })
