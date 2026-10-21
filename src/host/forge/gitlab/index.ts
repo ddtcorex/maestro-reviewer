@@ -6,6 +6,8 @@ import { fetchCompare, fetchMrBaseSha, fetchMrDetailHeadSha, postReviewFindings,
 import { createReviewSignals } from './review-signals.js'
 import { DEFAULT_IGNORE_GLOBS, filterDiffs } from '../../diff-filter.js'
 import { redactDiff } from '../../redact.js'
+import { countDismissals } from '../../review-feedback.js'
+import { runWithConcurrency } from '../../chunking.js'
 
 /** Every diff the agents see passes through the redactor; the hits stay with the forge. */
 function redactAll(kept: GitlabClient.GitlabDiff[], skipped: string[], truncated: boolean): GitlabClient.ReviewDiffs {
@@ -55,6 +57,20 @@ export function gitlabForge(
     mrHeadSha: () => fetchMrDetailHeadSha(cfg.baseUrl, cfg.token, mr.projectId, mr.mrIid),
     mrBaseSha: () => fetchMrBaseSha(cfg.baseUrl, cfg.token, mr.projectId, mr.mrIid),
     restrictToInterdiff: (files) => { interdiff = files },
+    feedback: async (window) => {
+      const headers = gitlabAuthHeaders(cfg.token)
+      const projectApi = `${cfg.baseUrl}/api/v4/projects/${mr.projectId}`
+      const res = await GitlabClient.fetchWithTimeout(`${projectApi}/merge_requests?state=all&order_by=updated_at&sort=desc&per_page=${window}`, { headers })
+      if (!res.ok) throw new Error(`GitLab API error ${res.status} listing merge requests`)
+      const mrs = (await res.json() as Array<{ iid: number }>).slice(0, window)
+      const perMr = await runWithConcurrency(mrs.map((m) => async () => {
+        const d = await GitlabClient.fetchWithTimeout(`${projectApi}/merge_requests/${m.iid}/discussions?per_page=100`, { headers })
+        return d.ok ? countDismissals(await d.json() as Array<{ notes?: [] }>, cfg.botUsername) : new Set<string>()
+      }), 5)
+      const stats = new Map<string, number>()
+      for (const r of perMr) if (r.status === 'fulfilled') for (const code of r.value) stats.set(code, (stats.get(code) ?? 0) + 1)
+      return stats
+    },
     reviewScope: async () => {
       const scope = await loadDiffs()
       return { files: GitlabClient.diffFileList(scope.diffs), skipped: scope.skipped, redacted: scope.redacted ?? [] }

@@ -26,6 +26,7 @@ import { gitlabForge } from './forge/gitlab/index.js'
 import { SEVERITY_ORDER, countFindingSeverities, normalizeFindingSeverity } from './severity.js'
 import { REPO_CONFIG_PATH, configChangedInMr } from './repo-config.js'
 import { secretFindings } from './redact.js'
+import { FEEDBACK_WINDOW, MUTE_THRESHOLD, mutedCodes } from './review-feedback.js'
 import { redactWorktree } from './redact-worktree.js'
 import type { FindingSeverity } from './review-findings-tool.js'
 import type { ReviewRequest, ReviewResult } from './events.js'
@@ -133,6 +134,8 @@ export interface AgentRunConfig {
   onToolCall: (toolName: string) => void
   /** Findings below it are counted but not posted. */
   minSeverity?: FindingSeverity
+  /** Codes the project keeps dismissing: not posted unless blocking. */
+  mutedCodes?: ReadonlySet<string>
   /** Project rules and comment language for the reviewer prompt. */
   repoRules?: string[]
   language?: string
@@ -183,13 +186,15 @@ export function summarizeReport(body: string | undefined): string | undefined {
 
 /** Posts findings one by one so one bad position never loses the rest. */
 export async function postFindingsSequentially(
-  forge: Pick<ReviewForge, 'postFindings'>, findings: ReviewFinding[], minSeverity?: FindingSeverity,
-): Promise<{ postedNew: number; postedReplies: number; failures: string[]; belowMinimum: number }> {
+  forge: Pick<ReviewForge, 'postFindings'>, findings: ReviewFinding[], filter: { minSeverity?: FindingSeverity; muted?: ReadonlySet<string> } = {},
+): Promise<{ postedNew: number; postedReplies: number; failures: string[]; belowMinimum: number; muted: number }> {
   const failures: string[] = []
   let postedNew = 0
   let postedReplies = 0
-  const floor = minSeverity === undefined ? SEVERITY_ORDER.length : SEVERITY_ORDER.indexOf(minSeverity)
-  const kept = findings.filter((f) => SEVERITY_ORDER.indexOf(normalizeFindingSeverity(f.severity)) <= floor)
+  const floor = filter.minSeverity === undefined ? SEVERITY_ORDER.length : SEVERITY_ORDER.indexOf(filter.minSeverity)
+  const aboveFloor = findings.filter((f) => SEVERITY_ORDER.indexOf(normalizeFindingSeverity(f.severity)) <= floor)
+  // Blocking findings are never muted: a project cannot dismiss its way past a blocker.
+  const kept = aboveFloor.filter((f) => f.code === undefined || filter.muted?.has(f.code) !== true || normalizeFindingSeverity(f.severity) === 'blocking')
   for (const finding of kept) {
     try {
       await forge.postFindings([finding])
@@ -200,7 +205,7 @@ export async function postFindingsSequentially(
       failures.push(`${locator}: ${err instanceof Error ? err.message : String(err)}`)
     }
   }
-  return { postedNew, postedReplies, failures, belowMinimum: findings.length - kept.length }
+  return { postedNew, postedReplies, failures, belowMinimum: findings.length - aboveFloor.length, muted: aboveFloor.length - kept.length }
 }
 
 /** Summary line, plus the count of findings below the project's minimum severity. */
@@ -284,7 +289,7 @@ export function createEngineAgents(ctx: Context): EngineAgents {
         }
 
         if (chunk !== undefined) return { summary: '', failures: [], findings: capturedFindings, models: [primaryOptions.model], deferredPost: true }
-        const { postedNew, postedReplies, failures, belowMinimum } = await postFindingsSequentially(run.forge, capturedFindings, run.minSeverity)
+        const { postedNew, postedReplies, failures, belowMinimum } = await postFindingsSequentially(run.forge, capturedFindings, { minSeverity: run.minSeverity, muted: run.mutedCodes })
         return { summary: summaryWithFloor(reviewerSummary(postedNew, postedReplies, diffTruncated), belowMinimum, run.minSeverity), failures, severityCounts: countFindingSeverities(capturedFindings), findings: capturedFindings, models: [primaryOptions.model] }
       } finally {
         run.onUsage('reviewer', agentOptions.model, usageFromSession(handle.agent.session))
@@ -373,6 +378,7 @@ export function createReviewEngine(ctx: Context, agents: EngineAgents = createEn
       mrBaseSha: () => rawForge.mrBaseSha(),
       reviewScope: () => rawForge.reviewScope(),
       restrictToInterdiff: (files) => rawForge.restrictToInterdiff(files),
+      feedback: (window) => rawForge.feedback(window),
       compare: (from, to) => rawForge.compare(from, to),
       postNote: (body) => timedPost(() => rawForge.postNote(body)),
       replyToDiscussion: (id, body) => timedPost(() => rawForge.replyToDiscussion(id, body)),
@@ -485,7 +491,7 @@ export function createReviewEngine(ctx: Context, agents: EngineAgents = createEn
         const failed = settled.flatMap((r, i) => r.status === 'rejected' ? [{ chunk: chunks[i], reason: r.reason instanceof Error ? r.reason.message : String(r.reason) }] : [])
         if (done.length === 0) throw new Error(`every review part failed: ${failed[0].reason}`)
         const findings = mergeFindings(done.map((o) => o.findings ?? []))
-        const posted = await postFindingsSequentially(forge, findings, agentRun.minSeverity)
+        const posted = await postFindingsSequentially(forge, findings, { minSeverity: agentRun.minSeverity, muted: agentRun.mutedCodes })
         const parts = [`Reviewed in ${chunks.length} parallel parts.`, ...failed.map((f) => `Part ${f.chunk.id} (${f.chunk.files.length} files) failed: ${f.reason}; its files were not reviewed.`)]
         return {
           summary: summaryWithFloor(`${reviewerSummary(posted.postedNew, posted.postedReplies, false)} ${parts.join(' ')}`, posted.belowMinimum, agentRun.minSeverity),
@@ -505,9 +511,11 @@ export function createReviewEngine(ctx: Context, agents: EngineAgents = createEn
         usageTotal,
         skippedFiles,
         notices,
+        get muted() { return mutedList },
         baseSha: currentBaseSha,
       } as unknown as DiffOnlyReviewDeps)
       let skippedFiles: string[] | undefined
+      let mutedList: string[] | undefined
       try {
         if (payload.scope.kind === 'mr') {
           // An unreadable diff is left to the agents, which report it themselves.
@@ -522,6 +530,13 @@ export function createReviewEngine(ctx: Context, agents: EngineAgents = createEn
           }
           skippedFiles = scope?.skipped
           scopeFiles = scope?.files
+          // Feedback is optional context: an unreadable history never blocks the review.
+          const muted = mutedCodes(await Promise.resolve().then(() => forge.feedback(FEEDBACK_WINDOW)).catch(() => new Map<string, number>()))
+          if (muted.size > 0) {
+            agentRun.mutedCodes = muted
+            mutedList = [...muted].sort()
+            notices.push(`Muted for this project (dismissed with /maestro dismiss in at least ${MUTE_THRESHOLD} of the last ${FEEDBACK_WINDOW} MRs): ${mutedList.map((c) => `\`${c}\``).join(', ')}. Findings with these codes are not posted unless blocking.`)
+          }
           const redacted = scope?.redacted ?? []
           const redactedCount = redacted.reduce((n, f) => n + f.hits.length, 0)
           if (redactedCount > 0) {
@@ -581,6 +596,7 @@ export function createReviewEngine(ctx: Context, agents: EngineAgents = createEn
               usageTotal,
               skippedFiles,
               notices,
+              get muted() { return mutedList },
               baseSha: currentBaseSha,
             } as unknown as ReviewAndAuditDeps)
           } finally {
@@ -605,6 +621,7 @@ export function createReviewEngine(ctx: Context, agents: EngineAgents = createEn
               usageTotal,
               skippedFiles,
               notices,
+              get muted() { return mutedList },
               baseSha: currentBaseSha,
             } as unknown as ReviewAndAuditDeps)
           } catch (err) {

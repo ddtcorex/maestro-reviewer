@@ -401,7 +401,17 @@ which (`full review: base changed since <sha>`). Existing threads stay visible
 to the reviewer either way, so it replies to them instead of posting
 duplicates.
 
-### 5.4 Code Quality report
+### 5.4 Dismissing a finding code
+
+Each inline finding shows its code next to the severity (for example
+`🔵 Minor · \`SEC-XSS\``). Reply `/maestro dismiss` in that thread, or write
+`/maestro dismiss SEC-XSS <reason>` anywhere on an MR, on the first line of
+the note. A code dismissed in at least 3 of the project's last 50 MRs is muted
+for the project: later reviews do not post it and name it in the comment.
+Blocking findings are never muted. A code counts once per MR, and the bot's
+own notes never count.
+
+### 5.5 Code Quality report
 
 The review job keeps `gl-code-quality-report.json` (Code Climate format: one
 entry per new finding with a position) as an artifact and as a
@@ -413,7 +423,7 @@ reviewer project, which would expose every project's reviews to each other.
 So the widget stays empty by design; the findings are the MR threads and the
 artifact is for tooling.
 
-### 5.4 Secrets and personal data
+### 5.6 Secrets and personal data
 
 Before any model call the reviewer replaces private keys, cloud and forge
 tokens (AWS, GitLab, GitHub, OpenAI style), JWTs, `KEY=value` secrets

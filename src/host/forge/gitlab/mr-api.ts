@@ -1,6 +1,7 @@
 import { normalize as posixNormalize } from 'node:path/posix'
 import type { ReviewFinding } from '../../review-findings-tool.js'
 import { severityPrefix } from '../../severity.js'
+import { findingCodeMarker } from '../../review-feedback.js'
 import type { CompareResult } from '../types.js'
 import { gitlabAuthHeaders } from './gitlab-auth.js'
 import { fetchWithTimeout } from './gitlab-client.js'
@@ -166,14 +167,21 @@ function normalizedDiffPath(path: string): string {
  * mounted inside a setup child fiber and are not guaranteed to remain
  * executable through `handle.agent.ctx` after the agent turn ends.
  */
+/** The note text of a finding: severity (and code, visible and as a hidden marker for `/maestro dismiss`). */
+export function findingNoteBody(finding: ReviewFinding): string {
+  const label = severityPrefix(finding.severity)
+  const head = finding.code === undefined ? label : `${label} · \`${finding.code}\``
+  const text = finding.body.startsWith(label) ? finding.body.slice(label.length).replace(/^\s+/, '') : finding.body
+  return `${head}\n\n${text}${finding.code === undefined ? '' : `\n\n${findingCodeMarker(finding.code)}`}`
+}
+
 export async function postReviewFindings(findings: ReviewFinding[], config: GitlabFindingPoster): Promise<void> {
   const fetcher = config.fetcher ?? fetch
   const apiBase = `${config.baseUrl}/api/v4/projects/${config.projectId}/merge_requests/${config.mrIid}`
   const headers = { ...gitlabAuthHeaders(config.token), 'Content-Type': 'application/json' }
   for (const finding of findings) {
     let response: Response
-    const label = severityPrefix(finding.severity)
-    const body = finding.body.startsWith(label) ? finding.body : `${label}\n\n${finding.body}`
+    const body = findingNoteBody(finding)
     if (finding.status === 'reply') {
       if (finding.discussionId === undefined) throw new Error('reply finding missing discussionId')
       response = await fetcher(`${apiBase}/discussions/${encodeURIComponent(finding.discussionId)}/notes`, {
