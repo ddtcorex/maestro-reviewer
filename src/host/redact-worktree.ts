@@ -7,8 +7,8 @@ import { SECRET_KINDS, redact } from './redact.js'
  * file tools never read a raw secret. Only ever run on the CI clone under
  * /tmp/maestro-*: anything else is refused. Text files up to `maxBytes`;
  * `.git` and directory symlinks are skipped. A file symlink resolving inside
- * the root is left (its target is redacted in place); one resolving outside
- * is removed, never copied in: its target (a host `app/etc/env.php`, or
+ * the root, outside `.git`, is left (its target is redacted in place); any
+ * other is removed, never copied in: its target (a host `app/etc/env.php`, or
  * `/proc/self/environ` planted by an MR) may hold values no pattern knows.
  * Secrets only: personal data in files the MR does not touch is not the
  * review's to mask (the diff itself is still redacted in full), and masking
@@ -31,8 +31,10 @@ export async function redactWorktree(root: string, opts: { maxBytes?: number } =
       if (st === undefined) continue
       if (st.isDirectory()) { if (!link) await walk(p); continue }
       if (link) {
+        // Kept only when its target is a file this walk redacts: inside the root, outside .git.
         const target = await realpath(p)
-        if (!target.startsWith(`${real}${sep}`)) await unlink(p)
+        const inside = target.startsWith(`${real}${sep}`) && !target.slice(real.length + 1).split(sep).includes('.git')
+        if (!inside) await unlink(p)
         continue
       }
       if (!st.isFile() || st.size > maxBytes) continue

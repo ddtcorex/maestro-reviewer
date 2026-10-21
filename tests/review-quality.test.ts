@@ -105,6 +105,20 @@ describe('host worktree redaction (I3)', () => {
     expect(redactsWorkspace({ mode: 'deep', scope: mr }, 'static')).toBe(true)
   })
 
+  it('removes a symlink into .git, which the walk never redacts', async () => {
+    const { symlink, lstat, mkdir } = await import('node:fs/promises')
+    const root = await mkdtemp('/tmp/maestro-quality-')
+    try {
+      await mkdir(join(root, '.git'))
+      await writeFile(join(root, '.git', 'config'), 'url = https://oauth2:glpat-abcdefghijklmnopqrstu@h/x.git\n')
+      await symlink(join(root, '.git', 'config'), join(root, 'cfg.txt'))
+      await redactWorktree(root)
+      await expect(lstat(join(root, 'cfg.txt'))).rejects.toThrow(/ENOENT/)
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
   it('removes a symlink to a file outside the checkout, never copying the file in', async () => {
     const { symlink, lstat } = await import('node:fs/promises')
     const outside = await mkdtemp('/tmp/maestro-quality-target-')
