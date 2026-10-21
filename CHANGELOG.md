@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.19.2] - 2026-10-21
+
+### Fixed
+
+- A `/maestro` command whose answer keeps failing no longer holds back newer
+  commands (#199). A failed answer posts a retry note; commands with fewer
+  failed attempts go first, and the third failure answers the command with
+  the error.
+- An unreadable discussions page no longer makes every engine finding post
+  again (#199). The read fails, and the engine then posts only its blocking
+  findings.
+
 ## [0.19.1] - 2026-10-21
 
 ### Fixed

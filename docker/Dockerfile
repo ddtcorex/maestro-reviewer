@@ -3,7 +3,7 @@
 # registry, nothing is COPYed from a host checkout, so the image is
 # reproducible from any machine. Build context is the package directory:
 #   docker build -f docker/Dockerfile \
-#     -t ddtcorex/maestro-reviewer:0.19.1 -t ddtcorex/maestro-reviewer:latest .
+#     -t ddtcorex/maestro-reviewer:0.19.2 -t ddtcorex/maestro-reviewer:latest .
 # Pinned versions: profiles/reviewer-ci/package.json (dsh CLI included).
 ARG NODE_VERSION=22
 
