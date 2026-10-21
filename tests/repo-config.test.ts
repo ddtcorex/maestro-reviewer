@@ -121,7 +121,7 @@ describe('posting with a minimum severity', () => {
     const posted: any[] = []
     const forge = { postFindings: async (fs: any[]) => { posted.push(...fs) } }
     const findings = [{ status: 'new', path: 'a', line: 1, body: 'x', severity: 'nit' }, { status: 'new', path: 'a', line: 2, body: 'y', severity: 'major' }, { status: 'reply', discussionId: 'd', body: 'z', severity: 'minor' }] as any[]
-    const r = await postFindingsSequentially(forge as any, findings, 'major')
+    const r = await postFindingsSequentially(forge as any, findings, { minSeverity: 'major' })
     expect(posted.map((f) => f.line ?? f.discussionId)).toEqual([2])
     expect(r).toMatchObject({ postedNew: 1, postedReplies: 0, belowMinimum: 2 })
   })

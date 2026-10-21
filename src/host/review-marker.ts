@@ -114,6 +114,7 @@ export function buildReviewMeta(opts: {
   findings: ReviewFinding[]
   usage?: { input: number; output: number; cached: number }
   partial?: boolean
+  muted?: string[]
   now?: () => Date
 }): ReviewMeta {
   return {
@@ -124,6 +125,7 @@ export function buildReviewMeta(opts: {
     models: opts.models,
     ...(opts.usage !== undefined ? { usage: opts.usage } : {}),
     ...(opts.partial === true ? { partial: true } : {}),
+    ...(opts.muted !== undefined && opts.muted.length > 0 ? { muted: opts.muted } : {}),
     findings: opts.findings.map(f => ({ code: f.code ?? 'none', fingerprint: findingFingerprint(f), severity: f.severity ?? 'minor' })),
     at: (opts.now ?? (() => new Date()))().toISOString(),
   }

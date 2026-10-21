@@ -322,12 +322,12 @@ export function reviewerSummary(postedNew: number, postedReplies: number, diffTr
 }
 
 /** Token usage of the run so far, for the metadata; optional on every deps object. */
-interface UsageDeps { usageTotal?(): { input: number; output: number; cached: number } | null; baseSha?: string }
+interface UsageDeps { usageTotal?(): { input: number; output: number; cached: number } | null; baseSha?: string; muted?: string[] }
 
 function metaFor(payload: ReviewRequest, outcome: Pick<ReviewOutcome, 'findings' | 'models' | 'partial'>, deps: UsageDeps): ReviewMeta | undefined {
   if (payload.headSha === undefined) return undefined
   const usage = deps.usageTotal?.() ?? undefined
-  return buildReviewMeta({ headSha: payload.headSha, ...(deps.baseSha !== undefined ? { baseSha: deps.baseSha } : {}), mode: payload.mode, models: outcome.models ?? [], findings: outcome.findings ?? [], ...(usage !== undefined ? { usage } : {}), ...(outcome.partial === true ? { partial: true } : {}) })
+  return buildReviewMeta({ headSha: payload.headSha, ...(deps.baseSha !== undefined ? { baseSha: deps.baseSha } : {}), mode: payload.mode, models: outcome.models ?? [], findings: outcome.findings ?? [], ...(usage !== undefined ? { usage } : {}), ...(outcome.partial === true ? { partial: true } : {}), ...(deps.muted !== undefined && deps.muted.length > 0 ? { muted: deps.muted } : {}) })
 }
 
 /**
