@@ -82,3 +82,14 @@ describe('checkout redaction', () => {
     }
   })
 })
+
+describe('deterministic dedupe (C1)', () => {
+  it('a blocking finding is not hidden by an open major thread of the same code and path', async () => {
+    const { openFindingKeys, hasOpenThread } = await import('../src/host/review-feedback.js')
+    const majorOpen = new Set(openFindingKeys('SEC-SECRET-IN-DIFF', '.env', '🟡 Major: x'))
+    expect(hasOpenThread({ code: 'SEC-SECRET-IN-DIFF', path: '.env', severity: 'blocking' }, majorOpen)).toBe(false)
+    expect(hasOpenThread({ code: 'SEC-SECRET-IN-DIFF', path: '.env', severity: 'major' }, majorOpen)).toBe(true)
+    const blockingOpen = new Set(openFindingKeys('SEC-SECRET-IN-DIFF', '.env', '🔴 Blocking: x'))
+    expect(hasOpenThread({ code: 'SEC-SECRET-IN-DIFF', path: '.env', severity: 'blocking' }, blockingOpen)).toBe(true)
+  })
+})
