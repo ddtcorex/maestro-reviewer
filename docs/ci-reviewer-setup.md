@@ -332,6 +332,30 @@ For a deep request the child also sets `REVIEW_MODE: deep`; a project's own
 |---|---|
 | `REVIEW_DRY_RUN` | `1`: validate the review job's variables and exit before booting any agent (no model call). Use it with a local `docker run` of the image, not as a reviewer project variable: at `*` it would silently turn every review into a dry run. |
 
+### 4.7 In the source repository: `.maestro-review.yml`
+
+A source project can keep review settings in a `.maestro-review.yml` at its
+root. The reviewer reads it from the MR **target branch** (the merged,
+already reviewed state), never from the MR itself, so an author cannot loosen
+the review of their own change. An MR that edits the file gets a
+`CFG-CHANGED` finding and a note that the change applies after merge.
+
+```yaml
+profile: magento2            # magento2 | laravel | symfony | wordpress | generic
+ignore: ["node/**", "docs/**"]  # added to the default ignore globs
+rules:                       # extra review criteria, at most 30, 500 characters each
+  - Never log customer emails or addresses.
+minSeverity: minor           # blocking | major | minor | nit: lower findings are counted, not posted
+language: fr-FR              # language of findings and replies
+fanout: { files: 40, bytes: 200000 }
+```
+
+Reviewer project variables win over the file (`REVIEW_PROFILE`,
+`REVIEW_FANOUT_*`); `REVIEW_IGNORE_GLOBS` adds to the file's globs. The merge
+gate is never a file setting. An invalid file, an unknown key or a `gate` key
+means no file settings and one warning in the review comment, never a failed
+review. The file holds no secrets.
+
 ## 5. Daily use
 
 ### 5.1 Quick review (automatic)
