@@ -136,7 +136,8 @@ describe('ci trigger with a repository config file', () => {
       urls.push(url)
       if (url.includes('/repository/files/')) return fileBody === undefined ? new Response('', { status: 404 }) : new Response(fileBody, { status: 200 })
       if (url.endsWith('/user')) return new Response(JSON.stringify({ id: 7 }), { status: 200 })
-      if (/notes|award_emoji/.test(url)) return new Response('[]', { status: 200 })
+      if (/notes|award_emoji|discussions/.test(url)) return new Response('[]', { status: 200 })
+      if (url.endsWith('/projects/1')) return new Response(JSON.stringify({ default_branch: 'main' }), { status: 200 })
       return new Response(JSON.stringify({ source_branch: 'feat/x', target_branch: 'develop', sha: 'abc' }), { status: 200 })
     })
     const engine = vi.fn(async () => ({ ok: true, summary: 'x', failures: [], durationMs: 1 }))
@@ -144,9 +145,9 @@ describe('ci trigger with a repository config file', () => {
     return { opts: (engine.mock.calls[0] as any[])[1], req: (engine.mock.calls[0] as any[])[0], urls }
   }
 
-  it('reads the file from the MR target branch and applies it under the environment', async () => {
+  it('reads the file from the default branch and applies it under the environment', async () => {
     const { opts, req, urls } = await run('profile: magento2\nignore: ["node/**"]\nminSeverity: major\nfanout: { files: 40 }', { REVIEW_IGNORE_GLOBS: 'docs/**' })
-    expect(urls.some((u) => u.endsWith('/repository/files/.maestro-review.yml/raw?ref=develop'))).toBe(true)
+    expect(urls.some((u) => u.endsWith('/repository/files/.maestro-review.yml/raw?ref=main'))).toBe(true)
     expect(opts.access).toEqual({ kind: 'clone', host: 'h' })
     expect(req.reviewProfile).toBe('magento2')
     expect(opts.ignoreGlobs.slice(-2)).toEqual(['node/**', 'docs/**'])

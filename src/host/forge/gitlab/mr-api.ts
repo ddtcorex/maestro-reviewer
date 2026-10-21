@@ -2,6 +2,7 @@ import { normalize as posixNormalize } from 'node:path/posix'
 import type { ReviewFinding } from '../../review-findings-tool.js'
 import { severityPrefix } from '../../severity.js'
 import { findingCodeMarker } from '../../review-feedback.js'
+import { sanitizeAgentText } from './gitlab-client.js'
 import type { CompareResult } from '../types.js'
 import { gitlabAuthHeaders } from './gitlab-auth.js'
 import { fetchWithTimeout } from './gitlab-client.js'
@@ -171,7 +172,7 @@ function normalizedDiffPath(path: string): string {
 export function findingNoteBody(finding: ReviewFinding): string {
   const label = severityPrefix(finding.severity)
   const head = finding.code === undefined ? label : `${label} · \`${finding.code}\``
-  const text = finding.body.startsWith(label) ? finding.body.slice(label.length).replace(/^\s+/, '') : finding.body
+  const text = sanitizeAgentText(finding.body.startsWith(label) ? finding.body.slice(label.length).replace(/^\s+/, '') : finding.body)
   return `${head}\n\n${text}${finding.code === undefined ? '' : `\n\n${findingCodeMarker(finding.code)}`}`
 }
 
@@ -203,7 +204,7 @@ export async function postReviewFindings(findings: ReviewFinding[], config: Gitl
       // returning undefined (true today since a full deletion has no +/context rows,
       // but that's a byproduct of diff-hunk mechanics, not a designed guard).
       if (change.deleted_file === true) {
-        response = await fetcher(`${apiBase}/notes`, {
+        response = await fetcher(`${apiBase}/discussions`, {
           method: 'POST', headers,
           body: JSON.stringify({ body: `**Inline fallback — \`${finding.path}\` was deleted in this MR (no line ${finding.line} to attach a comment to)**\n\n${body}` }),
         })
@@ -213,7 +214,7 @@ export async function postReviewFindings(findings: ReviewFinding[], config: Gitl
       const linePosition = diffPositionForNewLine(change.diff, finding.line)
       if (linePosition === undefined) {
         // Line not in diff — fallback to MR note so finding is not silently lost.
-        response = await fetcher(`${apiBase}/notes`, {
+        response = await fetcher(`${apiBase}/discussions`, {
           method: 'POST', headers,
           body: JSON.stringify({ body: `**Inline fallback — \`${finding.path}:${finding.line}\` line is not in current MR diff**\n\n${body}` }),
         })

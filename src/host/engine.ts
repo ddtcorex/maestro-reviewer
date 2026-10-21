@@ -397,7 +397,8 @@ export function createEngineAgents(ctx: Context): EngineAgents {
           installModelSelection(agentCtx, { current: agentOptions, assembled: undefined })
           await agentCtx.plugin(ReviewToolPolicy, { onToolCall: run.onToolCall })
           await mountAgentPreset(ctx.agentPresets, agentCtx, 'dsh-maestro-reviewer')
-          await run.forge.mountAgentTools(agentCtx, {})
+          // Read tools only: an answer is text the caller posts; the agent never writes to the MR.
+          await run.forge.mountAgentTools(agentCtx, { readOnly: true })
         },
       })
     } catch (err) {
@@ -460,6 +461,7 @@ export function createReviewEngine(ctx: Context, agents: EngineAgents = createEn
     const notices: string[] = [...(opts.repo?.warnings ?? [])]
     let agentsStarted = false
     let runFindings: ReviewFinding[] | undefined
+    let runPartial = false
     /** Closes the stage timeline once and returns the run's telemetry. */
     const telemetry = () => {
       if (agentsStarted) {
@@ -467,7 +469,7 @@ export function createReviewEngine(ctx: Context, agents: EngineAgents = createEn
         timer.mark('agent', postMs)
         timer.add('post', postMs)
       }
-      return { toolCalls: toolCalls(), stages: timer.toJSON(), usage: [...usages], ...(runFindings !== undefined ? { findings: runFindings } : {}) }
+      return { toolCalls: toolCalls(), stages: timer.toJSON(), usage: [...usages], ...(runFindings !== undefined ? { findings: runFindings } : {}), ...(runPartial ? { partial: true } : {}) }
     }
     const usageTotal = () => sumUsage(usages.map((u) => u.usage))
     let reviewStart = Date.now()
@@ -540,6 +542,7 @@ export function createReviewEngine(ctx: Context, agents: EngineAgents = createEn
       const review = async (worktreePath: string | undefined, p: ReviewRequest, profile?: ReviewSkillProfile): Promise<ReviewOutcome> => {
         const outcome = await reviewParts(worktreePath, p, profile)
         runFindings = outcome.findings
+        runPartial = outcome.partial === true
         return outcome
       }
       const reviewParts = async (worktreePath: string | undefined, p: ReviewRequest, profile?: ReviewSkillProfile): Promise<ReviewOutcome> => {
@@ -613,7 +616,8 @@ export function createReviewEngine(ctx: Context, agents: EngineAgents = createEn
             const missing = whitelistFindings(checkDbSchemaWhitelist(scope.files.map((f) => f.path)))
             if (missing.length > 0) await postFindingsSequentially(forge, missing).catch(() => undefined)
           }
-          if (scope !== undefined && configChangedInMr(scope.files.map((f) => f.path))) {
+          // Only a caller that read the settings (the CI trigger) can say which ones this review used.
+          if (opts.repo !== undefined && scope !== undefined && configChangedInMr(scope.files.map((f) => f.path))) {
             // The file is read from the target branch: a change here only applies after merge.
             notices.push(`This MR changes ${REPO_CONFIG_PATH}: the change applies after merge; this review used the target branch's settings.`)
             await postFindingsSequentially(forge, [{

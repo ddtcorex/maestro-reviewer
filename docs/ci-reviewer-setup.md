@@ -264,7 +264,7 @@ for any name from [4.5](#45-pinned-by-the-pipeline-never-define).
 | `REVIEW_MODE`, `REVIEW_PROFILE`, `REVIEW_ON_PUSH`, `REVIEW_IGNORE_GLOBS`, `REVIEW_FANOUT_FILES`, `REVIEW_FANOUT_BYTES`, `REVIEW_FANOUT_CONCURRENCY` | no | protected | Defaults for every project, same meaning as in 4.3. |
 | `REVIEW_DEEP_MODEL_PROVIDER`, `REVIEW_DEEP_MODEL` | no, set both or neither | protected | The model for high risk parts of a fanned-out review (PHP, `di.xml`, plugins, observers, setup); same provider names as `REVIEW_MODEL_PROVIDER`. Unset: every part uses the review model. Ignored on a project route. |
 | `REVIEW_REPORT_DAYS` | no (default `7`, at most `30`) | protected | Window of the scheduled periodic report (5.9). |
-| `REVIEW_GATE` | no (default `off`) | protected | `blocking`: the review job fails (exit code 3) when the review has a blocking finding. The source bridge is `allow_failure: true`, so the MR shows a warning; remove `allow_failure` from the bridge as well to block the merge. Can also be scoped `review/<id>` for one project. Never a source repository setting. |
+| `REVIEW_GATE` | no (default `off`) | protected | `blocking`: every review job (skips included) fails with exit code 3 while the MR has an open blocking review thread, or when this review was partial (a failed part). The gate reads the MR, not the latest review: a push, a rerun or a narrower rereview never clears it; fixing the code and resolving the thread does (resolving is the explicit human override, as with GitLab's "all threads must be resolved" check). The source bridge is `allow_failure: true`, so the MR shows a warning; remove `allow_failure` from the bridge as well to block the merge. Can also be scoped `review/<id>`. Never a source repository setting. |
 | `REVIEW_ACCEPT_PRIVILEGED_BOT` | no, temporary only | protected | `1`: a bot that is Developer or above on the config project, or Maintainer or above on the reviewer project, only logs a warning instead of failing `resolve`. For the period before a dedicated bot user exists (for example a Maintainer's own token). It accepts the risk the check exists for: an agent reading untrusted MR content holds a token that can read every key and change the pipeline file. Administrators stay refused; every other check stays. Delete it as soon as a dedicated bot is in place. |
 
 ### 4.3 Per source project settings, scope `review/<source project id>`
@@ -337,9 +337,9 @@ For a deep request the child also sets `REVIEW_MODE: deep`; a project's own
 ### 4.7 In the source repository: `.maestro-review.yml`
 
 A source project can keep review settings in a `.maestro-review.yml` at its
-root. The reviewer reads it from the MR **target branch** (the merged,
-already reviewed state), never from the MR itself, so an author cannot loosen
-the review of their own change. An MR that edits the file gets a
+root. The reviewer reads it from the project's **default branch**, never from
+the MR or the branch it targets (an author chooses the target), so an author
+cannot loosen the review of their own change. An MR that edits the file gets a
 `CFG-CHANGED` finding and a note that the change applies after merge.
 
 ```yaml
@@ -461,9 +461,18 @@ review, the files of the checkout. The comment says how many values were
 redacted, never the values, and a secret added by the MR gets a blocking
 `SEC-SECRET-IN-DIFF` finding naming its kind and line.
 
-Limits: phone numbers in a national format are not recognised, and the git
-history inside the checkout still holds the raw values (the lint needs it),
-so a secret is only as safe as the agent's refusal to read history.
+Values that only look like secrets stay (numbers, `*_TTL`, `*_LENGTH`,
+`*_HEADER` and similar keys). A token format (key, AWS, GitLab, GitHub, OpenAI
+style, JWT) added by the MR is a blocking finding; a `KEY=value` secret is a
+major one, since that rule is a heuristic. Thread replies the reviewer lists
+and commit titles are redacted too; anything the agents write to GitLab has
+its HTML comments escaped, so no agent text can forge a review marker.
+
+Limits: phone numbers in a national format and lowercase `password: value`
+lines are not recognised; the review of the DSH host flow (webhook) does not
+redact its local checkout; and in a CI checkout the git history (`git log -p`,
+`git diff <base>..HEAD`) still holds the raw values because the lint needs
+it, so a secret is only as safe as the agent's refusal to read history.
 
 ### 5.9 Periodic report
 

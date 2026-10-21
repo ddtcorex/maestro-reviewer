@@ -126,7 +126,7 @@ describe('forge path restriction', () => {
 
 describe('a path-limited rereview never weakens the gate', () => {
   const runWith = async (priorHead: string, priorSeverity: string, command: string) => {
-    const { parseCiEnvConfig, runCiTrigger, ciExitCode } = await import('../src/host/providers/ci-trigger.js')
+    const { parseCiEnvConfig, runCiTrigger } = await import('../src/host/providers/ci-trigger.js')
     const { encodeReviewMeta } = await import('../src/host/review-marker.js')
     const cfg = parseCiEnvConfig({ GITLAB_HOST: 'h', REVIEW_GITLAB_TOKEN: 't', SOURCE_PROJECT_ID: '1', MR_IID: '2', REVIEW_GATE: 'blocking', REVIEW_ON_PUSH: '1' })
     const meta = encodeReviewMeta({ v: 1, headSha: priorHead, mode: 'quick', models: [], findings: [{ code: 'SEC-X', fingerprint: 'fp1', severity: priorSeverity }], at: 't' })
@@ -142,12 +142,11 @@ describe('a path-limited rereview never weakens the gate', () => {
     })
     const engine = { run: vi.fn(async () => ({ ok: true, summary: 'reviewed', failures: [], durationMs: 1, findings: [] })), answer: vi.fn() }
     const result = await runCiTrigger({ reviewEngine: engine } as any, cfg, { fetcher: fetcher as any, writeFile: (async () => {}) as any })
-    return { engine, code: ciExitCode(result, cfg) }
+    return { engine, result }
   }
 
-  it('carries the full review of the same head into the gate and the metadata', async () => {
-    const { engine, code } = await runWith('abc', 'blocking', '/maestro rereview lib/')
-    expect(code).toBe(3)
+  it('carries the full review of the same head into the metadata of the narrower review', async () => {
+    const { engine } = await runWith('abc', 'blocking', '/maestro rereview lib/')
     const [req, opts] = engine.run.mock.calls[0] as any[]
     expect(req.pathPrefix).toBe('lib/')
     expect(opts.carryFindings).toEqual([{ code: 'SEC-X', fingerprint: 'fp1', severity: 'blocking' }])

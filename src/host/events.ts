@@ -62,8 +62,8 @@ export interface ReviewResult {
   stages?: Partial<Record<Stage, number>>
   /** The reviewer's findings (merged across fan-out parts), for the Code Quality report and the gate. */
   findings?: ReviewFinding[]
-  /** Severities of the prior review of this same head, when the run skipped it: the gate still applies to them. */
-  gateSeverities?: string[]
+  /** Some files were not reviewed (a failed fan-out part): the gate fails closed on it. */
+  partial?: boolean
   /** Token usage per agent run; `usage` is null when the session reported none. */
   usage?: AgentUsage[]
 }

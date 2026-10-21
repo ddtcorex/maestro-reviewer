@@ -1,4 +1,5 @@
 import type { CompareResult, InterdiffFile } from './forge/types.js'
+import { redact } from './redact.js'
 const COMMIT_LIST_CAP = 20
 
 /**
@@ -26,7 +27,7 @@ export function buildIncrementalBlock(
   ]
   const shown = commits.slice(0, COMMIT_LIST_CAP)
   for (const commit of shown) {
-    const title = commit.title?.replace(/\s+/g, ' ').trim() ?? ''
+    const title = redact(commit.title?.replace(/\s+/g, ' ').trim() ?? '').text
     lines.push(`- ${commit.short_id ? `${commit.short_id.slice(0, 8)} ` : ''}${title}`)
   }
   const hidden = commits.length - shown.length

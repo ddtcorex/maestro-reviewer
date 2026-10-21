@@ -294,7 +294,9 @@ describe('ci engine options', () => {
 
   it('runs the engine with the access, gitlab identity and timeout from the config', async () => {
     const cfg = env({ REVIEW_PROFILE: 'magento2', REVIEW_BOT_USERNAME: 'review-bot', REVIEW_MODEL_PROVIDER: 'p', REVIEW_MODEL: 'm' })
-    const fetcher = vi.fn(async () => new Response(JSON.stringify({ source_branch: 'feat/x', sha: 'abc123' }), { status: 200 }))
+    const fetcher = vi.fn(async (url: string) => url.includes('/repository/files/')
+      ? new Response('', { status: 404 })
+      : new Response(JSON.stringify({ source_branch: 'feat/x', sha: 'abc123', default_branch: 'main' }), { status: 200 }))
     const run = vi.fn(async () => ({ ok: true, summary: 'done', failures: [], durationMs: 5 }))
     await runCiTrigger({ reviewEngine: { run } } as any, cfg, { fetcher: fetcher as unknown as typeof fetch, writeFile: (async () => {}) as any })
     expect((run.mock.calls[0] as unknown[])[1]).toEqual({

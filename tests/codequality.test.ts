@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { gateExitCode, toCodeQuality } from '../src/host/codequality.js'
+import { toCodeQuality } from '../src/host/codequality.js'
 import { findingFingerprint } from '../src/host/review-marker.js'
 
 vi.mock('../src/host/review-history.js', async (importOriginal) => {
@@ -25,18 +25,10 @@ describe('toCodeQuality', () => {
   })
 })
 
-describe('gateExitCode', () => {
-  it('is 3 only with the blocking gate and a blocking finding', () => {
-    expect(gateExitCode([f('blocking')], 'blocking')).toBe(3)
-    expect(gateExitCode([f('major')], 'blocking')).toBe(0)
-    expect(gateExitCode([f('blocking')], 'off')).toBe(0)
-    expect(gateExitCode([], 'blocking')).toBe(0)
-  })
-})
 
 describe('ci report files and exit code', () => {
   const run = async (engineResult: Record<string, unknown>, env: Record<string, string> = {}) => {
-    const { parseCiEnvConfig, runCiTrigger, ciExitCode } = await import('../src/host/providers/ci-trigger.js')
+    const { parseCiEnvConfig, runCiTrigger } = await import('../src/host/providers/ci-trigger.js')
     const cfg = parseCiEnvConfig({ GITLAB_HOST: 'h', REVIEW_GITLAB_TOKEN: 't', SOURCE_PROJECT_ID: '1', MR_IID: '2', ...env })
     const fetcher = vi.fn(async (url: string) => url.endsWith('/user') ? new Response(JSON.stringify({ id: 7 }), { status: 200 })
       : /notes|award_emoji/.test(url) ? new Response('[]', { status: 200 })
@@ -45,7 +37,7 @@ describe('ci report files and exit code', () => {
     const writes = new Map<string, string>()
     const writeFile = (async (p: string, d: string) => { writes.set(p, d) }) as any
     const result = await runCiTrigger({ reviewEngine: { run: vi.fn(async () => engineResult) } } as any, cfg, { fetcher: fetcher as any, writeFile })
-    return { writes, code: ciExitCode(result, cfg) }
+    return { writes, result }
   }
 
   it('writes the code quality report, an empty list when nothing was found', async () => {
@@ -55,11 +47,6 @@ describe('ci report files and exit code', () => {
     expect(JSON.parse(empty.writes.get('gl-code-quality-report.json')!)).toEqual([])
   })
 
-  it('exits 3 on a blocking finding only when REVIEW_GATE=blocking, and 1 on an infra failure either way', async () => {
-    expect((await run({ ok: true, failures: [], durationMs: 1, findings: [f('blocking')] }, { REVIEW_GATE: 'blocking' })).code).toBe(3)
-    expect((await run({ ok: true, failures: [], durationMs: 1, findings: [f('blocking')] })).code).toBe(0)
-    expect((await run({ ok: false, failures: ['boom'], durationMs: 1, findings: [f('blocking')] }, { REVIEW_GATE: 'blocking' })).code).toBe(1)
-  })
 
   it('refuses an unknown gate value', async () => {
     const { parseCiEnvConfig } = await import('../src/host/providers/ci-trigger.js')
@@ -92,25 +79,3 @@ describe('child pipeline', () => {
   })
 })
 
-describe('the gate holds on a skipped run', () => {
-  it('a rerun of an already reviewed head with a blocking finding still exits 3', async () => {
-    const { encodeReviewMeta } = await import('../src/host/review-marker.js')
-    const { parseCiEnvConfig, runCiTrigger, ciExitCode } = await import('../src/host/providers/ci-trigger.js')
-    const meta = (severity: string) => encodeReviewMeta({ v: 1, headSha: 'abc', mode: 'quick', models: [], findings: [{ code: 'X', fingerprint: 'f', severity }], at: 't' })
-    const run = async (severity: string, gate: string) => {
-      const cfg = parseCiEnvConfig({ GITLAB_HOST: 'h', REVIEW_GITLAB_TOKEN: 't', SOURCE_PROJECT_ID: '1', MR_IID: '2', REVIEW_GATE: gate })
-      const fetcher = vi.fn(async (url: string) => url.endsWith('/user') ? new Response(JSON.stringify({ id: 7 }), { status: 200 })
-        : url.includes('/notes') ? new Response(JSON.stringify([{ author: { id: 7 }, body: meta(severity) }]), { status: 200 })
-          : url.includes('/repository/files/') ? new Response('', { status: 404 })
-            : /award_emoji/.test(url) ? new Response('[]', { status: 200 })
-              : new Response(JSON.stringify({ source_branch: 'b', target_branch: 'main', sha: 'abc' }), { status: 200 }))
-      const engine = vi.fn()
-      const result = await runCiTrigger({ reviewEngine: { run: engine } } as any, cfg, { fetcher: fetcher as any, writeFile: (async () => {}) as any })
-      expect(engine).not.toHaveBeenCalled()
-      return ciExitCode(result, cfg)
-    }
-    expect(await run('blocking', 'blocking')).toBe(3)
-    expect(await run('major', 'blocking')).toBe(0)
-    expect(await run('blocking', 'off')).toBe(0)
-  })
-})
