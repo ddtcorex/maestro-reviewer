@@ -44,8 +44,9 @@ select_route() {
       REVIEW_LLM_MODEL="$REVIEW_ROUTE_MODEL"
       REVIEW_LLM_BASE_URL="$REVIEW_ROUTE_BASE_URL"
       REVIEW_LLM_API="${REVIEW_ROUTE_API:-openai-completions}"
-      # A default-scope model pin must not choose the model a project pays for.
-      unset REVIEW_MODEL_PROVIDER REVIEW_MODEL REVIEW_DEEP_MODEL_PROVIDER REVIEW_DEEP_MODEL
+      # A default-scope model pin must not choose the model a project pays for,
+      # nor a default-scope provider route the project's endpoint.
+      unset REVIEW_MODEL_PROVIDER REVIEW_MODEL REVIEW_DEEP_MODEL_PROVIDER REVIEW_DEEP_MODEL REVIEW_LLM_CATALOG_PROVIDER
       ;;
     *)
       route_fail "invalid REVIEW_ROUTE (allowed: default, project, unconfigured)"
@@ -67,6 +68,10 @@ select_route() {
   case "$REVIEW_LLM_MODEL" in
     *[!A-Za-z0-9/_+.-]*) route_fail "invalid REVIEW_LLM_MODEL (allowed: A-Za-z0-9/_+.-)"; return 1 ;;
   esac
+  REVIEW_LLM_CATALOG_PROVIDER="${REVIEW_LLM_CATALOG_PROVIDER:-custom-openai}"
+  case "$REVIEW_LLM_CATALOG_PROVIDER" in
+    *[!a-z0-9-]*) route_fail "invalid REVIEW_LLM_CATALOG_PROVIDER (allowed: a-z0-9-)"; return 1 ;;
+  esac
   # A stable per-job session id for gateways that key routing/prompt-cache
   # affinity off it (e.g. OpenCode Zen's Go route hard-requires
   # x-opencode-session, see ci-settings.generic-openai.yaml). One CI job is
@@ -78,5 +83,6 @@ select_route() {
       -e "s#__REVIEW_LLM_BASE_URL__#${REVIEW_LLM_BASE_URL}#g" \
       -e "s#__REVIEW_LLM_MODEL__#${REVIEW_LLM_MODEL}#g" \
       -e "s#__REVIEW_LLM_SESSION_ID__#${REVIEW_LLM_SESSION_ID}#g" \
+      -e "s#__REVIEW_LLM_CATALOG_PROVIDER__#${REVIEW_LLM_CATALOG_PROVIDER}#g" \
       "$generic" > "$settings.tmp" && mv "$settings.tmp" "$settings"
 }

@@ -4,9 +4,13 @@
 # OpenAI-compatible endpoint (self-hosted, Azure OpenAI, OpenRouter, a private
 # gateway, ...) instead of api.deepseek.com. entrypoint.sh substitutes
 # __REVIEW_LLM_API__ (from $REVIEW_LLM_API, default openai-completions),
-# __REVIEW_LLM_BASE_URL__, __REVIEW_LLM_MODEL__, and __REVIEW_LLM_SESSION_ID__
-# before dsh boots. Contains NO secrets — the key resolves at call time from
-# REVIEW_LLM_API_KEY.
+# __REVIEW_LLM_BASE_URL__, __REVIEW_LLM_MODEL__, __REVIEW_LLM_SESSION_ID__ and
+# __REVIEW_LLM_CATALOG_PROVIDER__ (from $REVIEW_LLM_CATALOG_PROVIDER, default
+# custom-openai) before dsh boots. Naming a provider pi-ai's catalog ships (for example
+# opencode-go) makes the route reuse that provider, so the catalog's model
+# compat applies: DeepSeek thinking models there need reasoning_content
+# replayed on every assistant message, which a custom route never sends.
+# Contains NO secrets: the key resolves at call time from REVIEW_LLM_API_KEY.
 # x-opencode-session: a routing/conversation-affinity header some gateways
 # require (e.g. OpenCode Zen's "Go" route, opencode.ai/zen/go/v1, rejects a
 # request missing it with 400 MissingSessionID — see opencode.ai/docs/go/).
@@ -16,7 +20,7 @@
 # would parse as a number — headers must be strings.
 llm-pi-ai:
   providers:
-    custom-openai:
+    __REVIEW_LLM_CATALOG_PROVIDER__:
       displayName: Custom OpenAI-compatible
       apiKeyEnv: REVIEW_LLM_API_KEY
       api: __REVIEW_LLM_API__
@@ -27,5 +31,5 @@ llm-pi-ai:
         - id: __REVIEW_LLM_MODEL__
           name: Custom Review Model
 agent-default-model:
-  provider: custom-openai
+  provider: __REVIEW_LLM_CATALOG_PROVIDER__
   model: __REVIEW_LLM_MODEL__
