@@ -17,7 +17,8 @@ function route(env: Record<string, string>, settings = BAKED) {
   const r = spawnSync('sh', ['-c', '. docker/route.sh; select_route "$1" "$2"; rc=$?; echo "PIN=${REVIEW_MODEL_PROVIDER:-}/${REVIEW_MODEL:-}"; echo "DEEP=${REVIEW_DEEP_MODEL_PROVIDER:-}/${REVIEW_DEEP_MODEL:-}"; exit $rc', 'sh', target, generic], {
     env: { PATH: process.env.PATH ?? '/usr/bin:/bin', CI_JOB_ID: '123', ...env }, encoding: 'utf-8',
   })
-  return { code: r.status, out: readFileSync(target, 'utf-8'), stderr: r.stderr + r.stdout }
+  const out = readFileSync(target, 'utf-8')
+  return { code: r.status, out, config: out.split('\n').filter((l) => !l.trimStart().startsWith('#')).join('\n'), stderr: r.stderr + r.stdout }
 }
 
 const triple = { REVIEW_LLM_API_KEY: 'k', REVIEW_LLM_BASE_URL: 'https://default.example.com/v1', REVIEW_LLM_MODEL: 'default-model' }
@@ -37,6 +38,32 @@ describe('select_route', () => {
     expect(r.out).toContain('baseURL: https://default.example.com/v1')
     expect(r.out).toContain('default-model')
     expect(r.out).not.toContain('__REVIEW_LLM_')
+  })
+
+  it('REVIEW_LLM_CATALOG_PROVIDER names a catalog provider as the route, so its model compat applies', () => {
+    const r = route({ ...triple, REVIEW_LLM_CATALOG_PROVIDER: 'opencode-go', REVIEW_LLM_MODEL: 'deepseek-v4-flash' })
+    expect(r.code).toBe(0)
+    expect(r.out).toMatch(/^    opencode-go:$/m)
+    expect(r.out).toMatch(/^  provider: opencode-go$/m)
+    expect(r.config).not.toContain('custom-openai')
+    expect(r.out).toContain('id: deepseek-v4-flash')
+  })
+
+  it('without REVIEW_LLM_CATALOG_PROVIDER the route stays custom-openai', () => {
+    expect(route(triple).out).toMatch(/^  provider: custom-openai$/m)
+  })
+
+  it('refuses a REVIEW_LLM_CATALOG_PROVIDER outside the provider id charset', () => {
+    const r = route({ ...triple, REVIEW_LLM_CATALOG_PROVIDER: 'x#y' })
+    expect(r.code).toBe(1)
+    expect(r.stderr).toMatch(/invalid REVIEW_LLM_CATALOG_PROVIDER/)
+  })
+
+  it('a project route never inherits the default-scope REVIEW_LLM_CATALOG_PROVIDER', () => {
+    const r = route({ ...projectRoute('k'), REVIEW_LLM_CATALOG_PROVIDER: 'opencode-go' })
+    expect(r.code).toBe(0)
+    expect(r.out).toMatch(/^  provider: custom-openai$/m)
+    expect(r.config).not.toContain('opencode-go')
   })
 
   it('the default route behaves like no route', () => {

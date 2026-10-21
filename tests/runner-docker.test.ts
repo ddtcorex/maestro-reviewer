@@ -98,13 +98,14 @@ describe('docker', () => {
   it('ci-settings.generic-openai.yaml declares a bring-your-own OpenAI-compatible route with no embedded secrets', () => {
     const yml = readFileSync('docker/ci-settings.generic-openai.yaml', 'utf-8')
     expect(yml).toMatch(/^llm-pi-ai:/m)
-    expect(yml).toMatch(/custom-openai:/)
+    // The route key is a placeholder (default custom-openai, see route.sh) so a catalog provider can be named.
+    expect(yml).toMatch(/^    __REVIEW_LLM_CATALOG_PROVIDER__:$/m)
     expect(yml).toMatch(/apiKeyEnv:\s*REVIEW_LLM_API_KEY/)
     expect(yml).toMatch(/api:\s*__REVIEW_LLM_API__/)
     expect(yml).toMatch(/baseURL:\s*__REVIEW_LLM_BASE_URL__/)
     expect(yml.match(/^\s+(?:- id|model): __REVIEW_LLM_MODEL__$/gm)).toHaveLength(2)
     expect(yml).toMatch(/^agent-default-model:/m)
-    expect(yml).toMatch(/provider:\s*custom-openai/)
+    expect(yml).toMatch(/^  provider: __REVIEW_LLM_CATALOG_PROVIDER__$/m)
     expect(yml).not.toMatch(/sk-[A-Za-z0-9]{8,}/)
     expect(yml).not.toMatch(/glpat-[A-Za-z0-9_.-]{8,}/)
     // gateways that route by conversation (e.g. OpenCode Zen's "Go" route,
