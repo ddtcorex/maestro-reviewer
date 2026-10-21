@@ -43,7 +43,7 @@ describe('gitlab forge restricted to an interdiff', () => {
     const { gitlabForge } = await import('../src/host/forge/gitlab/index.js')
     const forge = gitlabForge({ baseUrl: 'https://git.example.com', token: 't', botUsername: 'bot' }, { projectId: 1, mrIid: 2 })
     forge.restrictToInterdiff(compare.diffs)
-    expect(await forge.reviewScope()).toEqual({ files: [{ path: 'app/A.php', bytes: 18 }], skipped: ['composer.lock'] })
+    expect(await forge.reviewScope()).toEqual({ files: [{ path: 'app/A.php', bytes: 18 }], skipped: ['composer.lock'], redacted: [] })
     expect(fetchSpy).not.toHaveBeenCalled()
   })
 })

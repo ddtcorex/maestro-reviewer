@@ -400,6 +400,22 @@ which (`full review: base changed since <sha>`). Existing threads stay visible
 to the reviewer either way, so it replies to them instead of posting
 duplicates.
 
+### 5.4 Secrets and personal data
+
+Before any model call the reviewer replaces private keys, cloud and forge
+tokens (AWS, GitLab, GitHub, OpenAI style), JWTs, `KEY=value` secrets
+(`*PASSWORD*`, `*SECRET*`, `*TOKEN*`, `*API_KEY*`...), PHP array secrets such as
+`'password' => '...'` in `app/etc/env.php`, email addresses and international
+phone numbers (`+<country> ...`) with placeholders such as
+`[REDACTED:gitlab-token]`. This covers the diff tools and, for a checkout
+review, the files of the checkout. The comment says how many values were
+redacted, never the values, and a secret added by the MR gets a blocking
+`SEC-SECRET-IN-DIFF` finding naming its kind and line.
+
+Limits: phone numbers in a national format are not recognised, and the git
+history inside the checkout still holds the raw values (the lint needs it),
+so a secret is only as safe as the agent's refusal to read history.
+
 ## 6. Onboarding another source project
 
 1. Add the project or its group to `REVIEW_ALLOWED_NAMESPACES`.

@@ -61,7 +61,7 @@ describe('gitlab forge with ignore globs', () => {
     vi.stubGlobal('fetch', fetchSpy)
     const { gitlabForge } = await import('../src/host/forge/gitlab/index.js')
     const forge = gitlabForge({ baseUrl: 'https://git.example.com', token: 't', botUsername: 'bot' }, { projectId: 1, mrIid: 2 }, { ignoreGlobs: DEFAULT_IGNORE_GLOBS })
-    expect(await forge.reviewScope()).toEqual({ files: [{ path: 'app/code/X/A.php', bytes: 18 }], skipped: ['composer.lock', 'pub/static/x.js'] })
+    expect(await forge.reviewScope()).toEqual({ files: [{ path: 'app/code/X/A.php', bytes: 18 }], skipped: ['composer.lock', 'pub/static/x.js'], redacted: [] })
     const tools: Array<{ name: string; execute: (args: any, exec?: any) => Promise<any> }> = []
     await forge.mountAgentTools({ plugin: async (mod: any, cfg: any) => mod.apply({ tools: { register: (t: any) => tools.push(t) } }, cfg) } as any, {})
     const fileDiff = tools.find((t) => t.name === 'gitlab_get_file_diff')!
