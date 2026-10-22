@@ -198,3 +198,30 @@ describe('a line past the end of a new file', () => {
     expect(body).not.toMatch(/not in current MR diff/)
   })
 })
+
+describe('finding codes', () => {
+  const tool = async () => {
+    const { apply } = await import('../src/host/review-findings-tool.js')
+    let tool: any
+    const reports: unknown[][] = []
+    apply({ tools: { register: (t: unknown) => { tool = t } } } as any, { onReport: (f) => reports.push(f) })
+    return { run: (findings: unknown[]) => tool.execute({ findings }), reports }
+  }
+
+  it('sends a report with an uncoded new finding back once, naming the finding', async () => {
+    const t = await tool()
+    await expect(t.run([{ status: 'new', path: 'a', line: 1, body: 'x', code: 'BUG-A' }, { status: 'new', path: 'a', line: 2, body: 'y' }])).rejects.toThrow(/finding 2.*code/)
+    expect(t.reports).toHaveLength(0)
+  })
+
+  it('accepts the second attempt even without codes, so a review is never lost', async () => {
+    const t = await tool()
+    await expect(t.run([{ status: 'new', path: 'a', line: 2, body: 'y' }])).rejects.toThrow()
+    await expect(t.run([{ status: 'new', path: 'a', line: 2, body: 'y' }])).resolves.toEqual({ received: 1 })
+  })
+
+  it('never asks a reply for a code', async () => {
+    const t = await tool()
+    await expect(t.run([{ status: 'reply', discussionId: 'd', body: 'y' }])).resolves.toEqual({ received: 1 })
+  })
+})
