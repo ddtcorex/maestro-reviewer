@@ -42,9 +42,11 @@ export function parseVersion(v) {
 }
 
 // checkRigProof(proofPath, headSha) verifies the local rig evidence: the
-// file must exist, contain the full HEAD SHA, and carry PASS markers for
-// both tier 1 and tier 2 (the keywords `tier 1` + `tier 2` plus a pass
-// indication). Never names a gate beyond its reason string.
+// file must exist, contain the full HEAD SHA, and carry a PASS marker on the
+// same line as each tier keyword (`tier 1` and `tier 2`). A whole-file word
+// search is not enough: a run where a tier FAILED still mentions both tier
+// keywords plus the word "pass" elsewhere, and must be rejected. Never names
+// a gate beyond its reason string.
 export function checkRigProof(proofPath, headSha) {
   let content
   try {
@@ -55,16 +57,14 @@ export function checkRigProof(proofPath, headSha) {
   if (!content.includes(headSha)) {
     return { ok: false, reason: `rig proof does not reference HEAD SHA ${headSha}` }
   }
-  const lower = content.toLowerCase()
-  const hasTier1 = /tier[\s-]*1(?!\d)/.test(lower)
-  const hasTier2 = /tier[\s-]*2(?!\d)/.test(lower)
-  const hasPass = /\bpass(es|ed|ing)?\b/.test(lower)
-  if (!hasTier1 || !hasTier2 || !hasPass) {
-    const missing = [
-      !hasTier1 ? 'tier 1' : null,
-      !hasTier2 ? 'tier 2' : null,
-      !hasPass ? 'PASS' : null,
-    ].filter(Boolean)
+  const missing = []
+  if (!/tier[\s-]*1(?!\d)[^\n]*\bpass(es|ed|ing)?\b/i.test(content)) {
+    missing.push('tier 1 PASS')
+  }
+  if (!/tier[\s-]*2(?!\d)[^\n]*\bpass(es|ed|ing)?\b/i.test(content)) {
+    missing.push('tier 2 PASS')
+  }
+  if (missing.length > 0) {
     return { ok: false, reason: `rig proof missing PASS marker(s): ${missing.join(', ')}` }
   }
   return { ok: true }

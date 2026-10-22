@@ -54,6 +54,26 @@ describe('checkRigProof', () => {
     const r = checkRigProof(proof, 'deadbeef1234')
     expect(r.ok).toBe(false)
   })
+  it('rejects a proof where tier 2 failed despite a passing count line', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'rig-proof-'))
+    const proof = join(dir, 'proof.txt')
+    writeFileSync(
+      proof,
+      'rig run for HEAD deadbeef1234\ntier 1: PASS\ntier 2: FAIL\n3 passed, 1 failed\n',
+    )
+    const r = checkRigProof(proof, 'deadbeef1234')
+    expect(r.ok).toBe(false)
+  })
+  it('rejects a proof where tier 1 failed', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'rig-proof-'))
+    const proof = join(dir, 'proof.txt')
+    writeFileSync(
+      proof,
+      'rig run for HEAD deadbeef1234\ntier 1: FAIL\ntier 2: PASS\n',
+    )
+    const r = checkRigProof(proof, 'deadbeef1234')
+    expect(r.ok).toBe(false)
+  })
 })
 
 describe('REFERENCE_PATHS', () => {
