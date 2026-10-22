@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process'
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -11,6 +12,7 @@ import {
   parseVersion,
   readLockedSkillsVersion,
   syncReferences,
+  updateSkillsSpecifier,
 } from '../scripts/release-prep.mjs'
 
 const repoRoot = dirname(dirname(fileURLToPath(import.meta.url)))
@@ -61,14 +63,15 @@ describe('REFERENCE_PATHS', () => {
       expect(existsSync(join(repoRoot, rel)), rel).toBe(true)
     }
   })
-  it('covers every known version literal location', () => {
-    expect(REFERENCE_PATHS).toContain('package.json')
-    expect(REFERENCE_PATHS).toContain('docker/Dockerfile')
-    expect(REFERENCE_PATHS).toContain(
+  it('is exactly the six known version-literal files', () => {
+    expect(REFERENCE_PATHS).toEqual([
+      'package.json',
+      'CHANGELOG.md',
+      'docker/Dockerfile',
       'templates/reviewer-project.gitlab-ci.yml',
-    )
-    expect(REFERENCE_PATHS).toContain('docs/ci-reviewer-setup.md')
-    expect(REFERENCE_PATHS).toContain('profiles/reviewer-ci/package.json')
+      'docs/ci-reviewer-setup.md',
+      'profiles/reviewer-ci/package.json',
+    ])
   })
 })
 
@@ -219,5 +222,66 @@ describe('checkLockDiffTouchesOnlySkills', () => {
     const r = checkLockDiffTouchesOnlySkills(diff)
     expect(r.ok).toBe(false)
     expect(r.ok === false && (r as { reason: string }).reason).toMatch(/fast-uri/)
+  })
+})
+
+describe('failure gates name the gate', () => {
+  it('readLockedSkillsVersion returns undefined (no throw) for a missing lockfile', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'release-prep-'))
+    expect(readLockedSkillsVersion(dir)).toBeUndefined()
+  })
+
+  it('insertChangelog throws on a missing Changelog header', () => {
+    const root = mkdtempSync(join(tmpdir(), 'release-prep-'))
+    writeFileSync(join(root, 'CHANGELOG.md'), 'no header here\n')
+    expect(() => insertChangelog(root, '0.19.5', '2026-10-23', 'x')).toThrow(
+      /does not start with "# Changelog"/,
+    )
+  })
+
+  it('updateSkillsSpecifier throws when the profile has no dependencies object', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'release-prep-'))
+    writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: 'p' }))
+    expect(() => updateSkillsSpecifier(dir, '2.18.2')).toThrow(/no dependencies object/)
+  })
+
+  it('updateSkillsSpecifier raises the specifier preserving the range prefix', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'release-prep-'))
+    writeFileSync(
+      join(dir, 'package.json'),
+      JSON.stringify({ dependencies: { '@ddtcorex/maestro-skills': '^2.15.0' } }),
+    )
+    expect(updateSkillsSpecifier(dir, '2.18.2')).toEqual({
+      prevSpec: '^2.15.0',
+      nextSpec: '^2.18.2',
+    })
+    expect(JSON.parse(readFileSync(join(dir, 'package.json'), 'utf-8')).dependencies).toEqual(
+      { '@ddtcorex/maestro-skills': '^2.18.2' },
+    )
+  })
+})
+
+describe('CLI gate failures', () => {
+  const script = join(repoRoot, 'scripts', 'release-prep.mjs')
+  const runCli = (args: string[], env?: NodeJS.ProcessEnv) => {
+    try {
+      execFileSync(process.execPath, [script, ...args], { encoding: 'utf-8', env })
+      return { status: 0, stderr: '' }
+    } catch (err: any) {
+      return { status: err.status ?? 1, stderr: String(err.stderr ?? '') }
+    }
+  }
+
+  it('names the version gate for junk input', () => {
+    const r = runCli(['not-a-version', '--rig-proof', '/tmp/x'])
+    expect(r.status).toBe(1)
+    expect(r.stderr).toMatch(/gate failed \[version\]/)
+  })
+
+  it('names the git gate when git is unavailable', () => {
+    const emptyPath = mkdtempSync(join(tmpdir(), 'release-prep-empty-path-'))
+    const r = runCli(['9.9.9', '--rig-proof', '/tmp/x'], { PATH: emptyPath })
+    expect(r.status).toBe(1)
+    expect(r.stderr).toMatch(/gate failed \[git\]/)
   })
 })

@@ -124,10 +124,16 @@ export function syncReferences(root, next) {
 
 // readLockedSkillsVersion(profileDir) reads the currently locked
 // @ddtcorex/maestro-skills version from the profile's pnpm-lock.yaml
-// (importers entry), or undefined when the lockfile has no such entry.
+// (importers entry), or undefined when the lockfile is unreadable or holds
+// no such entry (the CLI maps that to the skills-pin gate, never a throw).
 // Dependency-free narrow parse; the lockfile shape is pnpm's contract.
 export function readLockedSkillsVersion(profileDir) {
-  const lock = readFileSync(join(profileDir, 'pnpm-lock.yaml'), 'utf-8')
+  let lock
+  try {
+    lock = readFileSync(join(profileDir, 'pnpm-lock.yaml'), 'utf-8')
+  } catch {
+    return undefined
+  }
   const lines = lock.split('\n')
   for (let i = 0; i < lines.length; i++) {
     if (/^\s*['"]?@ddtcorex\/maestro-skills['"]?:\s*$/.test(lines[i])) {
@@ -139,6 +145,26 @@ export function readLockedSkillsVersion(profileDir) {
     }
   }
   return undefined
+}
+
+// updateSkillsSpecifier(profileDir, latest) raises the
+// @ddtcorex/maestro-skills specifier to `latest` (range prefix preserved) in
+// the profile package.json. Throws when the profile has no dependencies
+// object; the CLI maps that to the skills-pin gate. Returns the previous
+// and next specifiers so the caller can decide whether a lock refresh is
+// still needed.
+export function updateSkillsSpecifier(profileDir, latest) {
+  const profilePkgPath = join(profileDir, 'package.json')
+  const profilePkg = JSON.parse(readFileSync(profilePkgPath, 'utf-8'))
+  if (!profilePkg.dependencies || typeof profilePkg.dependencies !== 'object') {
+    throw new Error(`${profilePkgPath} has no dependencies object`)
+  }
+  const prevSpec = profilePkg.dependencies[SKILLS_PACKAGE] ?? ''
+  const prefix = prevSpec.startsWith('~') ? '~' : '^'
+  const nextSpec = `${prefix}${latest}`
+  profilePkg.dependencies[SKILLS_PACKAGE] = nextSpec
+  writeFileSync(profilePkgPath, `${JSON.stringify(profilePkg, null, 2)}\n`)
+  return { prevSpec, nextSpec }
 }
 
 // checkLockDiffTouchesOnlySkills(diff) asserts a profile lock update diff
@@ -230,15 +256,22 @@ function main() {
   if (prev === next) fail('version', `already at ${next}: nothing to release`)
   const expectedBranch = `chore/release-${next}`
 
-  const dirty = run('git', ['status', '--porcelain'], root)
+  // Git probes: any failure (git absent, not a repo) is the git gate, never
+  // an uncaught throw.
+  let dirty, branch, headSha
+  try {
+    dirty = run('git', ['status', '--porcelain'], root)
+    branch = run('git', ['rev-parse', '--abbrev-ref', 'HEAD'], root)
+    headSha = run('git', ['rev-parse', 'HEAD'], root)
+  } catch (err) {
+    fail('git', `git probe failed: ${err instanceof Error ? err.message.split('\n')[0] : String(err)}`)
+  }
   if (dirty !== '') fail('clean-tree', `working tree is not clean:\n${dirty}`)
 
-  const branch = run('git', ['rev-parse', '--abbrev-ref', 'HEAD'], root)
   if (branch !== expectedBranch) {
     fail('branch', `expected branch ${expectedBranch}, on ${branch}`)
   }
 
-  const headSha = run('git', ['rev-parse', 'HEAD'], root)
   const proof = checkRigProof(args.rigProof, headSha)
   if (!proof.ok) fail('rig-proof', proof.reason)
 
@@ -248,7 +281,11 @@ function main() {
   const changed = syncReferences(root, next)
   const today = args.date ?? new Date().toISOString().slice(0, 10)
   const prRefs = args.prRefs ?? `Bundles the merged PRs since ${prev}.`
-  insertChangelog(root, next, today, prRefs)
+  try {
+    insertChangelog(root, next, today, prRefs)
+  } catch (err) {
+    fail('changelog', err instanceof Error ? err.message : String(err))
+  }
 
   // Skills pin: raise the specifier to the latest published version, refresh
   // the profile lock, and prove the lock diff touches only skills entries.
@@ -264,17 +301,19 @@ function main() {
       fail('skills-pin', `cannot read latest ${SKILLS_PACKAGE} via npm view`)
     }
     if (!parseVersion(latest)) fail('skills-pin', `npm view returned junk: ${latest}`)
-    const profilePkgPath = join(profileDir, 'package.json')
-    const profilePkg = JSON.parse(readFileSync(profilePkgPath, 'utf-8'))
-    const currentSpec = profilePkg.dependencies?.[SKILLS_PACKAGE] ?? ''
-    const prefix = currentSpec.startsWith('~') ? '~' : '^'
-    const nextSpec = `${prefix}${latest}`
+    let specs
+    try {
+      specs = updateSkillsSpecifier(profileDir, latest)
+    } catch (err) {
+      fail('skills-pin', err instanceof Error ? err.message : String(err))
+    }
     const locked = readLockedSkillsVersion(profileDir)
-    if (currentSpec === nextSpec && locked === latest) {
+    if (locked === undefined) {
+      fail('skills-pin', `cannot read locked ${SKILLS_PACKAGE} version from ${join(profileDir, 'pnpm-lock.yaml')}`)
+    }
+    if (specs.prevSpec === specs.nextSpec && locked === latest) {
       process.stdout.write(`skills pin already current (${SKILLS_PACKAGE} ${latest}); skipping pnpm update\n`)
     } else {
-      profilePkg.dependencies[SKILLS_PACKAGE] = nextSpec
-      writeFileSync(profilePkgPath, `${JSON.stringify(profilePkg, null, 2)}\n`)
       try {
         execFileSync(
           'pnpm',
