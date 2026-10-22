@@ -1,0 +1,3 @@
+rig run for HEAD deadbeef9999
+tier 1: PASS
+tier 2: PASS
