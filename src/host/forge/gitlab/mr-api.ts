@@ -88,6 +88,7 @@ interface GitlabMrChange {
   collapsed?: boolean
   too_large?: boolean
   deleted_file?: boolean
+  new_file?: boolean
 }
 
 interface GitlabDiffPosition {
@@ -169,6 +170,13 @@ function normalizedDiffPath(path: string): string {
  * executable through `handle.agent.ctx` after the agent turn ends.
  */
 /** The note text of a finding: severity (and code, visible and as a hidden marker for `/maestro dismiss`). */
+/** Last line number on the new side of a diff; for an added file, that is the file's length. */
+function lastNewLine(diff: string): number {
+  let last = 0
+  for (const m of diff.matchAll(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/gm)) last = Math.max(last, Number(m[1]) + Number(m[2] ?? '1') - 1)
+  return last
+}
+
 export function findingNoteBody(finding: ReviewFinding): string {
   const label = severityPrefix(finding.severity)
   const head = finding.code === undefined ? label : `${label} · \`${finding.code}\``
@@ -214,9 +222,14 @@ export async function postReviewFindings(findings: ReviewFinding[], config: Gitl
       const linePosition = diffPositionForNewLine(change.diff, finding.line)
       if (linePosition === undefined) {
         // Line not in diff — fallback to MR note so finding is not silently lost.
+        // An added file is whole in its diff, so a line past its end does not exist.
+        const length = change.new_file === true ? lastNewLine(change.diff) : 0
+        const where = length > 0 && finding.line > length
+          ? `is past the end of the file (${length} lines)`
+          : 'line is not in current MR diff'
         response = await fetcher(`${apiBase}/discussions`, {
           method: 'POST', headers,
-          body: JSON.stringify({ body: `**Inline fallback — \`${finding.path}:${finding.line}\` line is not in current MR diff**\n\n${body}` }),
+          body: JSON.stringify({ body: `**Inline fallback — \`${finding.path}:${finding.line}\` ${where}**\n\n${body}` }),
         })
       } else {
         response = await fetcher(`${apiBase}/discussions`, {

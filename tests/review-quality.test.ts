@@ -179,3 +179,22 @@ describe('host worktree redaction (I3)', () => {
     }
   })
 })
+
+describe('a line past the end of a new file', () => {
+  const posted = async (line: number) => {
+    const { postReviewFindings } = await import('../src/host/forge/gitlab/mr-api.js')
+    const calls: { body: string }[] = []
+    await postReviewFindings([{ status: 'new', body: 'x', path: 'src/A.php', line, severity: 'major', code: 'BUG-X' }], {
+      baseUrl: 'https://g', token: 't', projectId: 1, mrIid: 2,
+      fetcher: ((_u: string, init?: RequestInit) => { calls.push(JSON.parse(String(init?.body))); return Promise.resolve({ ok: true }) }) as typeof fetch,
+      snapshot: Promise.resolve({ diffRefs: { base_sha: 'b', start_sha: 's', head_sha: 'h' }, changes: [{ old_path: 'src/A.php', new_path: 'src/A.php', new_file: true, diff: '@@ -0,0 +1,3 @@\n+a\n+b\n+c' }] }),
+    } as never)
+    return calls[0].body
+  }
+
+  it('says the line does not exist instead of claiming it is outside the diff', async () => {
+    const body = await posted(4090)
+    expect(body).toMatch(/^\*\*Inline fallback — `src\/A\.php:4090` is past the end of the file \(3 lines\)\*\*/)
+    expect(body).not.toMatch(/not in current MR diff/)
+  })
+})
