@@ -198,6 +198,20 @@ function sessionCwd(e: unknown): string | undefined {
   return typeof cwd === 'string' && cwd !== '' ? cwd : undefined
 }
 
+/** Every discussion of the MR: GitLab serves 20 per page by default, and a long MR has more. */
+export async function fetchAllDiscussions(fetcher: typeof fetch, apiBase: string, headers: Record<string, string>): Promise<GitlabDiscussion[]> {
+  const all: GitlabDiscussion[] = []
+  let page = '1'
+  while (page !== '') {
+    const response = await fetcher(`${apiBase}/discussions?per_page=100&page=${page}`, { headers })
+    if (!response.ok) throw new Error(`GitLab API error ${response.status}: ${await response.text()}`)
+    const batch = await response.json() as GitlabDiscussion[]
+    all.push(...batch)
+    page = batch.length === 0 ? '' : (response.headers.get('x-next-page') ?? '')
+  }
+  return all
+}
+
 /**
  * Pick this bot's inline threads out of the MR discussions list, including
  * resolved ones (flagged) so a same-SHA re-review can reply-update instead
@@ -357,12 +371,7 @@ export function apply(ctx: Context, config: Config): void {
       }],
     },
     async execute() {
-      const response = await fetch(`${apiBase}/discussions`, { headers })
-      if (!response.ok) {
-        throw new Error(`GitLab API error ${response.status}: ${await response.text()}`)
-      }
-      const discussions = await response.json() as GitlabDiscussion[]
-      return selectOwnThreads(discussions, config.botUsername)
+      return selectOwnThreads(await fetchAllDiscussions(fetch, apiBase, headers), config.botUsername)
     },
   }))
 

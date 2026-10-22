@@ -53,3 +53,29 @@ describe('selectOwnThreads', () => {
     expect(out.threads[0].lastCommentBody).toBe('follow-up')
   })
 })
+
+describe('fetchAllDiscussions', () => {
+  it('follows x-next-page so threads past the first page reach the model', async () => {
+    const { fetchAllDiscussions } = await import('../src/host/forge/gitlab/gitlab-client.js')
+    const urls: string[] = []
+    const pages: Record<string, { body: unknown[]; next: string }> = {
+      '1': { body: Array.from({ length: 100 }, (_, i) => ({ id: `a${i}`, notes: [] })), next: '2' },
+      '2': { body: [{ id: 'late', notes: [] }], next: '' },
+    }
+    const fetcher = (async (url: string) => {
+      urls.push(url)
+      const page = new URL(url).searchParams.get('page') ?? '1'
+      return new Response(JSON.stringify(pages[page].body), { headers: { 'x-next-page': pages[page].next } })
+    }) as typeof fetch
+    const all = await fetchAllDiscussions(fetcher, 'https://g/api/v4/projects/1/merge_requests/2', {})
+    expect(all).toHaveLength(101)
+    expect(all.at(-1)!.id).toBe('late')
+    expect(urls.every((u) => u.includes('per_page=100'))).toBe(true)
+  })
+
+  it('fails on a page that does not load', async () => {
+    const { fetchAllDiscussions } = await import('../src/host/forge/gitlab/gitlab-client.js')
+    const fetcher = (async () => new Response('nope', { status: 500 })) as unknown as typeof fetch
+    await expect(fetchAllDiscussions(fetcher, 'https://g/x', {})).rejects.toThrow(/500/)
+  })
+})
