@@ -52,13 +52,17 @@ export interface ReviewerScopePromptOpts {
  * the bash tool before report_review_findings. A run that cannot execute is
  * reported, never fatal. Pure for testing.
  */
+// A blocking false positive once claimed a nested Alpine binding was undefined
+// while sibling fields with the same binding worked; the rule asks for that check.
+const workingPatternRule = 'WORKING PATTERN RULE: before reporting that code cannot work (an undefined variable or binding, a value that is never sent, a call that always fails), find code in the repository that uses the same pattern, such as sibling fields in the same template or component. If that code works, your premise is wrong: drop the finding, or downgrade it to a question. A blocking or major finding of this kind must quote the lines that prove the pattern differs, including the enclosing scope (the caller that renders a template, the ancestor element that declares a component).'
+
 export function reviewerPromptParts(opts: ReviewerScopePromptOpts): { stable: string[]; dynamic: string[] } {
   const dynamic: string[] = []
   // A part reviews a slice of the MR; the lint rule runs over the whole MR, so parts never get it.
   if (opts.lint !== null && opts.part === undefined) dynamic.push(`LINT RULE: you MUST run the govard lint with the bash tool at least once before report_review_findings, with workdir "${opts.lint.worktreePath}": govard audit run --checks lint --format json --mode auto --timeout auto --lint-provider govard --scope diff --base "${opts.lint.base}". Pass timeoutMs 600000 (the bash tool maximum); if the result says the command is still running and moved to a background job, poll it with job_output and never start it again. Exit 0 means clean and 1 means findings in the JSON output. A run that cannot execute (govard missing, no Docker, a timeout, an unsupported framework) is not a finding and must not stop the review: say that lint was unavailable and continue. A review that never attempts the lint run is incomplete.`)
   if (opts.scopeKind === 'discussion') {
     return {
-      stable: [`${opts.profileInstruction}Review only the requested inline discussion. Do not review unrelated files or start a broad audit. Call gitlab_get_mr_diff, then gitlab_get_file_diff for the file under review, then call report_review_findings exactly once when done.`],
+      stable: [`${opts.profileInstruction}Review only the requested inline discussion. Do not review unrelated files or start a broad audit. Call gitlab_get_mr_diff, then gitlab_get_file_diff for the file under review, then call report_review_findings exactly once when done. ${workingPatternRule}`],
       dynamic: [`The discussion is ${opts.discussionId} at ${opts.path}:${opts.line}.`, ...dynamic],
     }
   }
@@ -69,7 +73,7 @@ export function reviewerPromptParts(opts: ReviewerScopePromptOpts): { stable: st
   if (opts.language !== undefined) dynamic.push(`Write every finding and reply in the language ${opts.language}.`)
   if (opts.part !== undefined) dynamic.push(`This merge request is large and reviewed in parallel parts. You review part ${opts.part.label}: only these ${opts.part.files.length} file(s), and the diff tools serve only them. Other parts cover the rest, so do not report that files are missing.\n${opts.part.files.map((f) => `- ${f}`).join('\n')}`)
   return {
-    stable: [`${opts.profileInstruction}Review this merge request (${opts.mode} mode). Call gitlab_list_own_review_threads and gitlab_get_mr_diff first, then gitlab_get_file_diff per file you inspect (inline results never spill), then call report_review_findings exactly once when done. NO WEB ACCESS: framework and vendor sources are not in the checkout and cannot be fetched; judge framework behaviour from the repository and what you know, and say so in a finding that rests on an unverified framework detail. DEDUP RULE: when a finding matches the substance of an existing own thread (same file and same underlying issue, even if worded differently — including resolved threads, whose reply reopens them), report it as {status: "reply", discussionId} instead of posting a new thread. Use status "new" only for issues with no matching thread. ${deletedFilesRule}`],
+    stable: [`${opts.profileInstruction}Review this merge request (${opts.mode} mode). Call gitlab_list_own_review_threads and gitlab_get_mr_diff first, then gitlab_get_file_diff per file you inspect (inline results never spill), then call report_review_findings exactly once when done. NO WEB ACCESS: framework and vendor sources are not in the checkout and cannot be fetched; judge framework behaviour from the repository and what you know, and say so in a finding that rests on an unverified framework detail. DEDUP RULE: when a finding matches the substance of an existing own thread (same file and same underlying issue, even if worded differently — including resolved threads, whose reply reopens them), report it as {status: "reply", discussionId} instead of posting a new thread. Use status "new" only for issues with no matching thread. ${deletedFilesRule} ${workingPatternRule}`],
     dynamic,
   }
 }

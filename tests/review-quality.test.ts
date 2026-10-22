@@ -21,6 +21,18 @@ describe('web tools', () => {
   })
 })
 
+describe('working-pattern rule', () => {
+  it('makes a "this cannot work" finding check code that already uses the same pattern', () => {
+    for (const scopeKind of ['full', 'discussion'] as const) {
+      const { stable } = reviewerPromptParts({ scopeKind, mode: 'quick', profileInstruction: '', lint: null, discussionId: 'd', path: 'a', line: 1 } as any)
+      const text = stable.join('')
+      expect(text).toMatch(/WORKING PATTERN RULE/)
+      expect(text).toMatch(/same pattern/)
+      expect(text).toMatch(/downgrade|drop/)
+    }
+  })
+})
+
 describe('fan-out', () => {
   it('is off unless the environment or the repo file sets it', async () => {
     expect(effectiveConfig({ ignoreGlobs: [], fanout: {} }, {}).fanout).toBeUndefined()
