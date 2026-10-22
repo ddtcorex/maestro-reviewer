@@ -33,6 +33,34 @@ describe('working-pattern rule', () => {
   })
 })
 
+describe('false-positive guards', () => {
+  const text = (scopeKind: 'full' | 'discussion') =>
+    reviewerPromptParts({ scopeKind, mode: 'quick', profileInstruction: '', lint: null, discussionId: 'd', path: 'a', line: 1 } as any).stable.join('')
+
+  it('caps a claim about framework or vendor behaviour the checkout cannot show', () => {
+    for (const k of ['full', 'discussion'] as const) {
+      expect(text(k)).toMatch(/UNVERIFIED RULE/)
+      expect(text(k)).toMatch(/at most minor/)
+      expect(text(k)).toMatch(/question/)
+    }
+  })
+
+  it('treats behaviour the code or docs call intended as a design question, not a bug', () => {
+    for (const k of ['full', 'discussion'] as const) {
+      expect(text(k)).toMatch(/DOCUMENTED INTENT RULE/)
+      expect(text(k)).toMatch(/docblock/)
+    }
+  })
+
+  it('keeps a thread the author answered settled unless new evidence appears', () => {
+    const t = text('full')
+    expect(t).toMatch(/SETTLED THREAD RULE/)
+    expect(t).toMatch(/humanReplies/)
+    expect(t).toMatch(/never raise its severity/)
+    expect(t).toMatch(/never open a new thread/)
+  })
+})
+
 describe('fan-out', () => {
   it('is off unless the environment or the repo file sets it', async () => {
     expect(effectiveConfig({ ignoreGlobs: [], fanout: {} }, {}).fanout).toBeUndefined()
