@@ -21,6 +21,9 @@
   design question rather than a bug, and an answered thread stays settled
   unless new evidence appears (then as a reply, never at a higher
   severity).
+- A consistency or style finding must follow what most comparable code
+  does, with the count stated, and is dropped when the code is mixed and
+  no configured linter rule requires it.
 - A fallback note for a line past the end of an added file says so,
   instead of claiming the line is not in the MR diff.
 - A report with a new finding that has no code is recorded provisionally

@@ -258,3 +258,15 @@ describe('deleted-file fallback header', () => {
     expect(calls[0].body).toMatch(/^\*\*Inline fallback — `old\/A\.php:7` was deleted in this MR/)
   })
 })
+
+describe('convention rule', () => {
+  it('backs a consistency finding with what most comparable code does, and drops it when the code is mixed', () => {
+    for (const scopeKind of ['full', 'discussion'] as const) {
+      const t = reviewerPromptParts({ scopeKind, mode: 'quick', profileInstruction: '', lint: null, discussionId: 'd', path: 'a', line: 1 } as any).stable.join('')
+      expect(t).toMatch(/CONVENTION RULE/)
+      expect(t).toMatch(/most comparable code/)
+      expect(t).toMatch(/count/)
+      expect(t).toMatch(/mixed/)
+    }
+  })
+})
