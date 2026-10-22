@@ -168,6 +168,16 @@ batch.
      (intro + troubleshooting `:latest` explanation). `grep -rn
      "0\.<prev-minor>\.<prev-patch>" docker/ templates/ docs/ package.json`
      to find every instance before committing.
+   - `profiles/reviewer-ci`'s `@ddtcorex/maestro-skills`: raise the
+     specifier to the latest published version (`npm view
+     @ddtcorex/maestro-skills version`) and lock exactly that version. The
+     skills the reviewer loads come from this pin, and a range never moves
+     the locked version: a `^2.13.0` range kept the image on 2.15.0 until
+     0.19.3, three skill releases behind. If `pnpm update` also moves
+     unrelated packages, edit the three `maestro-skills` lockfile entries by
+     hand (specifier and version, resolution with `npm view … dist.integrity`,
+     snapshot key) and prove it with a cold `pnpm install --frozen-lockfile`
+     of a copy of the profile. Release any pending skill change first.
    - `pnpm verify && pnpm test && pnpm build` clean, then PR → CI green →
      **human `APPROVED`** → squash-merge.
 2. **Tag + publish** (guarded — present the exact commands and get explicit
