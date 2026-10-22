@@ -1,15 +1,22 @@
 # Changelog
 
-## [Unreleased]
+## [0.19.3] - 2026-10-22
+
+### Changed
+
+- The CI image ships `@ddtcorex/maestro-skills` 2.18.2 (was 2.15.0). The
+  profile now declares `^2.18.2`; the old `^2.13.0` range never moved the
+  locked version forward. 2.18.2 teaches the Hyvä review gate that Alpine
+  scope follows the DOM ancestor chain.
 
 ### Fixed
 
 - The reviewer no longer reports that code cannot work while the same
-  pattern works elsewhere in the repository. A new prompt rule, applied to
+  pattern works elsewhere in the repository (#202). A new prompt rule, applied to
   MR and discussion reviews, makes it check code using the same pattern
   first, drop or downgrade the finding when that code works, and quote the
   enclosing scope for a blocking or major finding of this kind.
-- The reviewer sees every thread on a long MR. The thread list read one
+- The reviewer sees every thread on a long MR (#203). The thread list read one
   page of 20 discussions, so newer threads and their replies were missing.
 - Each own thread now carries its opening finding and every human reply,
   and fallback threads posted without a position are listed too. Before,
@@ -23,7 +30,7 @@
   severity).
 - A consistency or style finding must follow what most comparable code
   does, with the count stated, and is dropped when the code is mixed and
-  no configured linter rule requires it.
+  no configured linter rule requires it (#203).
 - A fallback note for a line past the end of an added file says so,
   instead of claiming the line is not in the MR diff.
 - A report with a new finding that has no code is recorded provisionally

@@ -119,7 +119,7 @@ with outside contributors get a reviewer project of their own.
    `my-group/ci/reviewer-config`.
 2. Add `templates/reviewer-project.gitlab-ci.yml` to its default branch as
    `maestro-reviewer.yml`, and pin `REVIEWER_IMAGE` to an exact version
-   (for example `ddtcorex/maestro-reviewer:0.19.2`).
+   (for example `ddtcorex/maestro-reviewer:0.19.3`).
 3. **Settings > Repository > Protected branches**: protect the default branch
    with **Allowed to merge = Maintainers**, **Allowed to push and merge =
    Maintainers**, force push off, and no per-user or per-group entries.

@@ -12,8 +12,8 @@ importers:
         specifier: 0.19.2
         version: 0.19.2(@deepseek-ai/cordis@4.0.4)
       '@ddtcorex/maestro-skills':
-        specifier: ^2.13.0
-        version: 2.15.0(@deepseek-ai/cordis@4.0.4)
+        specifier: ^2.18.2
+        version: 2.18.2(@deepseek-ai/cordis@4.0.4)
       '@deepseek-ai/dsh':
         specifier: 0.2.0-rc.2
         version: 0.2.0-rc.2(6751cfab6367020f439f163e11c2ea97)
@@ -135,11 +135,11 @@ packages:
     peerDependencies:
       '@deepseek-ai/cordis': ~4.0.4
 
-  '@ddtcorex/maestro-skills@2.15.0':
-    resolution: {integrity: sha512-KQ8cBmrlNTu99cdzuYWU+bKXyVJXJx0GJOLNa69+3J1hY7t4SPrkfydEHg2YuYtqGnvBszXYUsMOZf7HMkpGrg==}
+  '@ddtcorex/maestro-skills@2.18.2':
+    resolution: {integrity: sha512-c4zBOu/7LjED5YymtAlpiB66nvp5a5Bt/F9O8SH0jXs5uz+snmiDoG1vx+ChlxLsZO3h5nXEcVryGOtfrpWa8Q==}
     engines: {node: ^22.19.0 || >=24.0.0}
     peerDependencies:
-      '@deepseek-ai/cordis': ^4.0.0
+      '@deepseek-ai/cordis': ~4.0.4
 
   '@deepseek-ai/cordis-plugin-group@1.0.4':
     resolution: {integrity: sha512-/7tuY5pMQetHava4v6QUeOa4CwZA+mleNvbIoj+iqEmzkYUtlXbLqhzJIcbnDa/Hxgr1jaCwROrI77nuLyeCFg==}
@@ -4056,7 +4056,7 @@ snapshots:
       '@deepseek-ai/schemastery': 3.18.5
       yaml: 2.9.1
 
-  '@ddtcorex/maestro-skills@2.15.0(@deepseek-ai/cordis@4.0.4)':
+  '@ddtcorex/maestro-skills@2.18.2(@deepseek-ai/cordis@4.0.4)':
     dependencies:
       '@deepseek-ai/cordis': 4.0.4(@deepseek-ai/cordis-plugin-include@1.0.9)(@deepseek-ai/cordis-plugin-loader@1.0.5)
 
