@@ -42,11 +42,22 @@ export function parseVersion(v) {
 }
 
 // checkRigProof(proofPath, headSha) verifies the local rig evidence: the
-// file must exist, contain the full HEAD SHA, and carry a PASS marker on the
-// same line as each tier keyword (`tier 1` and `tier 2`). A whole-file word
-// search is not enough: a run where a tier FAILED still mentions both tier
-// keywords plus the word "pass" elsewhere, and must be rejected. Never names
-// a gate beyond its reason string.
+// file must exist and contain the full HEAD SHA. Tier verdicts are judged
+// per tier section: a `=== tier N: ... ===` header line opens the tier-N
+// section (any other `=== ... ===` line closes it), and each of the tier-1
+// and tier-2 sections must exist, contain a PASS verdict line, and contain
+// no fail/failure/failed/FAIL token anywhere (a "3 passed, 1 failed" count
+// inside a section rejects). Proofs without section headers keep working via
+// the compact rule (a `tier N` + PASS + no fail token on one line outside
+// any section). A same-line `tier N` + fail token rejects immediately. Never
+// names a gate beyond its reason string.
+const TIER_HEADER_LINE = /^===\s*.*===\s*$/
+const TIER_IN_HEADER = /tier[\s-]*([12])(?!\d)/i
+const TIER_WORD_1 = /tier[\s-]*1(?!\d)/i
+const TIER_WORD_2 = /tier[\s-]*2(?!\d)/i
+const PASS_WORD = /\bpass(es|ed|ing)?\b/i
+const FAIL_WORD = /\bfail(ure|ed|s)?\b/i
+
 export function checkRigProof(proofPath, headSha) {
   let content
   try {
@@ -57,13 +68,36 @@ export function checkRigProof(proofPath, headSha) {
   if (!content.includes(headSha)) {
     return { ok: false, reason: `rig proof does not reference HEAD SHA ${headSha}` }
   }
-  const missing = []
-  if (!/tier[\s-]*1(?!\d)[^\n]*\bpass(es|ed|ing)?\b/i.test(content)) {
-    missing.push('tier 1 PASS')
+  const problems = new Set()
+  const sectionPass = new Set()
+  const compactPass = new Set()
+  let current = null
+  for (const line of content.split('\n')) {
+    if (TIER_HEADER_LINE.test(line)) {
+      const m = TIER_IN_HEADER.exec(line)
+      current = m ? Number(m[1]) : null
+      continue
+    }
+    const tierRes = [TIER_WORD_1, TIER_WORD_2]
+    const hasFail = FAIL_WORD.test(line)
+    const hasPass = PASS_WORD.test(line)
+    for (let i = 0; i < tierRes.length; i++) {
+      if (!tierRes[i].test(line)) continue
+      const n = i + 1
+      if (hasFail) problems.add(`tier ${n} FAIL`)
+      else if (hasPass && current === null) compactPass.add(n)
+    }
+    if (current !== null) {
+      if (hasFail) problems.add(`tier ${current} FAIL`)
+      else if (hasPass) sectionPass.add(current)
+    }
   }
-  if (!/tier[\s-]*2(?!\d)[^\n]*\bpass(es|ed|ing)?\b/i.test(content)) {
-    missing.push('tier 2 PASS')
+  if (problems.size > 0) {
+    return { ok: false, reason: `rig proof reports failure: ${[...problems].sort().join(', ')}` }
   }
+  const missing = [1, 2]
+    .filter((n) => !sectionPass.has(n) && !compactPass.has(n))
+    .map((n) => `tier ${n} PASS`)
   if (missing.length > 0) {
     return { ok: false, reason: `rig proof missing PASS marker(s): ${missing.join(', ')}` }
   }

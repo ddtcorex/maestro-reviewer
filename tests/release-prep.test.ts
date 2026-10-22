@@ -74,6 +74,21 @@ describe('checkRigProof', () => {
     const r = checkRigProof(proof, 'deadbeef1234')
     expect(r.ok).toBe(false)
   })
+  it('accepts sectioned rig output with PASS verdicts after the tier headers', () => {
+    const r = checkRigProof(
+      fixture('rig-proof-sections-pass.txt'),
+      'deadbeef1234feedface00112233445566778899aabb',
+    )
+    expect(r).toEqual({ ok: true })
+  })
+  it('rejects sectioned rig output with a failure count in the tier 2 section', () => {
+    const r = checkRigProof(
+      fixture('rig-proof-sections-tier2-fail.txt'),
+      'deadbeef1234feedface00112233445566778899aabb',
+    )
+    expect(r.ok).toBe(false)
+    expect(r.ok === false && (r as { reason: string }).reason).toMatch(/tier 2 FAIL/)
+  })
 })
 
 describe('REFERENCE_PATHS', () => {
