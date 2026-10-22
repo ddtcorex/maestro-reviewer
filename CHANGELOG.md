@@ -1,5 +1,15 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+
+- The reviewer no longer reports that code cannot work while the same
+  pattern works elsewhere in the repository. A new prompt rule, applied to
+  MR and discussion reviews, makes it check code using the same pattern
+  first, drop or downgrade the finding when that code works, and quote the
+  enclosing scope for a blocking or major finding of this kind.
+
 ## [0.19.2] - 2026-10-21
 
 ### Fixed
