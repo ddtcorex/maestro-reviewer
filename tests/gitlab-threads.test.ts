@@ -121,3 +121,44 @@ describe('own threads carry the finding and the human replies', () => {
     expect(out.threads[0].humanReplies[0].length).toBeLessThanOrEqual(2001)
   })
 })
+
+describe('final review fixes: thread list', () => {
+  const finding = '🟡 Major · `BUG-SKIP`\n\n**Title.**'
+
+  it('ignores GitLab system notes for replies and the last comment', () => {
+    const out = selectOwnThreads([
+      { id: 'd1', notes: [
+        note('review-bot', finding, { position: pos('a.php', 9) }),
+        note('author', 'By design.'),
+        note('author', 'changed this line in version 3 of the diff', { system: true }),
+      ] },
+    ], 'review-bot')
+    expect(out.threads[0].humanReplies).toEqual(['By design.'])
+    expect(out.threads[0].lastCommentBody).toBe('By design.')
+  })
+
+  it('keeps the list small: the last three replies, each capped, and a capped last comment', () => {
+    const replies = Array.from({ length: 6 }, (_, i) => note('author', `r${i} ` + 'x'.repeat(3000)))
+    const out = selectOwnThreads([{ id: 'd2', notes: [note('review-bot', finding, { position: pos('a.php', 1) }), ...replies] }], 'review-bot')
+    expect(out.threads[0].humanReplies).toHaveLength(3)
+    expect(out.threads[0].humanReplies[0].startsWith('r3 ')).toBe(true)
+    expect(out.threads[0].humanReplies.every((r) => r.length <= 1000)).toBe(true)
+    expect(out.threads[0].lastCommentBody.length).toBeLessThanOrEqual(1000)
+  })
+
+  it('redacts human replies', () => {
+    const out = selectOwnThreads([{ id: 'd3', notes: [note('review-bot', finding, { position: pos('a.php', 1) }), note('author', "'password' => 'hunter22'")] }], 'review-bot')
+    expect(out.threads[0].humanReplies[0]).not.toContain('hunter22')
+  })
+
+  it('lists a fallback thread for a deleted file', () => {
+    const out = selectOwnThreads([{ id: 'd4', notes: [note('review-bot', '**Inline fallback — `old/A.php:7` was deleted in this MR (no line to attach a comment to)**\n\n' + finding)] }], 'review-bot')
+    expect(out.threads[0]).toMatchObject({ path: 'old/A.php', line: 7, finding: '🟡 Major · `BUG-SKIP` **Title.**' })
+  })
+
+  it('stops on a page that repeats forever', async () => {
+    const { fetchAllDiscussions } = await import('../src/host/forge/gitlab/gitlab-client.js')
+    const fetcher = (async () => new Response(JSON.stringify([{ id: 'x', notes: [] }]), { headers: { 'x-next-page': '2' } })) as unknown as typeof fetch
+    await expect(fetchAllDiscussions(fetcher, 'https://g/x', {})).rejects.toThrow(/pages/)
+  })
+})

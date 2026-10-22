@@ -214,7 +214,7 @@ export async function postReviewFindings(findings: ReviewFinding[], config: Gitl
       if (change.deleted_file === true) {
         response = await fetcher(`${apiBase}/discussions`, {
           method: 'POST', headers,
-          body: JSON.stringify({ body: `**Inline fallback — \`${finding.path}\` was deleted in this MR (no line ${finding.line} to attach a comment to)**\n\n${body}` }),
+          body: JSON.stringify({ body: `**Inline fallback — \`${finding.path}:${finding.line}\` was deleted in this MR (no line to attach a comment to)**\n\n${body}` }),
         })
         if (!response.ok) throw new Error(`GitLab API error ${response.status}: ${await response.text()}`)
         continue

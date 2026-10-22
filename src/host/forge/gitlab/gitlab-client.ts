@@ -157,6 +157,8 @@ interface GitlabDiscussionNote {
   author: { username: string }
   position?: { new_path: string, new_line: number | null }
   resolved: boolean
+  /** GitLab's own notes, e.g. "changed this line in version 3 of the diff". */
+  system?: boolean
 }
 
 interface GitlabDiscussion {
@@ -177,7 +179,10 @@ interface OwnThread {
 }
 
 const FALLBACK_HEAD = /^\*\*Inline fallback — `([^`]+?):(\d+)` [^\n]*\*\*\n+/
-const REPLY_CAP = 2000
+// Caps keep the thread list inline: a spilled tool result cannot be read back.
+const REPLY_CAP = 1000
+const REPLIES_KEPT = 3
+const MAX_DISCUSSION_PAGES = 20
 
 /** First two lines of the finding (severity and code, then the title), fallback header removed. */
 function findingHead(body: string): string {
@@ -220,7 +225,8 @@ function sessionCwd(e: unknown): string | undefined {
 export async function fetchAllDiscussions(fetcher: typeof fetch, apiBase: string, headers: Record<string, string>): Promise<GitlabDiscussion[]> {
   const all: GitlabDiscussion[] = []
   let page = '1'
-  while (page !== '') {
+  for (let n = 0; page !== ''; n++) {
+    if (n === MAX_DISCUSSION_PAGES) throw new Error(`MR has more than ${MAX_DISCUSSION_PAGES} pages of discussions`)
     const response = await fetcher(`${apiBase}/discussions?per_page=100&page=${page}`, { headers })
     if (!response.ok) throw new Error(`GitLab API error ${response.status}: ${await response.text()}`)
     const batch = await response.json() as GitlabDiscussion[]
@@ -247,9 +253,9 @@ export function selectOwnThreads(
       discussionId: d.id,
       ...threadLocation(d.notes[0])!,
       // Human replies reach the model here too: redact them like the diffs.
-      lastCommentBody: redact(d.notes[d.notes.length - 1].body).text,
+      lastCommentBody: redact(d.notes.filter(n => n.system !== true).at(-1)!.body).text.slice(0, REPLY_CAP),
       finding: findingHead(d.notes[0].body),
-      humanReplies: d.notes.slice(1).filter(n => n.author.username !== botUsername).map(n => redact(n.body).text.slice(0, REPLY_CAP)),
+      humanReplies: d.notes.slice(1).filter(n => n.system !== true && n.author.username !== botUsername).slice(-REPLIES_KEPT).map(n => redact(n.body).text.slice(0, REPLY_CAP)),
       resolved: d.notes[0].resolved === true,
     }))
   return { threads, totalDiscussions: discussions.length }

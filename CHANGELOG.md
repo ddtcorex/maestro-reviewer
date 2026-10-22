@@ -23,8 +23,12 @@
   severity).
 - A fallback note for a line past the end of an added file says so,
   instead of claiming the line is not in the MR diff.
-- A report with a new finding that has no code goes back to the reviewer
-  once; the second attempt is recorded as is.
+- A report with a new finding that has no code is recorded provisionally
+  and goes back to the reviewer once to add codes; the resend replaces it.
+  Discussion reviews are not asked, since their findings become replies.
+- The thread list leaves out GitLab system notes ("changed this line in
+  version N of the diff"), keeps the last three human replies at most 1000
+  characters each, and stops after 20 pages of discussions.
 
 ## [0.19.2] - 2026-10-21
 

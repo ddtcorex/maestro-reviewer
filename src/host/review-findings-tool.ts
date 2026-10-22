@@ -33,11 +33,13 @@ export function normalizeFindings(findings: ReviewFinding[]): ReviewFinding[] {
 
 export interface Config {
   onReport: (findings: ReviewFinding[]) => void
+  /** False where codes are never used, e.g. a discussion review whose findings become replies. */
+  requireCodes?: boolean
 }
 
 export function apply(ctx: Context, config: Config): void {
-  // A new finding without a code cannot be matched to its thread on the next run.
-  // The report goes back once; a second attempt is kept as is so no review is lost.
+  // A new finding without a code cannot be matched to its thread on the next run,
+  // so the report goes back once; the second attempt is kept as is.
   let askedForCodes = false
   ctx.tools.register(defineTool({
     name: 'report_review_findings',
@@ -70,11 +72,12 @@ export function apply(ctx: Context, config: Config): void {
     async execute(args) {
       const findings = normalizeFindings(args.findings as ReviewFinding[])
       const uncoded = findings.flatMap((f, i) => f.status === 'new' && f.code === undefined ? [i + 1] : [])
-      if (uncoded.length > 0 && !askedForCodes) {
-        askedForCodes = true
-        throw new Error(`Nothing was recorded: finding ${uncoded.join(', ')} has no code. Give every new finding a code (uppercase with dashes, e.g. BUG-STALE-CACHE) and call report_review_findings again with the complete list.`)
-      }
+      // Recorded before asking, so a reviewer that never resends still posts its findings.
       config.onReport(findings)
+      if (uncoded.length > 0 && config.requireCodes !== false && !askedForCodes) {
+        askedForCodes = true
+        throw new Error(`Recorded provisionally: finding ${uncoded.join(', ')} has no code. Give every new finding a code (uppercase with dashes, e.g. BUG-STALE-CACHE) and call report_review_findings again with the complete list; it replaces this one.`)
+      }
       return { received: findings.length }
     },
   }))

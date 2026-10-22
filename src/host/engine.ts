@@ -265,7 +265,7 @@ export function createEngineAgents(ctx: Context): EngineAgents {
             await agentCtx.plugin(ReviewToolPolicy, { onToolCall: run.onToolCall })
             await mountAgentPreset(ctx.agentPresets, agentCtx, 'dsh-maestro-reviewer')
             await run.forge.mountAgentTools(agentCtx, { onDiffTruncated: () => { diffTruncated = true }, ...(chunk !== undefined ? { onlyPaths: chunk.files, partLabel: chunk.label } : {}) })
-            await agentCtx.plugin(ReviewFindingsTool, { onReport: (findings) => { capturedFindings = findings } })
+            await agentCtx.plugin(ReviewFindingsTool, { onReport: (findings) => { capturedFindings = findings }, requireCodes: payload.scope.kind !== 'discussion' })
             // Diff-only runs have no worktree; nothing to search there.
             if (worktreePath !== undefined) {
               await agentCtx.plugin(HyvaThemeInspectTool, { rootPath: worktreePath })

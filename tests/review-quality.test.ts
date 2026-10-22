@@ -211,7 +211,6 @@ describe('finding codes', () => {
   it('sends a report with an uncoded new finding back once, naming the finding', async () => {
     const t = await tool()
     await expect(t.run([{ status: 'new', path: 'a', line: 1, body: 'x', code: 'BUG-A' }, { status: 'new', path: 'a', line: 2, body: 'y' }])).rejects.toThrow(/finding 2.*code/)
-    expect(t.reports).toHaveLength(0)
   })
 
   it('accepts the second attempt even without codes, so a review is never lost', async () => {
@@ -223,5 +222,39 @@ describe('finding codes', () => {
   it('never asks a reply for a code', async () => {
     const t = await tool()
     await expect(t.run([{ status: 'reply', discussionId: 'd', body: 'y' }])).resolves.toEqual({ received: 1 })
+  })
+})
+
+describe('final review fixes: finding codes', () => {
+  const tool = async (requireCodes?: boolean) => {
+    const { apply } = await import('../src/host/review-findings-tool.js')
+    let t: any
+    const reports: unknown[][] = []
+    apply({ tools: { register: (x: unknown) => { t = x } } } as any, { onReport: (f) => reports.push(f), ...(requireCodes === undefined ? {} : { requireCodes }) })
+    return { run: (findings: unknown[]) => t.execute({ findings }), reports }
+  }
+
+  it('records the uncoded report provisionally, so a reviewer that never resends loses nothing', async () => {
+    const t = await tool()
+    await expect(t.run([{ status: 'new', path: 'a', line: 2, body: 'y', severity: 'blocking' }])).rejects.toThrow(/provisionally/)
+    expect(t.reports).toHaveLength(1)
+  })
+
+  it('does not ask a discussion-scope reviewer for codes', async () => {
+    const t = await tool(false)
+    await expect(t.run([{ status: 'new', path: 'a', line: 2, body: 'y' }])).resolves.toEqual({ received: 1 })
+  })
+})
+
+describe('deleted-file fallback header', () => {
+  it('names path and line so the thread can be listed again', async () => {
+    const { postReviewFindings } = await import('../src/host/forge/gitlab/mr-api.js')
+    const calls: { body: string }[] = []
+    await postReviewFindings([{ status: 'new', body: 'x', path: 'old/A.php', line: 7, severity: 'minor', code: 'BUG-X' }], {
+      baseUrl: 'https://g', token: 't', projectId: 1, mrIid: 2,
+      fetcher: ((_u: string, init?: RequestInit) => { calls.push(JSON.parse(String(init?.body))); return Promise.resolve({ ok: true }) }) as typeof fetch,
+      snapshot: Promise.resolve({ diffRefs: { base_sha: 'b', start_sha: 's', head_sha: 'h' }, changes: [{ old_path: 'old/A.php', new_path: 'old/A.php', deleted_file: true, diff: '@@ -1,1 +0,0 @@\n-a' }] }),
+    } as never)
+    expect(calls[0].body).toMatch(/^\*\*Inline fallback — `old\/A\.php:7` was deleted in this MR/)
   })
 })
