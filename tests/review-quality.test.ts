@@ -33,6 +33,34 @@ describe('working-pattern rule', () => {
   })
 })
 
+describe('false-positive guards', () => {
+  const text = (scopeKind: 'full' | 'discussion') =>
+    reviewerPromptParts({ scopeKind, mode: 'quick', profileInstruction: '', lint: null, discussionId: 'd', path: 'a', line: 1 } as any).stable.join('')
+
+  it('caps a claim about framework or vendor behaviour the checkout cannot show', () => {
+    for (const k of ['full', 'discussion'] as const) {
+      expect(text(k)).toMatch(/UNVERIFIED RULE/)
+      expect(text(k)).toMatch(/at most minor/)
+      expect(text(k)).toMatch(/question/)
+    }
+  })
+
+  it('treats behaviour the code or docs call intended as a design question, not a bug', () => {
+    for (const k of ['full', 'discussion'] as const) {
+      expect(text(k)).toMatch(/DOCUMENTED INTENT RULE/)
+      expect(text(k)).toMatch(/docblock/)
+    }
+  })
+
+  it('keeps a thread the author answered settled unless new evidence appears', () => {
+    const t = text('full')
+    expect(t).toMatch(/SETTLED THREAD RULE/)
+    expect(t).toMatch(/humanReplies/)
+    expect(t).toMatch(/never raise its severity/)
+    expect(t).toMatch(/never open a new thread/)
+  })
+})
+
 describe('fan-out', () => {
   it('is off unless the environment or the repo file sets it', async () => {
     expect(effectiveConfig({ ignoreGlobs: [], fanout: {} }, {}).fanout).toBeUndefined()
@@ -148,6 +176,97 @@ describe('host worktree redaction (I3)', () => {
     } finally {
       await rm(root, { recursive: true, force: true })
       await rm(outside, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('a line past the end of a new file', () => {
+  const posted = async (line: number) => {
+    const { postReviewFindings } = await import('../src/host/forge/gitlab/mr-api.js')
+    const calls: { body: string }[] = []
+    await postReviewFindings([{ status: 'new', body: 'x', path: 'src/A.php', line, severity: 'major', code: 'BUG-X' }], {
+      baseUrl: 'https://g', token: 't', projectId: 1, mrIid: 2,
+      fetcher: ((_u: string, init?: RequestInit) => { calls.push(JSON.parse(String(init?.body))); return Promise.resolve({ ok: true }) }) as typeof fetch,
+      snapshot: Promise.resolve({ diffRefs: { base_sha: 'b', start_sha: 's', head_sha: 'h' }, changes: [{ old_path: 'src/A.php', new_path: 'src/A.php', new_file: true, diff: '@@ -0,0 +1,3 @@\n+a\n+b\n+c' }] }),
+    } as never)
+    return calls[0].body
+  }
+
+  it('says the line does not exist instead of claiming it is outside the diff', async () => {
+    const body = await posted(4090)
+    expect(body).toMatch(/^\*\*Inline fallback — `src\/A\.php:4090` is past the end of the file \(3 lines\)\*\*/)
+    expect(body).not.toMatch(/not in current MR diff/)
+  })
+})
+
+describe('finding codes', () => {
+  const tool = async () => {
+    const { apply } = await import('../src/host/review-findings-tool.js')
+    let tool: any
+    const reports: unknown[][] = []
+    apply({ tools: { register: (t: unknown) => { tool = t } } } as any, { onReport: (f) => reports.push(f) })
+    return { run: (findings: unknown[]) => tool.execute({ findings }), reports }
+  }
+
+  it('sends a report with an uncoded new finding back once, naming the finding', async () => {
+    const t = await tool()
+    await expect(t.run([{ status: 'new', path: 'a', line: 1, body: 'x', code: 'BUG-A' }, { status: 'new', path: 'a', line: 2, body: 'y' }])).rejects.toThrow(/finding 2.*code/)
+  })
+
+  it('accepts the second attempt even without codes, so a review is never lost', async () => {
+    const t = await tool()
+    await expect(t.run([{ status: 'new', path: 'a', line: 2, body: 'y' }])).rejects.toThrow()
+    await expect(t.run([{ status: 'new', path: 'a', line: 2, body: 'y' }])).resolves.toEqual({ received: 1 })
+  })
+
+  it('never asks a reply for a code', async () => {
+    const t = await tool()
+    await expect(t.run([{ status: 'reply', discussionId: 'd', body: 'y' }])).resolves.toEqual({ received: 1 })
+  })
+})
+
+describe('final review fixes: finding codes', () => {
+  const tool = async (requireCodes?: boolean) => {
+    const { apply } = await import('../src/host/review-findings-tool.js')
+    let t: any
+    const reports: unknown[][] = []
+    apply({ tools: { register: (x: unknown) => { t = x } } } as any, { onReport: (f) => reports.push(f), ...(requireCodes === undefined ? {} : { requireCodes }) })
+    return { run: (findings: unknown[]) => t.execute({ findings }), reports }
+  }
+
+  it('records the uncoded report provisionally, so a reviewer that never resends loses nothing', async () => {
+    const t = await tool()
+    await expect(t.run([{ status: 'new', path: 'a', line: 2, body: 'y', severity: 'blocking' }])).rejects.toThrow(/provisionally/)
+    expect(t.reports).toHaveLength(1)
+  })
+
+  it('does not ask a discussion-scope reviewer for codes', async () => {
+    const t = await tool(false)
+    await expect(t.run([{ status: 'new', path: 'a', line: 2, body: 'y' }])).resolves.toEqual({ received: 1 })
+  })
+})
+
+describe('deleted-file fallback header', () => {
+  it('names path and line so the thread can be listed again', async () => {
+    const { postReviewFindings } = await import('../src/host/forge/gitlab/mr-api.js')
+    const calls: { body: string }[] = []
+    await postReviewFindings([{ status: 'new', body: 'x', path: 'old/A.php', line: 7, severity: 'minor', code: 'BUG-X' }], {
+      baseUrl: 'https://g', token: 't', projectId: 1, mrIid: 2,
+      fetcher: ((_u: string, init?: RequestInit) => { calls.push(JSON.parse(String(init?.body))); return Promise.resolve({ ok: true }) }) as typeof fetch,
+      snapshot: Promise.resolve({ diffRefs: { base_sha: 'b', start_sha: 's', head_sha: 'h' }, changes: [{ old_path: 'old/A.php', new_path: 'old/A.php', deleted_file: true, diff: '@@ -1,1 +0,0 @@\n-a' }] }),
+    } as never)
+    expect(calls[0].body).toMatch(/^\*\*Inline fallback — `old\/A\.php:7` was deleted in this MR/)
+  })
+})
+
+describe('convention rule', () => {
+  it('backs a consistency finding with what most comparable code does, and drops it when the code is mixed', () => {
+    for (const scopeKind of ['full', 'discussion'] as const) {
+      const t = reviewerPromptParts({ scopeKind, mode: 'quick', profileInstruction: '', lint: null, discussionId: 'd', path: 'a', line: 1 } as any).stable.join('')
+      expect(t).toMatch(/CONVENTION RULE/)
+      expect(t).toMatch(/most comparable code/)
+      expect(t).toMatch(/count/)
+      expect(t).toMatch(/mixed/)
     }
   })
 })

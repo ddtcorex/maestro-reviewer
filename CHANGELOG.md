@@ -9,6 +9,29 @@
   MR and discussion reviews, makes it check code using the same pattern
   first, drop or downgrade the finding when that code works, and quote the
   enclosing scope for a blocking or major finding of this kind.
+- The reviewer sees every thread on a long MR. The thread list read one
+  page of 20 discussions, so newer threads and their replies were missing.
+- Each own thread now carries its opening finding and every human reply,
+  and fallback threads posted without a position are listed too. Before,
+  only the last comment was shown, so an answered finding came back as a
+  new thread, sometimes at a higher severity.
+- Three prompt rules guard against the false positives authors rejected
+  most: a claim about vendor behaviour the checkout cannot show is at most
+  a minor question, behaviour a docblock or the docs call intended is a
+  design question rather than a bug, and an answered thread stays settled
+  unless new evidence appears (then as a reply, never at a higher
+  severity).
+- A consistency or style finding must follow what most comparable code
+  does, with the count stated, and is dropped when the code is mixed and
+  no configured linter rule requires it.
+- A fallback note for a line past the end of an added file says so,
+  instead of claiming the line is not in the MR diff.
+- A report with a new finding that has no code is recorded provisionally
+  and goes back to the reviewer once to add codes; the resend replaces it.
+  Discussion reviews are not asked, since their findings become replies.
+- The thread list leaves out GitLab system notes ("changed this line in
+  version N of the diff"), keeps the last three human replies at most 1000
+  characters each, and stops after 20 pages of discussions.
 
 ## [0.19.2] - 2026-10-21
 

@@ -157,6 +157,8 @@ interface GitlabDiscussionNote {
   author: { username: string }
   position?: { new_path: string, new_line: number | null }
   resolved: boolean
+  /** GitLab's own notes, e.g. "changed this line in version 3 of the diff". */
+  system?: boolean
 }
 
 interface GitlabDiscussion {
@@ -169,7 +171,28 @@ interface OwnThread {
   path: string
   line: number | null
   lastCommentBody: string
+  /** The finding the thread opened with: severity, code and title. */
+  finding: string
+  /** What people answered, oldest first; the bot's own follow-ups are left out. */
+  humanReplies: string[]
   resolved: boolean
+}
+
+const FALLBACK_HEAD = /^\*\*Inline fallback — `([^`]+?):(\d+)` [^\n]*\*\*\n+/
+// Caps keep the thread list inline: a spilled tool result cannot be read back.
+const REPLY_CAP = 1000
+const REPLIES_KEPT = 3
+const MAX_DISCUSSION_PAGES = 20
+
+/** First two lines of the finding (severity and code, then the title), fallback header removed. */
+function findingHead(body: string): string {
+  return body.replace(FALLBACK_HEAD, '').split('\n').map((l) => l.trim()).filter((l) => l !== '').slice(0, 2).join(' ').slice(0, 400)
+}
+
+function threadLocation(first: GitlabDiscussionNote): { path: string; line: number | null } | undefined {
+  if (first.position !== undefined) return { path: first.position.new_path, line: first.position.new_line }
+  const m = FALLBACK_HEAD.exec(first.body)
+  return m === null ? undefined : { path: m[1], line: Number(m[2]) }
 }
 
 /**
@@ -198,6 +221,21 @@ function sessionCwd(e: unknown): string | undefined {
   return typeof cwd === 'string' && cwd !== '' ? cwd : undefined
 }
 
+/** Every discussion of the MR: GitLab serves 20 per page by default, and a long MR has more. */
+export async function fetchAllDiscussions(fetcher: typeof fetch, apiBase: string, headers: Record<string, string>): Promise<GitlabDiscussion[]> {
+  const all: GitlabDiscussion[] = []
+  let page = '1'
+  for (let n = 0; page !== ''; n++) {
+    if (n === MAX_DISCUSSION_PAGES) throw new Error(`MR has more than ${MAX_DISCUSSION_PAGES} pages of discussions`)
+    const response = await fetcher(`${apiBase}/discussions?per_page=100&page=${page}`, { headers })
+    if (!response.ok) throw new Error(`GitLab API error ${response.status}: ${await response.text()}`)
+    const batch = await response.json() as GitlabDiscussion[]
+    all.push(...batch)
+    page = batch.length === 0 ? '' : (response.headers.get('x-next-page') ?? '')
+  }
+  return all
+}
+
 /**
  * Pick this bot's inline threads out of the MR discussions list, including
  * resolved ones (flagged) so a same-SHA re-review can reply-update instead
@@ -208,15 +246,16 @@ export function selectOwnThreads(
   botUsername: string,
 ): { threads: OwnThread[]; totalDiscussions: number } {
   const threads = discussions
-    .filter(d => d.notes.length > 0 && d.notes[0].author.username === botUsername && d.notes[0].position !== undefined)
+    .filter(d => d.notes.length > 0 && d.notes[0].author.username === botUsername && threadLocation(d.notes[0]) !== undefined)
     // The engine's own findings are not the model's to answer or regrade.
     .filter(d => !ENGINE_FINDING_CODES.has(findingCodeOf(d.notes[0].body) ?? ''))
     .map(d => ({
       discussionId: d.id,
-      path: d.notes[0].position!.new_path,
-      line: d.notes[0].position!.new_line,
+      ...threadLocation(d.notes[0])!,
       // Human replies reach the model here too: redact them like the diffs.
-      lastCommentBody: redact(d.notes[d.notes.length - 1].body).text,
+      lastCommentBody: redact(d.notes.filter(n => n.system !== true).at(-1)!.body).text.slice(0, REPLY_CAP),
+      finding: findingHead(d.notes[0].body),
+      humanReplies: d.notes.slice(1).filter(n => n.system !== true && n.author.username !== botUsername).slice(-REPLIES_KEPT).map(n => redact(n.body).text.slice(0, REPLY_CAP)),
       resolved: d.notes[0].resolved === true,
     }))
   return { threads, totalDiscussions: discussions.length }
@@ -344,6 +383,8 @@ export function apply(ctx: Context, config: Config): void {
                 path: { type: 'string', required: true },
                 line: { type: 'number' },
                 lastCommentBody: { type: 'string', required: true },
+                finding: { type: 'string', required: true },
+                humanReplies: { type: 'array', items: { type: 'string' }, required: true },
                 resolved: { type: 'boolean', required: true },
               },
             },
@@ -357,12 +398,7 @@ export function apply(ctx: Context, config: Config): void {
       }],
     },
     async execute() {
-      const response = await fetch(`${apiBase}/discussions`, { headers })
-      if (!response.ok) {
-        throw new Error(`GitLab API error ${response.status}: ${await response.text()}`)
-      }
-      const discussions = await response.json() as GitlabDiscussion[]
-      return selectOwnThreads(discussions, config.botUsername)
+      return selectOwnThreads(await fetchAllDiscussions(fetch, apiBase, headers), config.botUsername)
     },
   }))
 

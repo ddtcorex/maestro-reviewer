@@ -33,9 +33,14 @@ export function normalizeFindings(findings: ReviewFinding[]): ReviewFinding[] {
 
 export interface Config {
   onReport: (findings: ReviewFinding[]) => void
+  /** False where codes are never used, e.g. a discussion review whose findings become replies. */
+  requireCodes?: boolean
 }
 
 export function apply(ctx: Context, config: Config): void {
+  // A new finding without a code cannot be matched to its thread on the next run,
+  // so the report goes back once; the second attempt is kept as is.
+  let askedForCodes = false
   ctx.tools.register(defineTool({
     name: 'report_review_findings',
     description: 'Submit your complete list of review findings exactly once, when done analyzing. Each finding is {status: "new", path, line, body, severity, category?} for a location with no existing thread, or {status: "reply", discussionId, body, severity, category?} to update an existing thread returned by gitlab_list_own_review_threads (reply to a resolved thread reopens it — prefer reply over new when the substance matches). Severity (required in spirit, defaults to minor): blocking = must fix before merge (regression, data loss, real XSS/RCE); major = should fix (correctness bug, security hardening with a realistic path); minor = nice to fix (perf nit with impact, stale docs, fragile coupling); nit = style/micro with no behavior impact.',
@@ -55,7 +60,7 @@ export function apply(ctx: Context, config: Config): void {
             discussionId: { type: 'string' },
             severity: { type: 'string', enum: ['blocking', 'major', 'minor', 'nit'] },
             category: { type: 'string' },
-            code: { type: 'string', description: 'Optional short stable id for the kind of issue, uppercase with dashes, e.g. SEC-XSS-ESCAPE or PERF-N-PLUS-ONE. Reuse the same code for the same kind of issue.' },
+            code: { type: 'string', description: 'Required for a new finding: short stable id for the kind of issue, uppercase with dashes, e.g. SEC-XSS-ESCAPE or PERF-N-PLUS-ONE. Reuse the same code for the same kind of issue.' },
           },
         },
       },
@@ -66,7 +71,13 @@ export function apply(ctx: Context, config: Config): void {
     },
     async execute(args) {
       const findings = normalizeFindings(args.findings as ReviewFinding[])
+      const uncoded = findings.flatMap((f, i) => f.status === 'new' && f.code === undefined ? [i + 1] : [])
+      // Recorded before asking, so a reviewer that never resends still posts its findings.
       config.onReport(findings)
+      if (uncoded.length > 0 && config.requireCodes !== false && !askedForCodes) {
+        askedForCodes = true
+        throw new Error(`Recorded provisionally: finding ${uncoded.join(', ')} has no code. Give every new finding a code (uppercase with dashes, e.g. BUG-STALE-CACHE) and call report_review_findings again with the complete list; it replaces this one.`)
+      }
       return { received: findings.length }
     },
   }))
