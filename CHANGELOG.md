@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.19.4] - 2026-10-22
+
+### Fixed
+
+- A finding on a file the MR does not change is posted (#207). It used to
+  fail with "file is not in the current MR diff", so its text was lost
+  while the summary still counted it. It now posts as a top-level note
+  headed "is outside the files this MR changes". A path that does not
+  exist at the MR head is still reported as a failure. A new prompt rule
+  keeps these findings tied to the MR goal: an incomplete fix, or a caller
+  the change breaks.
+
 ## [0.19.3] - 2026-10-22
 
 ### Changed
