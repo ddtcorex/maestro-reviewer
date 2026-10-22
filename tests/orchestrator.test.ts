@@ -29,11 +29,37 @@ describe('postReviewFindings path matching', () => {
     expect((calls[0] as { position: { new_path: string } }).position.new_path).toBe(CANONICAL)
   })
 
-  it('still rejects findings for files outside the MR diff', async () => {
+  function outsidePoster(fileStatus: number, calls: { url: string; method: string; body?: { body: string; position?: unknown } }[]) {
+    return {
+      ...poster([{ old_path: CANONICAL, new_path: CANONICAL, diff: DIFF }], []),
+      fetcher: ((url: string, init?: RequestInit) => {
+        calls.push({ url, method: init?.method ?? 'GET', ...init?.body === undefined ? {} : { body: JSON.parse(String(init.body)) } })
+        if ((init?.method ?? 'GET') === 'GET') return Promise.resolve({ ok: fileStatus === 200, status: fileStatus, text: () => Promise.resolve('<?php') })
+        return Promise.resolve({ ok: true })
+      }) as typeof fetch,
+    }
+  }
+
+  it('posts a finding on an existing file outside the MR diff as a labeled top-level note', async () => {
+    const calls: { url: string; method: string; body?: { body: string; position?: unknown } }[] = []
+    await postReviewFindings(
+      [{ status: 'new', body: 'inline script not registered', path: 'src/view/b.phtml', line: 54, severity: 'major', code: 'CSP-X' }],
+      outsidePoster(200, calls) as never,
+    )
+    expect(calls[0].url).toContain('/repository/files/src%2Fview%2Fb.phtml/raw?ref=h')
+    const note = calls.find(c => c.method === 'POST')!.body!
+    expect(note.position).toBeUndefined()
+    expect(note.body).toMatch(/^\*\*Inline fallback — `src\/view\/b\.phtml:54` is outside the files this MR changes\*\*/)
+    expect(note.body).toContain('inline script not registered')
+  })
+
+  it('rejects a finding on a file that does not exist at the MR head', async () => {
+    const calls: { url: string; method: string }[] = []
     await expect(postReviewFindings(
       [{ status: 'new', body: 'b', path: 'app/code/Never/Mentioned.php', line: 1 }],
-      poster([] as never[], []) as never,
-    )).rejects.toThrow(/not in the current MR diff/)
+      outsidePoster(404, calls) as never,
+    )).rejects.toThrow(/does not exist at the MR head/)
+    expect(calls.filter(c => c.method === 'POST')).toHaveLength(0)
   })
 
   it('falls back to a clearly-labeled top-level note for a finding on a deleted file', async () => {

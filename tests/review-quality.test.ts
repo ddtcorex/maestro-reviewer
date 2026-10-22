@@ -259,6 +259,18 @@ describe('deleted-file fallback header', () => {
   })
 })
 
+describe('outside diff rule', () => {
+  it('limits findings on unchanged files to ones tied to the MR goal, in a full review only', () => {
+    const full = reviewerPromptParts({ scopeKind: 'full', mode: 'quick', profileInstruction: '', lint: null } as any).stable.join('')
+    expect(full).toMatch(/OUTSIDE DIFF RULE/)
+    expect(full).toMatch(/does not change/)
+    expect(full).toMatch(/incomplete/)
+    expect(full).toMatch(/caller/)
+    const discussion = reviewerPromptParts({ scopeKind: 'discussion', mode: 'quick', profileInstruction: '', lint: null, discussionId: 'd', path: 'a', line: 1 } as any).stable.join('')
+    expect(discussion).not.toMatch(/OUTSIDE DIFF RULE/)
+  })
+})
+
 describe('convention rule', () => {
   it('backs a consistency finding with what most comparable code does, and drops it when the code is mixed', () => {
     for (const scopeKind of ['full', 'discussion'] as const) {

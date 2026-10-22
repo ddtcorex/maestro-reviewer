@@ -203,7 +203,22 @@ export async function postReviewFindings(findings: ReviewFinding[], config: Gitl
       const requestedPath = normalizedDiffPath(finding.path)
       const change = snapshot.changes.find(candidate => normalizedDiffPath(candidate.new_path) === requestedPath)
         ?? snapshot.changes.find(candidate => normalizedDiffPath(candidate.old_path) === requestedPath)
-      if (change === undefined) throw new Error(`cannot post inline finding at ${finding.path}:${finding.line}: file is not in the current MR diff`)
+      if (change === undefined) {
+        // A finding on a file the MR did not touch (an incomplete fix, a broken caller)
+        // still reaches the author as a top-level note; a path missing at head is a
+        // model error and stays a failure.
+        const exists = await fetchRepoFile(fetcher, {
+          baseUrl: config.baseUrl, token: config.token, projectId: config.projectId,
+          ref: snapshot.diffRefs.head_sha, path: requestedPath,
+        })
+        if (exists === undefined) throw new Error(`cannot post finding at ${finding.path}:${finding.line}: file does not exist at the MR head`)
+        response = await fetcher(`${apiBase}/discussions`, {
+          method: 'POST', headers,
+          body: JSON.stringify({ body: `**Inline fallback — \`${requestedPath}:${finding.line}\` is outside the files this MR changes**\n\n${body}` }),
+        })
+        if (!response.ok) throw new Error(`GitLab API error ${response.status}: ${await response.text()}`)
+        continue
+      }
       if (change.collapsed === true || change.too_large === true || change.diff === '') {
         throw new Error(`cannot post inline finding at ${finding.path}:${finding.line}: GitLab did not return this file's complete diff`)
       }

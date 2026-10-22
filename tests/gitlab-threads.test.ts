@@ -156,6 +156,11 @@ describe('final review fixes: thread list', () => {
     expect(out.threads[0]).toMatchObject({ path: 'old/A.php', line: 7, finding: '🟡 Major · `BUG-SKIP` **Title.**' })
   })
 
+  it('lists a fallback thread for a file outside the MR diff', () => {
+    const out = selectOwnThreads([{ id: 'd5', notes: [note('review-bot', '**Inline fallback — `src/B.phtml:54` is outside the files this MR changes**\n\n' + finding)] }], 'review-bot')
+    expect(out.threads[0]).toMatchObject({ path: 'src/B.phtml', line: 54, finding: '🟡 Major · `BUG-SKIP` **Title.**' })
+  })
+
   it('stops on a page that repeats forever', async () => {
     const { fetchAllDiscussions } = await import('../src/host/forge/gitlab/gitlab-client.js')
     const fetcher = (async () => new Response(JSON.stringify([{ id: 'x', notes: [] }]), { headers: { 'x-next-page': '2' } })) as unknown as typeof fetch
