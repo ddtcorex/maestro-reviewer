@@ -169,7 +169,25 @@ interface OwnThread {
   path: string
   line: number | null
   lastCommentBody: string
+  /** The finding the thread opened with: severity, code and title. */
+  finding: string
+  /** What people answered, oldest first; the bot's own follow-ups are left out. */
+  humanReplies: string[]
   resolved: boolean
+}
+
+const FALLBACK_HEAD = /^\*\*Inline fallback — `([^`]+?):(\d+)` [^\n]*\*\*\n+/
+const REPLY_CAP = 2000
+
+/** First two lines of the finding (severity and code, then the title), fallback header removed. */
+function findingHead(body: string): string {
+  return body.replace(FALLBACK_HEAD, '').split('\n').map((l) => l.trim()).filter((l) => l !== '').slice(0, 2).join(' ').slice(0, 400)
+}
+
+function threadLocation(first: GitlabDiscussionNote): { path: string; line: number | null } | undefined {
+  if (first.position !== undefined) return { path: first.position.new_path, line: first.position.new_line }
+  const m = FALLBACK_HEAD.exec(first.body)
+  return m === null ? undefined : { path: m[1], line: Number(m[2]) }
 }
 
 /**
@@ -222,15 +240,16 @@ export function selectOwnThreads(
   botUsername: string,
 ): { threads: OwnThread[]; totalDiscussions: number } {
   const threads = discussions
-    .filter(d => d.notes.length > 0 && d.notes[0].author.username === botUsername && d.notes[0].position !== undefined)
+    .filter(d => d.notes.length > 0 && d.notes[0].author.username === botUsername && threadLocation(d.notes[0]) !== undefined)
     // The engine's own findings are not the model's to answer or regrade.
     .filter(d => !ENGINE_FINDING_CODES.has(findingCodeOf(d.notes[0].body) ?? ''))
     .map(d => ({
       discussionId: d.id,
-      path: d.notes[0].position!.new_path,
-      line: d.notes[0].position!.new_line,
+      ...threadLocation(d.notes[0])!,
       // Human replies reach the model here too: redact them like the diffs.
       lastCommentBody: redact(d.notes[d.notes.length - 1].body).text,
+      finding: findingHead(d.notes[0].body),
+      humanReplies: d.notes.slice(1).filter(n => n.author.username !== botUsername).map(n => redact(n.body).text.slice(0, REPLY_CAP)),
       resolved: d.notes[0].resolved === true,
     }))
   return { threads, totalDiscussions: discussions.length }
@@ -358,6 +377,8 @@ export function apply(ctx: Context, config: Config): void {
                 path: { type: 'string', required: true },
                 line: { type: 'number' },
                 lastCommentBody: { type: 'string', required: true },
+                finding: { type: 'string', required: true },
+                humanReplies: { type: 'array', items: { type: 'string' }, required: true },
                 resolved: { type: 'boolean', required: true },
               },
             },

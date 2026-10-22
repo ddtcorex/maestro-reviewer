@@ -79,3 +79,45 @@ describe('fetchAllDiscussions', () => {
     await expect(fetchAllDiscussions(fetcher, 'https://g/x', {})).rejects.toThrow(/500/)
   })
 })
+
+describe('own threads carry the finding and the human replies', () => {
+  const finding = '🟡 Major · `BUG-SKIP`\n\n**A skipped run keeps a stale summary.**\n\nLong reasoning here.'
+
+  it('keeps the finding head when a human replied last', () => {
+    const out = selectOwnThreads([
+      { id: 'd1', notes: [
+        note('review-bot', finding, { position: pos('a.php', 9), resolved: true }),
+        note('author', 'Documented in the docblock, keeping it.'),
+      ] },
+    ], 'review-bot')
+    expect(out.threads[0].finding).toBe('🟡 Major · `BUG-SKIP` **A skipped run keeps a stale summary.**')
+    expect(out.threads[0].humanReplies).toEqual(['Documented in the docblock, keeping it.'])
+    expect(out.threads[0].lastCommentBody).toBe('Documented in the docblock, keeping it.')
+  })
+
+  it('leaves the bot own follow-ups out of humanReplies', () => {
+    const out = selectOwnThreads([
+      { id: 'd2', notes: [
+        note('review-bot', finding, { position: pos('a.php', 9) }),
+        note('author', 'Not a bug.'),
+        note('review-bot', 'Agreed.'),
+      ] },
+    ], 'review-bot')
+    expect(out.threads[0].humanReplies).toEqual(['Not a bug.'])
+  })
+
+  it('lists a fallback thread posted without a position, under its path and line', () => {
+    const out = selectOwnThreads([
+      { id: 'd3', notes: [note('review-bot', '**Inline fallback — `src/A.php:40` line is not in current MR diff**\n\n' + finding, { resolved: true })] },
+    ], 'review-bot')
+    expect(out.threads).toHaveLength(1)
+    expect(out.threads[0]).toMatchObject({ discussionId: 'd3', path: 'src/A.php', line: 40, finding: '🟡 Major · `BUG-SKIP` **A skipped run keeps a stale summary.**' })
+  })
+
+  it('caps a long human reply', () => {
+    const out = selectOwnThreads([
+      { id: 'd4', notes: [note('review-bot', finding, { position: pos('a.php', 1) }), note('author', 'x'.repeat(5000))] },
+    ], 'review-bot')
+    expect(out.threads[0].humanReplies[0].length).toBeLessThanOrEqual(2001)
+  })
+})
