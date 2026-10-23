@@ -1,0 +1,310 @@
+# release-pin-and-image: bot pin PR + Docker image publish.
+#
+# Two jobs, one file, disjoint triggers (guarded by job `if:` because a
+# single `on.push` cannot carry per-job `paths` filters):
+#   open-pin-pr         on tag v*.*.* — waits for the npm release, then opens
+#                       (or refreshes) the chore/pin-reviewer-ci-X.Y.Z PR.
+#   build-and-push-image on push to master touching
+#                       profiles/reviewer-ci/pnpm-lock.yaml — builds
+#                       :X.Y.Z (version read from the lockfile at build time,
+#                       never from the tag name alone) + :latest, asserts,
+#                       pushes, and comments the digests on the merged pin PR.
+#
+# Third-party actions are pinned by commit SHA (no floating tags); SHAs
+# recorded 2026-10-22 via `git ls-remote` (all lightweight tags, so the tag
+# SHA is the commit SHA):
+#   actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683              # v4.2.2
+#   actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af            # v4.1.0
+#   docker/login-action@5e57cd118135c172c3672efd75eb46360885c0ef          # v3.6.0
+#   docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435   # v3.11.1
+#   docker/build-push-action@ee4ca427a2f43b6a16632044ca514c076267da23     # v6.19.0
+#
+# Secrets (provisioned separately; every use fails closed naming the secret):
+#   RELEASE_BOT_TOKEN  contents:write, pull-requests:write (pin PR open/update/comment)
+#   DOCKERHUB_USERNAME / DOCKERHUB_TOKEN (image push)
+#
+# No auto-merge anywhere: the pin PR waits for human review, and the image
+# job only pushes what the merged lockfile pins.
+name: Release pin and image
+
+on:
+  push:
+    branches: [master]
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: read
+
+jobs:
+  open-pin-pr:
+    name: Open reviewer-ci pin PR
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    env:
+      GH_TOKEN: ${{ secrets.RELEASE_BOT_TOKEN }}
+    steps:
+      - name: Fail closed without RELEASE_BOT_TOKEN
+        run: |
+          if [ -z "${RELEASE_BOT_TOKEN:-}" ]; then
+            echo "::error::missing secret RELEASE_BOT_TOKEN (contents:write, pull-requests:write)"
+            exit 1
+          fi
+        env:
+          RELEASE_BOT_TOKEN: ${{ secrets.RELEASE_BOT_TOKEN }}
+
+      - name: Check out the release tag
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.ref }}
+          fetch-depth: 0
+
+      - name: Derive and validate the version
+        id: version
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::tag $GITHUB_REF_NAME is not an exact vX.Y.Z release tag"
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "branch=chore/pin-reviewer-ci-$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Node
+        uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
+        with:
+          node-version: "22"
+
+      - name: Wait for the npm registry (20 s poll, 15 min cap)
+        id: registry
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          PROOF="registry-proof.txt"
+          : > "$PROOF"
+          for attempt in $(seq 1 45); do
+            PUBLISHED="$(npm view @ddtcorex/maestro-reviewer version 2>/dev/null || true)"
+            echo "attempt $attempt/45: registry shows ${PUBLISHED:-<unpublished>}" | tee -a "$PROOF"
+            if [ "$PUBLISHED" = "$VERSION" ]; then
+              echo "published=$PUBLISHED" >> "$GITHUB_OUTPUT"
+              echo "proof=$PROOF" >> "$GITHUB_OUTPUT"
+              echo "registry now serves @ddtcorex/maestro-reviewer@$VERSION (attempt $attempt, $(date -u +%FT%TZ))" | tee -a "$PROOF"
+              exit 0
+            fi
+            sleep 20
+          done
+          echo "::error::timed out waiting for @ddtcorex/maestro-reviewer@$VERSION in the npm registry (15 min cap)"
+          exit 1
+
+      - name: Check out (or create) the pin branch
+        run: |
+          BRANCH="${{ steps.version.outputs.branch }}"
+          git config user.name "maestro-release-bot"
+          git config user.email "maestro-release-bot@users.noreply.github.com"
+          if git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null 2>&1; then
+            git fetch origin "$BRANCH:$BRANCH"
+            git checkout "$BRANCH"
+          else
+            git checkout -b "$BRANCH"
+          fi
+
+      - name: Look up an existing open pin PR (idempotency)
+        id: existing
+        run: |
+          IID="$(gh pr list --head "${{ steps.version.outputs.branch }}" --state open --json number --jq '.[0].number // empty')"
+          echo "iid=$IID" >> "$GITHUB_OUTPUT"
+          if [ -n "$IID" ]; then echo "found open pin PR #$IID; this run updates it instead of creating a duplicate"; fi
+
+      - name: Pin the reviewer in profiles/reviewer-ci
+        run: |
+          corepack enable
+          corepack prepare pnpm@11.7.0 --activate
+          cd profiles/reviewer-ci && pnpm --config.minimumReleaseAge=0 update @ddtcorex/maestro-reviewer
+
+      - name: Assert pin-only diff and exact locked version
+        id: diff
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          LOCKED="$(node --input-type=module -e "import {readLockedReviewerVersion} from './scripts/release-bot.mjs'; console.log(readLockedReviewerVersion('profiles/reviewer-ci') ?? '')")"
+          if [ -z "$LOCKED" ]; then
+            echo "::error::cannot read locked @ddtcorex/maestro-reviewer version from profiles/reviewer-ci/pnpm-lock.yaml"
+            exit 1
+          fi
+          if [ "$LOCKED" != "$VERSION" ]; then
+            echo "::error::locked reviewer $LOCKED != tag version $VERSION (stale or overshoot); refusing to pin"
+            exit 1
+          fi
+          if [ -z "$(git diff --name-only)" ]; then
+            echo "pin already current (@ddtcorex/maestro-reviewer $LOCKED); nothing to commit"
+            echo "empty=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          DIFF_NAMES="$(git diff --name-only | jq -R -s -c 'split("\n") | map(select(length > 0))')"
+          DIFF_NAMES="$DIFF_NAMES" node --input-type=module -e "import {lockfileDiffAllowed} from './scripts/release-bot.mjs'; const names = JSON.parse(process.env.DIFF_NAMES); if (!lockfileDiffAllowed(names)) { console.error('::error::pin diff touches files outside the allowlist: ' + names.join(', ')); process.exit(1) }"
+          git diff --stat | tee pin-stat.txt
+
+      - name: Push the pin branch
+        if: steps.diff.outputs.empty != 'true'
+        run: |
+          git remote set-url origin "https://x-access-token:${RELEASE_BOT_TOKEN}@github.com/${{ github.repository }}.git"
+          git push -u origin "${{ steps.version.outputs.branch }}"
+        env:
+          RELEASE_BOT_TOKEN: ${{ secrets.RELEASE_BOT_TOKEN }}
+
+      - name: Create or refresh the pin PR
+        if: steps.diff.outputs.empty != 'true'
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          BRANCH="${{ steps.version.outputs.branch }}"
+          {
+            echo "Bot pin for release $VERSION."
+            echo
+            echo "## Registry proof"
+            echo '```'
+            cat "${{ steps.registry.outputs.proof }}"
+            echo '```'
+            echo
+            echo "## Lockfile stat"
+            echo '```'
+            cat pin-stat.txt
+            echo '```'
+            echo
+            echo "## Preset-shape checklist (reviewer: confirm before merging)"
+            echo "- [ ] The profile's other \`@deepseek-ai/*\` pins (\`dsh\`, \`dsh-agent-preset-registry\`) still satisfy what \`presets/maestro-{reviewer,auditor}.patch.yml\` require; bump them in this PR if a preset config shape changed."
+            echo "- [ ] \`git diff --stat profiles/reviewer-ci/pnpm-lock.yaml\` touches only the \`@ddtcorex/maestro-reviewer\` entries (specifier/resolution/integrity)."
+            echo "- [ ] The pin came from \`pnpm --config.minimumReleaseAge=0 update @ddtcorex/maestro-reviewer\`, not a bare \`install\`."
+            echo
+            echo "## Rig reminder"
+            echo "After this merges, the image job builds \`ddtcorex/maestro-reviewer:$VERSION\` + \`:latest\`. Bump \`REVIEWER_IMAGE\` in the reviewer project(s), then live-verify against a real MR (fresh head SHA, not a re-run) before calling the release done."
+          } > pr-body.md
+          if [ -n "${{ steps.existing.outputs.iid }}" ]; then
+            gh pr comment "${{ steps.existing.outputs.iid }}" --body-file pr-body.md
+          else
+            gh pr create --title "chore(ci): pin reviewer-ci to maestro-reviewer $VERSION" --body-file pr-body.md --head "$BRANCH" --base master
+          fi
+
+  build-and-push-image:
+    name: Build and push reviewer image
+    if: github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Check out master
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+
+      - name: Check the push touched the reviewer-ci lockfile
+        id: gate
+        run: |
+          BEFORE="${{ github.event.before }}"
+          if [[ "$BEFORE" == 0000* ]]; then
+            echo "touched=true" >> "$GITHUB_OUTPUT"
+            echo "no parent SHA to diff against; building"
+          elif git diff --name-only "$BEFORE" "${{ github.sha }}" -- profiles/reviewer-ci/pnpm-lock.yaml | grep -q .; then
+            echo "touched=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "touched=false" >> "$GITHUB_OUTPUT"
+            echo "push did not touch profiles/reviewer-ci/pnpm-lock.yaml; nothing to build."
+          fi
+
+      - name: Fail closed without Docker Hub secrets
+        if: steps.gate.outputs.touched == 'true'
+        run: |
+          MISSING=""
+          if [ -z "${DOCKERHUB_USERNAME:-}" ]; then MISSING="$MISSING DOCKERHUB_USERNAME"; fi
+          if [ -z "${DOCKERHUB_TOKEN:-}" ]; then MISSING="$MISSING DOCKERHUB_TOKEN"; fi
+          if [ -n "$MISSING" ]; then
+            echo "::error::missing secret(s):$MISSING"
+            exit 1
+          fi
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Read the image version from the lockfile at build time (R4)
+        id: version
+        if: steps.gate.outputs.touched == 'true'
+        run: |
+          VER="$(node --input-type=module -e "import {readLockedReviewerVersion} from './scripts/release-bot.mjs'; console.log(readLockedReviewerVersion('profiles/reviewer-ci') ?? '')")"
+          if ! [[ "$VER" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::cannot read a clean X.Y.Z reviewer version from profiles/reviewer-ci/pnpm-lock.yaml (got: ${VER:-<empty>})"
+            exit 1
+          fi
+          echo "version=$VER" >> "$GITHUB_OUTPUT"
+          echo "image version comes from the lockfile ($VER); the tag name is never trusted alone"
+
+      - name: Log in to Docker Hub
+        if: steps.gate.outputs.touched == 'true'
+        uses: docker/login-action@5e57cd118135c172c3672efd75eb46360885c0ef # v3.6.0
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        if: steps.gate.outputs.touched == 'true'
+        uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v3.11.1
+
+      - name: Build the image (no push yet)
+        if: steps.gate.outputs.touched == 'true'
+        uses: docker/build-push-action@ee4ca427a2f43b6a16632044ca514c076267da23 # v6.19.0
+        with:
+          context: .
+          file: docker/Dockerfile
+          push: false
+          load: true
+          tags: |
+            ddtcorex/maestro-reviewer:${{ steps.version.outputs.version }}
+            ddtcorex/maestro-reviewer:latest
+          build-args: |
+            CI_COMMIT_SHA=${{ github.sha }}
+            CI_COMMIT_TAG=v${{ steps.version.outputs.version }}
+
+      - name: Assert the image runs the pinned release (verify before pushing)
+        if: steps.gate.outputs.touched == 'true'
+        run: |
+          TAG="ddtcorex/maestro-reviewer:${{ steps.version.outputs.version }}"
+          INSTALLED="$(docker run --rm --entrypoint sh "$TAG" -c 'node -p "require(\"/app/profiles/reviewer-ci/node_modules/@ddtcorex/maestro-reviewer/package.json\").version"')"
+          if [ "$INSTALLED" != "${{ steps.version.outputs.version }}" ]; then
+            echo "::error::image installs reviewer $INSTALLED, lockfile pins ${{ steps.version.outputs.version }} (stale image); refusing to push"
+            exit 1
+          fi
+          docker run --rm --entrypoint sh "$TAG" -c 'grep -rl "report_review_findings" /app/profiles/reviewer-ci/node_modules/@ddtcorex/maestro-reviewer/lib --include="*.js"' | grep -q .
+          SCOPE_COUNT="$(docker run --rm --entrypoint sh "$TAG" -c 'find /app/profiles/reviewer-ci/node_modules/.pnpm -maxdepth 1 -iname "@deepseek-ai+dsh-scope@*" | wc -l')"
+          if [ "$SCOPE_COUNT" != "1" ]; then
+            echo "::error::expected exactly one @deepseek-ai+dsh-scope copy under .pnpm, found $SCOPE_COUNT (dual-instance regression)"
+            exit 1
+          fi
+          echo "image assertions green: reviewer $INSTALLED, compiled lib present, single dsh-scope"
+
+      - name: Push both tags
+        if: steps.gate.outputs.touched == 'true'
+        run: |
+          docker push "ddtcorex/maestro-reviewer:${{ steps.version.outputs.version }}"
+          docker push ddtcorex/maestro-reviewer:latest
+
+      - name: Comment digests on the merged pin PR
+        if: steps.gate.outputs.touched == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_BOT_TOKEN }}
+          RELEASE_BOT_TOKEN: ${{ secrets.RELEASE_BOT_TOKEN }}
+        run: |
+          if [ -z "${RELEASE_BOT_TOKEN:-}" ]; then
+            echo "::warning::RELEASE_BOT_TOKEN is not set; the image was pushed but its digests cannot be commented on the pin PR"
+            exit 0
+          fi
+          VERSION="${{ steps.version.outputs.version }}"
+          BRANCH="chore/pin-reviewer-ci-$VERSION"
+          V_DIGEST="$(docker inspect --format '{{index .RepoDigests 0}}' "ddtcorex/maestro-reviewer:$VERSION")"
+          L_DIGEST="$(docker inspect --format '{{index .RepoDigests 0}}' ddtcorex/maestro-reviewer:latest)"
+          IID="$(gh pr list --state merged --head "$BRANCH" --json number --jq '.[0].number // empty')"
+          BODY="Image published for release $VERSION (built from the lockfile pin, verified before push):"$'\n'"- \`ddtcorex/maestro-reviewer:$VERSION\` ($V_DIGEST)"$'\n'"- \`ddtcorex/maestro-reviewer:latest\` ($L_DIGEST)"
+          if [ -z "$IID" ]; then
+            echo "no merged pin PR on $BRANCH; skipping comment. Digests:"; echo "$BODY"
+            exit 0
+          fi
+          gh pr comment "$IID" --body "$BODY"

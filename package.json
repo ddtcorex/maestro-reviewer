@@ -33,7 +33,8 @@
     "build": "tsc -p tsconfig.json",
     "test": "NODE_ENV=test vitest run",
     "verify": "tsc -p tsconfig.json --noEmit",
-    "docker:build": "docker build -f docker/Dockerfile -t ddtcorex/maestro-reviewer:0.19.4 -t ddtcorex/maestro-reviewer:latest ."
+    "docker:build": "docker build -f docker/Dockerfile -t ddtcorex/maestro-reviewer:0.19.4 -t ddtcorex/maestro-reviewer:latest .",
+    "release:prep": "node scripts/release-prep.mjs"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "~4.0.4"

@@ -1,0 +1,14 @@
+rig run for HEAD deadbeef1234feedface00112233445566778899aabb
+image: maestro-reviewer:rig built from a detached checkout at the release commit
+tier 1 command: node scripts/review-rig/rig.mjs run S1 (stub model)
+tier 2 command: node scripts/review-rig/rig.mjs e2e S1 (real bridge + reviewer pipelines)
+
+=== tier 1: rig run S1 ===
+rig run S1: MR !1, cleared 2 note(s) and 1 award(s) from earlier runs
+tier 1 S1: exit 0 in 4s, 4 model request(s), work dir /tmp/maestro-review-rig-S1-aaa
+PASS S1
+
+=== tier 2: rig e2e S1 ===
+rig e2e S1: MR !1, cleared 4 note(s), 2 award(s)
+tier 2 S1: exit 0 in 24s, 4 model request(s), work dir /tmp/maestro-review-rig-e2e-S1-bbb
+PASS S1

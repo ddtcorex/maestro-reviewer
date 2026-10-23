@@ -155,108 +155,85 @@ gap caused. Version bump: patch (`X.Y.Z+1`) for a fix-only batch (matches
 `CHANGELOG.md` precedent, e.g. 0.5.0 → 0.5.1); minor for an Added/Changed
 batch.
 
-1. **Bump + sync version, on a `chore/release-X.Y.Z` branch:**
-   - `package.json`'s `version`.
-   - `CHANGELOG.md` — new `## [X.Y.Z] - YYYY-MM-DD` section (Keep a Changelog
-     style), referencing the merged PR numbers it bundles.
-   - Every `0.Y.Z`-shaped image-tag reference: `docker/Dockerfile`'s
-     top-comment example (`-t ddtcorex/maestro-reviewer:X.Y.Z`),
-     `package.json`'s own `docker:build` script (found stale at a
-     two-releases-old `0.6.0` on 2026-09-14 — nobody runs that script, so it
-     drifts silently), `templates/reviewer-project.gitlab-ci.yml`'s
-     `REVIEWER_IMAGE`, and the two mentions in `docs/ci-reviewer-setup.md`
-     (intro + troubleshooting `:latest` explanation). `grep -rn
-     "0\.<prev-minor>\.<prev-patch>" docker/ templates/ docs/ package.json`
-     to find every instance before committing.
-   - `profiles/reviewer-ci`'s `@ddtcorex/maestro-skills`: raise the
-     specifier to the latest published version (`npm view
-     @ddtcorex/maestro-skills version`) and lock exactly that version. The
-     skills the reviewer loads come from this pin, and a range never moves
-     the locked version: a `^2.13.0` range kept the image on 2.15.0 until
-     0.19.3, three skill releases behind. If `pnpm update` also moves
-     unrelated packages, edit the three `maestro-skills` lockfile entries by
-     hand (specifier and version, resolution with `npm view … dist.integrity`,
-     snapshot key) and prove it with a cold `pnpm install --frozen-lockfile`
-     of a copy of the profile. Release any pending skill change first.
-   - `pnpm verify && pnpm test && pnpm build` clean, then PR → CI green →
-     **human `APPROVED`** → squash-merge.
-2. **Tag + publish** (guarded — present the exact commands and get explicit
-   approval before running, per the Guard git-protection rule in the workspace root AGENTS.md):
+Three human gates, in order: (1) approve the prep PR, (2) approve the tag
+push, (3) approve the bot pin PR. CI publishes the image after gate 3. The
+normal flow has no manual image commands; the manual path is kept only in
+the appendix for one release cycle.
+
+1. **Prep the release, on a `chore/release-X.Y.Z` branch (human gate 1):**
+   ```sh
+   git checkout -b chore/release-X.Y.Z
+   node scripts/release-prep.mjs X.Y.Z --rig-proof <path>
+   ```
+   The script owns the version bump + sync (`package.json`, `CHANGELOG.md`
+   Keep-a-Changelog entry, every version-shaped reference in
+   `docker/Dockerfile`, `templates/reviewer-project.gitlab-ci.yml`,
+   `docs/ci-reviewer-setup.md`, `profiles/reviewer-ci/package.json`) and the
+   `@ddtcorex/maestro-skills` specifier raise plus profile lock refresh. It
+   fails closed naming the gate: version (exact `X.Y.Z`), clean-tree, branch
+   (must be `chore/release-X.Y.Z`), rig-proof (the file must hold the full
+   HEAD SHA plus tier 1 and tier 2 PASS markers), skills-diff (the profile
+   lock diff touches only skills entries), checks (canonical gate order
+   verify, then build, then test; build precedes test because `lib/` is
+   gitignored and `engine-exports.test.ts` needs it). It never commits,
+   pushes, merges, or tags; on success it prints the exact branch, PR, and
+   guarded tag commands to run yourself. Then PR, CI green, **human
+   `APPROVED`**, squash-merge.
+2. **Tag + publish (human gate 2)** (guarded, present the exact commands and
+   get explicit approval before running, per the Guard git-protection rule
+   in the workspace root AGENTS.md):
    ```sh
    git -C <repo> tag vX.Y.Z
    git -C <repo> push origin vX.Y.Z
    ```
    Pushing the tag triggers `.github/workflows/release.yml` →
    `maestro-ci`'s `node-release.yml` (`pnpm publish --access public` +
-   GitHub Release). Never run `pnpm publish`/`npm publish` manually — it
+   GitHub Release). Never run `pnpm publish`/`npm publish` manually, it
    bypasses the Release workflow and leaves `CHANGELOG`/GitHub Release out
-   of sync. Confirm both: `gh run watch <run-id>` on the release workflow,
-   and poll `npm view @ddtcorex/maestro-reviewer version` until it shows
-   `X.Y.Z` (registry propagation lags the workflow's "done" by roughly
-   1-2 minutes — a stale `npm view` right after tagging is not a failure).
-3. **Bump the `profiles/reviewer-ci` pin, on its own `chore/pin-reviewer-ci-X.Y.Z`
-   branch** (mandatory, not optional — this is the step that actually makes
-   the Docker image pick up the release): set
-   `profiles/reviewer-ci/package.json`'s
-   `dependencies["@ddtcorex/maestro-reviewer"]` to `X.Y.Z` (a `^X.Y.Z`
-   range is fine to declare, but **does not self-update**: a plain `pnpm
-   install` keeps whatever version is already locked as long as it still
-   satisfies the range — pnpm does not eagerly re-resolve to the newest
-   match. This silently shipped a stale `0.7.1` through the 0.7.2 and 0.7.3
-   fixes on 2026-09-14, discovered only because those two releases
-   happened to live in files the Dockerfile copies directly from the
-   checkout (`presets/`, `profiles/reviewer-ci/pnpm-workspace.yaml`) rather
-   than in `maestro-reviewer`'s own installed code — 0.7.4's actual fix
-   would have shipped silently absent otherwise. Always force it with
-   `pnpm update @ddtcorex/maestro-reviewer` (not bare `install`) — and a
-   version published minutes ago is inside pnpm's 24h `minimumReleaseAge`
-   window, so bypass that too (the exact same flag is already baked into
-   `docker/Dockerfile`'s own frozen install for this reason,
-   `ERR_PNPM_MINIMUM_RELEASE_AGE_VIOLATION` otherwise):
-   ```sh
-   cd profiles/reviewer-ci && pnpm --config.minimumReleaseAge=0 update @ddtcorex/maestro-reviewer
-   ```
-   Verify the resulting `git diff --stat profiles/reviewer-ci/pnpm-lock.yaml`
-   touches only that one package (specifier/resolution/integrity) before
-   committing — unrelated transitive churn is a signal something else drifted
-   and needs a closer look, not a rubber-stamp commit.
-
-   **The profile's OTHER `@deepseek-ai/*` pins (`dsh`, `dsh-base`,
-   `dsh-agent-preset-registry`) must independently track whatever the shipped
-   preset patch files (`presets/maestro-reviewer.patch.yml`,
-   `presets/maestro-auditor.patch.yml`) actually require — bumping only the
-   `maestro-reviewer` pin is not sufficient.** Root-caused 2026-09-14:
-   #102 (0.7.0) migrated the persona rows from a `text` field to
-   `prefix`/`suffix`, which only `@deepseek-ai/dsh-persona` ≥ some 0.1.5-line
-   version understands; the reviewer-ci profile stayed on
-   `dsh-agent-presets@0.1.2-rc.1` (whose bundled `dsh-persona` still expects
-   `text`) straight through the 0.7.0 and 0.7.1 releases, so **every review
-   failed closed** with `failed to create reviewer agent: ... invalid
-   config: $.text missing required value` — silently, because step 5 below
-   didn't exist yet and nobody re-validated end to end after finally
-   rebuilding the image. When a preset's config shape changes, check
-   whether it needs a newer registry/`dsh-persona` in
-   `profiles/reviewer-ci` too, in the same PR. (The presets themselves travel
-   inside the plugin bundle — `dsh.bundle.patch` lists the two patch files —
-   so the profile does not carry its own copy of them.)
-
-   PR → CI green → `APPROVED` → merge.
-4. **Rebuild and push the Docker image — only after step 3 merges:**
-   ```sh
-   docker build -f docker/Dockerfile -t ddtcorex/maestro-reviewer:X.Y.Z -t ddtcorex/maestro-reviewer:latest .
-   ```
-   Verify before pushing, don't assume: confirm the release's actual fix is
-   present in the built image (e.g. `docker run --rm --entrypoint sh
-   ddtcorex/maestro-reviewer:X.Y.Z -c 'grep -c <distinguishing-symbol>
-   .../lib/orchestrator.js'`), and — if the change touches shared harness
-   packages — confirm no dual-instance regression:
-   `find /app/profiles/reviewer-ci/node_modules/.pnpm -maxdepth 1 -iname
-   '@deepseek-ai+dsh-scope@*'` inside the image must show exactly one match.
-   Then:
-   ```sh
-   docker push ddtcorex/maestro-reviewer:X.Y.Z
-   docker push ddtcorex/maestro-reviewer:latest
-   ```
+   of sync. The same tag also triggers
+   `.github/workflows/release-pin-and-image.yml` job `open-pin-pr` on tag
+   `vX.Y.Z` (secret `RELEASE_BOT_TOKEN` with `contents:write` and
+   `pull-requests:write`): it waits for the npm registry to serve the new
+   version (20s poll, 15min cap), pins the reviewer in
+   `profiles/reviewer-ci`, asserts the locked version equals the tag
+   version, and opens (or refreshes) the `chore/pin-reviewer-ci-X.Y.Z` PR
+   with registry proof, lockfile stat, and the preset-shape checklist.
+   Confirm both: `gh run watch <run-id>` on the release workflow, poll `npm
+   view @ddtcorex/maestro-reviewer version` until it shows `X.Y.Z`
+   (registry propagation lags the workflow's "done" by roughly 1-2 minutes,
+   a stale `npm view` right after tagging is not a failure), and check the
+   bot pin PR exists.
+3. **Review + merge the bot pin PR (human gate 3):** the
+   `chore/pin-reviewer-ci-X.Y.Z` PR is bot-authored but human-gated, there
+   is no auto-merge anywhere. Review points, all quoted from the PR body:
+   the profile's other `@deepseek-ai/*` pins (`dsh`,
+   `dsh-agent-preset-registry`) still satisfy what
+   `presets/maestro-{reviewer,auditor}.patch.yml` require (bump them in this
+   PR if a preset config shape changed, see the 0.7.0 `text` to
+   `prefix`/`suffix` incident in the appendix); `git diff --stat
+   profiles/reviewer-ci/pnpm-lock.yaml` touches only the
+   `@ddtcorex/maestro-reviewer` entries (specifier, resolution, integrity);
+   the pin came from `pnpm --config.minimumReleaseAge=0 update
+   @ddtcorex/maestro-reviewer`, not a bare `install` (a plain `install`
+   keeps whatever version is already locked while it still satisfies the
+   range, and a version published minutes ago sits inside pnpm's 24h
+   `minimumReleaseAge` window). Then PR, CI green, `APPROVED`, merge.
+4. **Image publish is CI-owned, verify the digests:** merging the pin PR
+   runs `.github/workflows/release-pin-and-image.yml` job
+   `build-and-push-image` on the master push touching
+   `profiles/reviewer-ci/pnpm-lock.yaml` (secrets `DOCKERHUB_USERNAME` /
+   `DOCKERHUB_TOKEN`, fails closed naming the missing secret). It reads the
+   image version from the lockfile at build time, never from the tag name
+   alone; builds `ddtcorex/maestro-reviewer:X.Y.Z` plus
+   `ddtcorex/maestro-reviewer:latest`; asserts the built image installs the
+   pinned reviewer version with compiled `lib` present and exactly one
+   `@deepseek-ai+dsh-scope` copy under `.pnpm` (refuses to publish a stale
+   or dual-instance image); publishes both tags; and comments both digests
+   on the merged pin PR. Digest check: read the bot comment on the merged
+   pin PR and confirm both `ddtcorex/maestro-reviewer:X.Y.Z` and
+   `ddtcorex/maestro-reviewer:latest` digests are present before moving to
+   step 5. If the image job is red, fix forward through the same flow, never
+   publish the image by hand in the normal flow.
 5. **Bump `REVIEWER_IMAGE` in the reviewer project(s) using this image**
    (a separate repo per deployment, e.g. a company's `reviewer_ci` — not
    this checkout) to `X.Y.Z`, then **live-verify against a real MR before
@@ -275,6 +252,46 @@ proven live while testing this way (`GITLAB_HOST` format, stale
 award-emoji markers, `REVIEW_ON_PUSH`, no recoverable stack trace) — it
 belongs before step 1, not after step 5, so read it before starting a
 release, not after one goes wrong.
+
+### Appendix: manual release path (kept for one release cycle, remove once the automated flow has shipped one release)
+
+Use only if `.github/workflows/release-pin-and-image.yml` is red or its
+secrets (`RELEASE_BOT_TOKEN`, `DOCKERHUB_USERNAME`/`DOCKERHUB_TOKEN`) are
+not provisioned. Otherwise follow steps 1 to 5 above.
+
+A. **Manual pin PR, on its own `chore/pin-reviewer-ci-X.Y.Z` branch:**
+set `profiles/reviewer-ci/package.json`'s
+`dependencies["@ddtcorex/maestro-reviewer"]` to `X.Y.Z` (a `^X.Y.Z` range
+is fine to declare, but does not self-update: a plain `pnpm install`
+keeps whatever version is already locked as long as it still satisfies
+the range. This silently shipped a stale `0.7.1` through the 0.7.2 and
+0.7.3 fixes on 2026-09-14. Always force it, and bypass pnpm's 24h
+`minimumReleaseAge` window for a version published minutes ago):
+```sh
+cd profiles/reviewer-ci && pnpm --config.minimumReleaseAge=0 update @ddtcorex/maestro-reviewer
+```
+Verify `git diff --stat profiles/reviewer-ci/pnpm-lock.yaml` touches only
+that one package before committing. The profile's other `@deepseek-ai/*`
+pins (`dsh`, `dsh-base`, `dsh-agent-preset-registry`) must independently
+track whatever `presets/maestro-reviewer.patch.yml` and
+`presets/maestro-auditor.patch.yml` require: #102 (0.7.0) migrated the
+persona rows from a `text` field to `prefix`/`suffix`, which only a newer
+`dsh-persona` understands, and the stale profile made every review fail
+closed with `failed to create reviewer agent: ... invalid config: $.text
+missing required value`. PR, CI green, `APPROVED`, merge.
+
+B. **Manual image build and manual image push, only after the pin PR merges:**
+```sh
+docker build -f docker/Dockerfile -t ddtcorex/maestro-reviewer:X.Y.Z -t ddtcorex/maestro-reviewer:latest .
+```
+Verify before the manual image push: confirm the release's fix is present
+in the built image and `find
+/app/profiles/reviewer-ci/node_modules/.pnpm -maxdepth 1 -iname
+'@deepseek-ai+dsh-scope@*'` inside it shows exactly one match. Then:
+```sh
+docker push ddtcorex/maestro-reviewer:X.Y.Z
+docker push ddtcorex/maestro-reviewer:latest
+```
 
 ## Conventions
 
