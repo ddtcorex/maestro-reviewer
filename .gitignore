@@ -1,5 +1,7 @@
 node_modules/
-lib/
+# Anchored to the repo root: a bare lib/ also matches nested directories
+# (scripts/lib/), which silently leaves files there untracked.
+/lib/
 .DS_Store
 
 # Re-include coordination files ignored by the global core.excludesFile
