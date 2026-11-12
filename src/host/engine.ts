@@ -261,7 +261,7 @@ export function createEngineAgents(ctx: Context): EngineAgents {
           meta: { cwd: worktreePath ?? tmpdir() },
           agentOptions,
           setup: async (agentCtx) => {
-            installModelSelection(agentCtx, { current: agentOptions, assembled: undefined })
+            installModelSelection(agentCtx)
             await agentCtx.plugin(ReviewToolPolicy, { onToolCall: run.onToolCall })
             await mountAgentPreset(ctx.agentPresets, agentCtx, 'dsh-maestro-reviewer')
             await run.forge.mountAgentTools(agentCtx, { onDiffTruncated: () => { diffTruncated = true }, ...(chunk !== undefined ? { onlyPaths: chunk.files, partLabel: chunk.label } : {}) })
@@ -366,7 +366,7 @@ export function createEngineAgents(ctx: Context): EngineAgents {
         meta: { cwd: worktreePath },
         agentOptions,
         setup: async (agentCtx) => {
-          installModelSelection(agentCtx, { current: agentOptions, assembled: undefined })
+          installModelSelection(agentCtx)
           await agentCtx.plugin(ReviewToolPolicy, { onToolCall: run.onToolCall })
           await mountAgentPreset(ctx.agentPresets, agentCtx, 'dsh-maestro-auditor')
           await run.forge.mountAgentTools(agentCtx, {})
@@ -401,7 +401,7 @@ export function createEngineAgents(ctx: Context): EngineAgents {
         meta: { cwd: answerDir },
         agentOptions,
         setup: async (agentCtx) => {
-          installModelSelection(agentCtx, { current: agentOptions, assembled: undefined })
+          installModelSelection(agentCtx)
           await agentCtx.plugin(ReviewToolPolicy, { onToolCall: run.onToolCall })
           await mountAgentPreset(ctx.agentPresets, agentCtx, 'dsh-maestro-reviewer')
           // Read tools only: an answer is text the caller posts; the agent never writes to the MR.
