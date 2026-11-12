@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.20.0] - 2026-11-12
+
+### Changed
+
+- Runtime moves to DSH 0.2.2-rc.2: every `@deepseek-ai/dsh-*` package to 0.2.2-rc.2, `@deepseek-ai/cordis` to ~4.1.0 (the peer range too, so a host must run cordis 4.1), `@deepseek-ai/schemastery` to ~3.19.0. The reviewer-ci profile follows in the pin PR together with `@ddtcorex/maestro-skills` 3.1.0. (#212)
+- `installModelSelection` takes only the agent context: dsh-agent 0.2.2 builds model selection from the `agentOptions` given at spawn. (#212)
+- Toolchain: TypeScript 7, vitest 5, `@types/node` 26. (#212)
+- The model's tool list on DSH 0.2.2 drops `exit_plan_mode`, `interrupt_agent` and `web_search` and adds `wait_agent` and `working_directory`; the review deny list is unchanged.
+
 ## [0.19.4] - 2026-10-22
 
 ### Fixed
