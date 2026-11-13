@@ -183,6 +183,28 @@ describe('linesReader', () => {
     expect(await read('../outside.php')).toBeUndefined()
   })
 
+  it('refuses symlinks leaving the checkout and non-regular files, and caps the size', async () => {
+    const { mkdtempSync, writeFileSync, mkdirSync, symlinkSync } = await import('node:fs')
+    const { tmpdir } = await import('node:os')
+    const { join } = await import('node:path')
+    const { linesReader, LINES_MAX_BYTES } = await import('../src/host/engine.js')
+    const outer = mkdtempSync(join(tmpdir(), 'lines-'))
+    const dir = join(outer, 'checkout')
+    mkdirSync(join(dir, 'sub'), { recursive: true })
+    writeFileSync(join(outer, 'outside.php'), 'secret\n')
+    writeFileSync(join(dir, 'a.php'), 'one\ntwo\n')
+    symlinkSync(join(outer, 'outside.php'), join(dir, 'leak.php'))
+    symlinkSync('/dev/zero', join(dir, 'zero.php'))
+    symlinkSync('a.php', join(dir, 'alias.php'))
+    writeFileSync(join(dir, 'huge.php'), Buffer.alloc(LINES_MAX_BYTES + 1, 10))
+    const read = linesReader(dir, {}, 'h')!
+    expect(await read('leak.php')).toBeUndefined()
+    expect(await read('zero.php')).toBeUndefined()
+    expect(await read('sub')).toBeUndefined()
+    expect(await read('alias.php')).toBe(2)
+    expect(await read('huge.php')).toBeNull()
+  })
+
   it('reads through the forge at the head without a checkout', async () => {
     const { linesReader } = await import('../src/host/engine.js')
     const readFile = vi.fn(async (path: string, ref: string) => (path === 'a.php' && ref === 'h9' ? 'x\ny' : undefined))

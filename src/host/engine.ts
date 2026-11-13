@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile as readFileText, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile as readFileText, realpath, rm, stat, writeFile } from 'node:fs/promises'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { join, resolve as resolvePath } from 'node:path'
@@ -171,6 +171,9 @@ function filtersFor(worktreePath: string | undefined, f: AgentRunConfig['filters
 /** A missing file or directory on the path; any other error means the file could not be read. */
 const isAbsent = (err: unknown) => ['ENOENT', 'ENOTDIR', 'EISDIR'].includes((err as NodeJS.ErrnoException | undefined)?.code ?? '')
 
+/** Checkout files larger than this are not counted: their line count is unknown, as for a failed read. */
+export const LINES_MAX_BYTES = 5_000_000
+
 /**
  * Line counts from the checkout when there is one, else through the forge at
  * the reviewed head: undefined for an absent file, null for a failed read.
@@ -179,10 +182,19 @@ export function linesReader(worktreePath: string | undefined, forge: Pick<Review
   const count = (text: string) => (text === '' ? 0 : text.split('\n').length - (text.endsWith('\n') ? 1 : 0))
   if (worktreePath !== undefined) {
     const root = resolvePath(worktreePath)
+    const realRoot = realpath(root).catch(() => root)
     return async (path) => {
       const abs = resolvePath(root, path)
       if (!abs.startsWith(`${root}/`)) return undefined
-      try { return count(await readFileText(abs, 'utf8')) } catch (err) { return isAbsent(err) ? undefined : null }
+      try {
+        // A committed symlink may point anywhere (another tree, /dev/zero, /proc): resolve it and stay inside.
+        const real = await realpath(abs)
+        if (!real.startsWith(`${await realRoot}/`)) return undefined
+        const info = await stat(real)
+        if (!info.isFile()) return undefined
+        if (info.size > LINES_MAX_BYTES) return null
+        return count(await readFileText(real, 'utf8'))
+      } catch (err) { return isAbsent(err) ? undefined : null }
     }
   }
   if (forge.readFile === undefined) return undefined
