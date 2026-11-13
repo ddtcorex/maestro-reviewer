@@ -451,6 +451,9 @@ export function createReviewEngine(ctx: Context, agents: EngineAgents = createEn
       readFile: (path, ref) => rawForge.readFile?.(path, ref) ?? Promise.resolve(undefined),
       openFindingKeys: () => rawForge.openFindingKeys?.() ?? Promise.resolve(new Set<string>()),
       compare: (from, to) => rawForge.compare(from, to),
+      // No thread state or versions: replies are posted as reported.
+      ownThreads: () => rawForge.ownThreads?.() ?? Promise.resolve([]),
+      mrVersions: () => rawForge.mrVersions?.() ?? Promise.resolve(undefined),
       postNote: (body) => timedPost(() => rawForge.postNote(body)),
       replyToDiscussion: (id, body) => timedPost(() => rawForge.replyToDiscussion(id, body)),
       postFindings: (findings) => timedPost(() => rawForge.postFindings(findings)),

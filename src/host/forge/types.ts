@@ -1,5 +1,5 @@
 import type { Context } from '@deepseek-ai/cordis'
-import type { ReviewFinding } from '../review-findings-tool.js'
+import type { FindingSeverity, ReviewFinding } from '../review-findings-tool.js'
 import type { DiffHit } from '../redact.js'
 
 /**
@@ -34,6 +34,22 @@ export interface CompareResult {
   compare_timeout?: boolean
 }
 
+/** One of the bot's own threads, as the engine needs it to filter replies. */
+export interface ThreadState {
+  discussionId: string
+  path: string
+  line: number | null
+  /** The opener's severity, when its label can be read. */
+  severity?: FindingSeverity
+  lastHumanAt?: string
+  lastBotAt?: string
+  /** The last non-system note was written by a person. */
+  lastIsHuman: boolean
+}
+
+/** One merge request version: the head it pointed at and when it was created. */
+export interface MrVersion { headSha: string; createdAt: string }
+
 export interface ForgeSignals {
   start(): Promise<void>
   finish(outcome: 'completed' | 'failed'): Promise<void>
@@ -56,6 +72,10 @@ export interface ReviewForge {
   restrictToInterdiff?(files: InterdiffFile[]): void
   /** What changed between two SHAs, or undefined when it cannot be read (never throws). */
   compare(from: string, to: string): Promise<CompareResult | undefined>
+  /** The bot's own threads with who answered last; optional (no reply filtering without it). */
+  ownThreads?(): Promise<ThreadState[]>
+  /** Merge request versions, oldest first; undefined when they cannot be read. */
+  mrVersions?(): Promise<MrVersion[] | undefined>
   postNote(body: string): Promise<void>
   replyToDiscussion(discussionId: string, body: string): Promise<void>
   /** Inline threads, replies, or note fallbacks; throws on the first failure. */

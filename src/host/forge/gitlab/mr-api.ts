@@ -3,7 +3,7 @@ import type { ReviewFinding } from '../../review-findings-tool.js'
 import { SEVERITY_ORDER, severityPrefix } from '../../severity.js'
 import { findingCodeMarker } from '../../review-feedback.js'
 import { sanitizeAgentText } from './gitlab-client.js'
-import type { CompareResult } from '../types.js'
+import type { CompareResult, MrVersion } from '../types.js'
 import { gitlabAuthHeaders } from './gitlab-auth.js'
 import { fetchWithTimeout } from './gitlab-client.js'
 
@@ -51,6 +51,20 @@ export async function fetchCompare(
  * returns undefined (the reviewer prompt then omits the lint rule) rather
  * than failing the review when GitLab is unreachable.
  */
+/** Merge request versions (head sha and creation time), first page of 100; undefined on any error. */
+export async function fetchMrVersions(
+  baseUrl: string, token: string, projectId: number, mrIid: number, fetcher: typeof fetch = fetch,
+): Promise<MrVersion[] | undefined> {
+  try {
+    const response = await fetcher(`${baseUrl}/api/v4/projects/${projectId}/merge_requests/${mrIid}/versions?per_page=100`, { headers: gitlabAuthHeaders(token) })
+    if (!response.ok) return undefined
+    const versions = await response.json() as Array<{ head_commit_sha?: string; created_at?: string }>
+    return versions.flatMap((v) => (typeof v.head_commit_sha === 'string' && typeof v.created_at === 'string' ? [{ headSha: v.head_commit_sha, createdAt: v.created_at }] : []))
+  } catch {
+    return undefined
+  }
+}
+
 export async function fetchMrBaseSha(
   baseUrl: string,
   token: string,
