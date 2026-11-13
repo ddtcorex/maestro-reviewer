@@ -48,7 +48,7 @@ describe('profiles/reviewer-ci/cordis.patch.yml', () => {
  * Preset delivery, end to end across the three files that have to agree.
  *
  * The orchestrator mounts presets by id (`agentPresets.mount(agentCtx,
- * 'dsh-maestro-reviewer')`). On DSH 0.1.7 the registry resolves ids from loader
+ * 'maestro-reviewer')`). On DSH 0.1.7 the registry resolves ids from loader
  * rows naming `@deepseek-ai/dsh-agent-preset` — `@deepseek-ai/dsh-agent-preset-registry`
  * injects `['loader', 'sessionProjections']`, and no package in the 0.1.7 tree
  * reads `$DSH_HOME/.agent-presets` any more (verified 2026-09-24 by grepping
@@ -84,7 +84,7 @@ describe('reviewer-ci preset delivery', () => {
     expect(patchFiles).toContain('./presets/maestro-reviewer.patch.yml')
     expect(patchFiles).toContain('./presets/maestro-auditor.patch.yml')
     for (const [file, id] of [
-      ['./presets/maestro-reviewer.patch.yml', 'preset-dsh-maestro-reviewer'],
+      ['./presets/maestro-reviewer.patch.yml', 'preset-maestro-reviewer'],
       ['./presets/maestro-auditor.patch.yml', 'preset-dsh-maestro-auditor'],
     ] as const) {
       const yml = readFileSync(file, 'utf-8')

@@ -33,7 +33,7 @@ if [ "$rc" -ne 0 ]; then exit "$rc"; fi
 if [ -d "$REVIEW_REPORT_DIR" ]; then
   mkdir -p "$REVIEW_REPORT_DIR/.maestro-history"
   # -sfn on an existing real dir would nest inside it; only link when absent.
-  [ -e /app/dsh-maestro-review ] || ln -s "$REVIEW_REPORT_DIR/.maestro-history" /app/dsh-maestro-review
+  [ -e /app/maestro-reviewer ] || ln -s "$REVIEW_REPORT_DIR/.maestro-history" /app/maestro-reviewer
 fi
 # Boot the published DSH CLI against the baked reviewer-ci profile
 # ($DSH_HOME/profiles/reviewer-ci).

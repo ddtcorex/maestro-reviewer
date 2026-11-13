@@ -5,9 +5,9 @@ projects being reviewed. One **reviewer project** holds the secrets and runs
 the reviewer image, one small **config project** holds the pipeline file, and
 each **source project** adds a bridge job that carries no secrets. Each source
 project can use its own AI provider and key, configured on the reviewer
-project. The same review engine (`reviewEngine`) also serves the webhook flow
-of a DSH host running the `@ddtcorex/dsh-maestro-review` plugin, see
-[Coexistence](#9-coexistence-ci-yields-to-webhook).
+project. The engine is driven here by the CI flow only: a webhook host is not part of
+this harness, so the CI label and `maestro-reviewer resolve` are the triggers,
+see [Coexistence](#9-coexistence-ci-yields-to-webhook).
 
 Files in this package:
 
@@ -567,11 +567,9 @@ head SHA both post. Pick one flow per MR: mapped projects normally use the
 webhook, CI deep on demand. The CI flow only sees a webhook review in flight
 when both flows use the same GitLab user.
 
-Webhook triggers (DSH host with the `@ddtcorex/dsh-maestro-review` plugin and
-the project mapped in Settings > Maestro Review): comment `@<bot-username>`
-for a quick review, or `@<bot-username>` plus `/maestro deep` or "deep review"
-for a deep one with the full environment. Unmapped projects get the diff-only
-fallback, and deep is declined there (use the CI label instead).
+Webhook triggers are not part of this harness. Every review here starts from
+the CI label, which runs the quick or the deep flow as configured on the
+project.
 
 ## 10. Upgrading
 
@@ -634,18 +632,8 @@ works by design; test it on a separate reviewer project.
 | job uses an old image | `REVIEWER_IMAGE` is pinned on purpose; bump it in the config project's file |
 | reports or artifacts missing | the entrypoint must `cd $CI_PROJECT_DIR` before capturing the report dir; keep that line if you fork `entrypoint.sh` |
 
-## 12. Host observability (webhook flow)
+## 12. Host observability
 
-The webhook flow runs in `@ddtcorex/dsh-maestro-review`; its host log lines
-keep the `maestro-orchestrator:` prefix.
-
-- **Tailing the host log**: every drop or dedup leaves one structured line:
-  `drop unmapped|assign-gate-off|push-gate-off|push-no-completed-history|missing-token`,
-  `deduped duplicate in-flight review key=… trigger=…`, intake
-  `drop invalid-identity`. Generic GitLab noise (closes, label edits) stays
-  silent.
-- **In-flight key**: `projectId:mrIid:mode:scope:trigger[:pushSha8]`: quick
-  and deep and distinct push SHAs never suppress each other.
-- **History** (`~/.dsh/dsh-maestro-review/reviews.json`, cap 100): `running`
-  entries older than 2h auto-fail; prune never drops `running`;
-  `reviewSessionRetentionDays=0` disables prune.
+There is no host process in this harness: the CI flow writes its log and its
+report artifacts to the job, and `maestro-reviewer resolve` prints the resolved
+config as JSON. Debug from those two, not from a web host.

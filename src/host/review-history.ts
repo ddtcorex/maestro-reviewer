@@ -25,7 +25,7 @@ const STALE_RUNNING_MS = 2 * 60 * 60_000 // 2h — host restart can leave runnin
 
 export function historyPath(dshHome?: string): string {
   const home = dshHome ?? process.env.DSH_HOME ?? join(homedir(), '.dsh')
-  return join(home, 'dsh-maestro-review', 'reviews.json')
+  return join(home, 'maestro-reviewer', 'reviews.json')
 }
 
 

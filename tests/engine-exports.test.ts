@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 
 /**
- * The runtime surface @ddtcorex/dsh-maestro-review imports from this package
+ * The runtime surface the retired review host imported from this package
  * through `@ddtcorex/maestro-reviewer/lib/...`. A refactor that renames or
  * moves one of these breaks the host plugin at boot, so the list is pinned
  * here; change it only together with the plugin. Type-only imports (events,
@@ -25,7 +25,7 @@ const PLUGIN_SURFACE: Record<string, string[]> = {
   'lib/skills-tool.js': [],
 }
 
-describe('engine exports used by dsh-maestro-review', () => {
+describe('engine exports kept for host consumers', () => {
   it('reaches lib/ through the package exports map', () => {
     const pkg = JSON.parse(readFileSync('package.json', 'utf-8')) as { exports: Record<string, unknown> }
     expect(pkg.exports['./lib/*']).toBe('./lib/*')

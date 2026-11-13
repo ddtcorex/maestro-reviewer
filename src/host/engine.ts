@@ -263,7 +263,7 @@ export function createEngineAgents(ctx: Context): EngineAgents {
           setup: async (agentCtx) => {
             installModelSelection(agentCtx)
             await agentCtx.plugin(ReviewToolPolicy, { onToolCall: run.onToolCall })
-            await mountAgentPreset(ctx.agentPresets, agentCtx, 'dsh-maestro-reviewer')
+            await mountAgentPreset(ctx.agentPresets, agentCtx, 'maestro-reviewer')
             await run.forge.mountAgentTools(agentCtx, { onDiffTruncated: () => { diffTruncated = true }, ...(chunk !== undefined ? { onlyPaths: chunk.files, partLabel: chunk.label } : {}) })
             await agentCtx.plugin(ReviewFindingsTool, { onReport: (findings) => { capturedFindings = findings }, requireCodes: payload.scope.kind !== 'discussion' })
             // Diff-only runs have no worktree; nothing to search there.
@@ -403,7 +403,7 @@ export function createEngineAgents(ctx: Context): EngineAgents {
         setup: async (agentCtx) => {
           installModelSelection(agentCtx)
           await agentCtx.plugin(ReviewToolPolicy, { onToolCall: run.onToolCall })
-          await mountAgentPreset(ctx.agentPresets, agentCtx, 'dsh-maestro-reviewer')
+          await mountAgentPreset(ctx.agentPresets, agentCtx, 'maestro-reviewer')
           // Read tools only: an answer is text the caller posts; the agent never writes to the MR.
           await run.forge.mountAgentTools(agentCtx, { readOnly: true })
         },

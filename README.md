@@ -6,9 +6,9 @@ auditor agents, comment and finding posting, review history and signals, the
 web host, no settings store and no local checkout.
 
 The DSH host side (GitLab webhook intake, project mappings with local
-worktrees, the Maestro Review Settings section, Telegram digests) is the
-separate plugin [`@ddtcorex/dsh-maestro-review`](https://github.com/ddtcorex/dsh-maestro-review),
-which runs this engine.
+worktrees, the Settings section, Telegram digests) is not part of this harness.
+This package is the engine, the `resolve` CLI and the CI flow; the CI label and
+`maestro-reviewer resolve` are the supported triggers.
 
 ## What it provides
 
@@ -92,11 +92,11 @@ See AGENTS.md for conventions (host/client split, secrets handling, live-validat
 ## Use from a DSH profile
 
 ```sh
-dsh plugin --profile web add @ddtcorex/maestro-reviewer @ddtcorex/dsh-maestro-review
+dsh plugin --profile web add @ddtcorex/maestro-reviewer
 ```
 
-The engine alone provides the skill and the `reviewEngine` service; the
-webhook and Settings need `@ddtcorex/dsh-maestro-review`.
+The package provides the skill and the `reviewEngine` service. The webhook and
+Settings surfaces are not shipped here and are not part of this harness.
 
 ## Development
 

@@ -47,7 +47,6 @@ describe('package identity after the maestro-reviewer rename', () => {
     const names = docs.flatMap(d => moduleNames(d))
     expect(names.length).toBeGreaterThan(0)
     for (const n of names) expect(n, n).toMatch(/^@ddtcorex\/maestro-reviewer(\/|$)/)
-    // The DSH host rows (webhook, host orchestrator, settings RPC) ship in @ddtcorex/dsh-maestro-review.
     expect(rowIds(docs[0])).toEqual(['maestro-review-host', 'maestro-review-engine'])
   })
 
@@ -59,14 +58,13 @@ describe('package identity after the maestro-reviewer rename', () => {
     expect(pin).toMatch(/^\d+\.\d+\.\d+$/)
     const num = (v: string) => v.split('.').map(Number).reduce((a, n) => a * 1000 + n, 0)
     expect(num(pin)).toBeLessThanOrEqual(num((pkg as unknown as { version: string }).version))
-    expect(profile.dependencies).not.toHaveProperty('@ddtcorex/dsh-maestro-review')
     expect(profile.dsh.profile.bundles).toContain('@ddtcorex/maestro-reviewer')
   })
 
-  it('keeps the persisted legacy contracts', () => {
-    expect(REVIEW_SOURCE_KIND).toBe('plugin:@ddtcorex/dsh-maestro-review')
-    expect(historyPath('/h')).toBe(join('/h', 'dsh-maestro-review', 'reviews.json'))
-    expect(read('docker/entrypoint.sh')).toContain('/app/dsh-maestro-review')
-    expect(read('src/host/engine.ts')).toContain("'dsh-maestro-reviewer'")
+  it('pins the persisted identifiers', () => {
+    expect(REVIEW_SOURCE_KIND).toBe('plugin:@ddtcorex/maestro-reviewer')
+    expect(historyPath('/h')).toBe(join('/h', 'maestro-reviewer', 'reviews.json'))
+    expect(read('docker/entrypoint.sh')).toContain('/app/maestro-reviewer')
+    expect(read('src/host/engine.ts')).toContain("'maestro-reviewer'")
   })
 })
