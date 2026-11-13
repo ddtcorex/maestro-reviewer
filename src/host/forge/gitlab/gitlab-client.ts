@@ -7,6 +7,7 @@ import { gitlabAuthHeaders } from './gitlab-auth.js'
 import { redact, type DiffHit } from '../../redact.js'
 import { ENGINE_FINDING_CODES, findingCodeOf } from '../../review-feedback.js'
 import { openerSeverity } from '../../finding-filters.js'
+import { sanitizeAgentText } from '../../agent-text.js'
 import type { ThreadState } from '../types.js'
 
 export const name = 'maestro-gitlab-client'
@@ -46,14 +47,8 @@ export const Config: z<Config> = z.object({
   readOnly: z.boolean(),
 })
 
-/**
- * Escapes HTML comments in anything an agent writes to GitLab, so no agent
- * text (steered by MR content) can carry a review marker or metadata block.
- * Only the engine writes those, after this escaping.
- */
-export function sanitizeAgentText(text: string): string {
-  return text.replace(/<!--/g, '&lt;!--')
-}
+// Re-exported for callers that already import it from here.
+export { sanitizeAgentText }
 
 /** Hard cap on diff files fetched for one review. */
 export const MAX_DIFF_FILES = 3000

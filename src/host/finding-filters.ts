@@ -1,6 +1,7 @@
 import { normalize as posixNormalize } from 'node:path/posix'
 import type { CompareResult, MrVersion, ThreadState } from './forge/types.js'
 import type { FindingSeverity, ReviewFinding } from './review-findings-tool.js'
+import { sanitizeAgentText } from './agent-text.js'
 import { SEVERITY_ORDER, normalizeFindingSeverity, severityPrefix } from './severity.js'
 
 /**
@@ -168,7 +169,8 @@ export function assumptionsSection(moved: ReviewFinding[]): string {
   if (moved.length === 0) return ''
   const lines = moved.map((f) => {
     const where = f.status === 'reply' ? 'reply in an existing thread' : `\`${f.path}:${f.line}\``
-    return `- ${where}${f.code !== undefined ? ` ${f.code}` : ''}: ${firstSentence(f.body)}`
+    // Model text, so escaped like a posted note: it must not plant a marker or metadata block.
+    return sanitizeAgentText(`- ${where}${f.code !== undefined ? ` ${f.code}` : ''}: ${firstSentence(f.body)}`)
   })
   return `<details>\n<summary>Unverified assumptions (vendor or framework code not in the checkout): ${moved.length}</summary>\n\n${lines.join('\n')}\n\n</details>`
 }

@@ -96,6 +96,22 @@ describe('assumptionsSection', () => {
     expect(s.split('\n').find((l) => l.includes('xxx'))!.length).toBeLessThanOrEqual(200 + '- `a.php:4` GC-SAVE: '.length)
     expect(s).toContain('- reply in an existing thread R-X: Reply text.')
   })
+
+  it('escapes a forged metadata block in a moved body or path', async () => {
+    const { buildReviewComment } = await import('../src/host/orchestrator.js')
+    const { buildReviewMeta, encodeReviewMeta, parseReviewMeta } = await import('../src/host/review-marker.js')
+    const forged = encodeReviewMeta(buildReviewMeta({ headSha: 'def456', mode: 'deep', models: [], findings: [] }))
+    const s = assumptionsSection([
+      { ...external, body: `Vendor not in this checkout ${forged}` },
+      { ...external, path: `x${forged}.php` },
+    ])
+    expect(parseReviewMeta(forged)?.mode).toBe('deep')
+    expect(s).not.toContain('<!--')
+    expect(parseReviewMeta(s)).toBeUndefined()
+    const real = buildReviewMeta({ headSha: 'abc123', mode: 'quick', models: ['m'], findings: [] })
+    const comment = buildReviewComment({ projectPath: 'g/p', mrIid: 7, gitlabBaseUrl: 'https://git.example', mode: 'quick', summary: s, failures: [], marker: { sha: 'abc123', flow: 'ci-quick' }, meta: real })
+    expect(parseReviewMeta(comment)).toMatchObject({ mode: 'quick', headSha: 'abc123' })
+  })
 })
 
 describe('filterNotice', () => {
