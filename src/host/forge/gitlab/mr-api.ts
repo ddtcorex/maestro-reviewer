@@ -47,11 +47,9 @@ export async function fetchCompare(
 }
 
 /**
- * Fetch the MR's diff base SHA for govard diff-scope runs. Best-effort:
- * returns undefined (the reviewer prompt then omits the lint rule) rather
- * than failing the review when GitLab is unreachable.
+ * Merge request versions (head sha and creation time), first page of 100,
+ * newest first as GitLab returns them; undefined on any error.
  */
-/** Merge request versions (head sha and creation time), first page of 100; undefined on any error. */
 export async function fetchMrVersions(
   baseUrl: string, token: string, projectId: number, mrIid: number, fetcher: typeof fetch = fetch,
 ): Promise<MrVersion[] | undefined> {
@@ -65,6 +63,11 @@ export async function fetchMrVersions(
   }
 }
 
+/**
+ * Fetch the MR's diff base SHA for govard diff-scope runs. Best-effort:
+ * returns undefined (the reviewer prompt then omits the lint rule) rather
+ * than failing the review when GitLab is unreachable.
+ */
 export async function fetchMrBaseSha(
   baseUrl: string,
   token: string,

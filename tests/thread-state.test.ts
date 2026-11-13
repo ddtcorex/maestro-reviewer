@@ -115,6 +115,12 @@ describe('isAnsweredUnchanged', () => {
     expect(compare).toHaveBeenCalledWith('h2', 'h3')
   })
 
+  it('does not depend on the order versions come in (GitLab sends newest first)', async () => {
+    const compare = vi.fn(async () => ({ diffs: [hunk('b.php', 1, 1)] }))
+    expect(await isAnsweredUnchanged(answered, { versions: [...versions].reverse(), compare, headSha: 'h3' })).toBe(true)
+    expect(compare).toHaveBeenCalledWith('h2', 'h3')
+  })
+
   it('fails open on an unreadable answer time', async () => {
     expect(await isAnsweredUnchanged({ ...answered, lastHumanAt: 'yesterday' }, { versions, compare: vi.fn(), headSha: 'h3' })).toBe(false)
   })

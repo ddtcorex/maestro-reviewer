@@ -74,7 +74,7 @@ export interface ReviewForge {
   compare(from: string, to: string): Promise<CompareResult | undefined>
   /** The bot's own threads with who answered last; optional (no reply filtering without it). */
   ownThreads?(): Promise<ThreadState[]>
-  /** Merge request versions, oldest first; undefined when they cannot be read. */
+  /** Merge request versions in any order (GitLab returns newest first); undefined when they cannot be read. */
   mrVersions?(): Promise<MrVersion[] | undefined>
   postNote(body: string): Promise<void>
   replyToDiscussion(discussionId: string, body: string): Promise<void>
