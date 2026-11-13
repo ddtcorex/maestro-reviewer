@@ -12,6 +12,22 @@ describe('saysVendorMissing', () => {
     expect(saysVendorMissing(body)).toBe(true)
   })
 
+  it.each([
+    'The vendor source is not available here, so the plugin order is assumed.',
+    'The framework code is not present in the repository, so this is unverified.',
+  ])('matches an absence of source anchored to the checkout %#', (body) => {
+    expect(saysVendorMissing(body)).toBe(true)
+  })
+
+  it.each([
+    'The framework escaper is not in use here; the value is echoed raw.',
+    'The library call is not in a transaction, so a failure leaves half the rows written.',
+    'This third-party payload is not in the allowlist, so it is rejected.',
+    'The core check is not present on the admin route.',
+  ])('does not match a checkout defect that only says something is not in or present %#', (body) => {
+    expect(saysVendorMissing(body)).toBe(false)
+  })
+
   it('does not match a plain question', () => {
     expect(saysVendorMissing('Is the quote always saved after collectTotals()?')).toBe(false)
   })
