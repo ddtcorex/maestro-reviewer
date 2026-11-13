@@ -9,11 +9,11 @@ importers:
   .:
     dependencies:
       '@ddtcorex/maestro-reviewer':
-        specifier: 0.20.0
-        version: 0.20.0(@deepseek-ai/cordis@4.1.0)
+        specifier: 0.21.0
+        version: 0.21.0(@deepseek-ai/cordis@4.1.0)
       '@ddtcorex/maestro-skills':
-        specifier: ^3.1.0
-        version: 3.1.0(@deepseek-ai/cordis@4.1.0)
+        specifier: ^4.0.0
+        version: 4.0.0(@deepseek-ai/cordis@4.1.0)
       '@deepseek-ai/dsh':
         specifier: 0.2.2-rc.2
         version: 0.2.2-rc.2(ef6d76a3246406bebfd86c6822bffa25)
@@ -129,14 +129,14 @@ packages:
     resolution: {integrity: sha512-Y5tqevQaUAZhhj82BpYMNC1ssvLQTVAfwKdm8iy8qwmhvC2/CpcAu8OC+QEtjM7pMk7knx83u1Qj8gzkicyelw==}
     engines: {node: '>=6.9.0'}
 
-  '@ddtcorex/maestro-reviewer@0.20.0':
-    resolution: {integrity: sha512-fy5TlWD6/ThHAP9HeKLpzeTk6MVxfq6sJI0bhD/MUAanWpuGmpvsX4Y/PygUBEhCoeN5RsX0JpzZ0aOkOHCx4A==}
+  '@ddtcorex/maestro-reviewer@0.21.0':
+    resolution: {integrity: sha512-LLd+UAasSwXhWb1mkGOs4oBU75J3CuV2HzMXDUmF2+qaITTn/DRgfDrk0V0YhkYhM9jVAJsUUb52V7xG2UIvWw==}
     engines: {node: ^22.19.0 || >=24.0.0}
     peerDependencies:
       '@deepseek-ai/cordis': ~4.1.0
 
-  '@ddtcorex/maestro-skills@3.1.0':
-    resolution: {integrity: sha512-nOX43FRZQEu0cESZNvKLFpPzzJr/lnEncZASuJwjlqY4kyJmN95jCHhnv0Jj6c73EKkN0MB24C/EnRJ2nNNUQw==}
+  '@ddtcorex/maestro-skills@4.0.0':
+    resolution: {integrity: sha512-EFcZxF6x9tbr8UIBOkbJur6MbA05IiSRDjPEJh8J4Q+ftjdX9ocHBXZeDouGrm6tWz+Xe4e4WTSeszPUiOAwtQ==}
     engines: {node: ^22.19.0 || >=24.0.0}
     peerDependencies:
       '@deepseek-ai/cordis': ~4.1.0
@@ -4415,13 +4415,13 @@ snapshots:
 
   '@babel/runtime@7.29.14': {}
 
-  '@ddtcorex/maestro-reviewer@0.20.0(@deepseek-ai/cordis@4.1.0)':
+  '@ddtcorex/maestro-reviewer@0.21.0(@deepseek-ai/cordis@4.1.0)':
     dependencies:
       '@deepseek-ai/cordis': 4.1.0(@deepseek-ai/cordis-plugin-include@1.1.0)(@deepseek-ai/cordis-plugin-loader@1.1.0)
       '@deepseek-ai/schemastery': 3.19.0
       yaml: 2.9.1
 
-  '@ddtcorex/maestro-skills@3.1.0(@deepseek-ai/cordis@4.1.0)':
+  '@ddtcorex/maestro-skills@4.0.0(@deepseek-ai/cordis@4.1.0)':
     dependencies:
       '@deepseek-ai/cordis': 4.1.0(@deepseek-ai/cordis-plugin-include@1.1.0)(@deepseek-ai/cordis-plugin-loader@1.1.0)
 
