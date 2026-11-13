@@ -1,6 +1,6 @@
 import { normalize as posixNormalize } from 'node:path/posix'
 import type { ReviewFinding } from '../../review-findings-tool.js'
-import { severityPrefix } from '../../severity.js'
+import { SEVERITY_ORDER, severityPrefix } from '../../severity.js'
 import { findingCodeMarker } from '../../review-feedback.js'
 import { sanitizeAgentText } from './gitlab-client.js'
 import type { CompareResult } from '../types.js'
@@ -177,10 +177,36 @@ function lastNewLine(diff: string): number {
   return last
 }
 
+const SEVERITY_LABELS = SEVERITY_ORDER.map((s) => severityPrefix(s))
+const ECHO_SEPARATOR = /^(?:·|-|\u2014)\s*/
+
+/**
+ * The model often restates the header it sees on earlier threads at the start
+ * of its body (`· \`CODE\``, then a separator, or another severity label). Removes every
+ * leading severity label, `·` and copy of this finding's own code, plus one
+ * separator after them; other text is never touched, and a body that is
+ * nothing but an echo is returned as it was.
+ */
+export function stripHeaderEcho(body: string, code: string | undefined): string {
+  const codeToken = code === undefined ? undefined : `\`${code}\``
+  let rest = body.replace(/^\s+/, '')
+  let echoed = false
+  for (;;) {
+    const label = SEVERITY_LABELS.find((l) => rest.startsWith(l))
+    const token = label ?? (rest.startsWith('·') ? '·' : codeToken !== undefined && rest.startsWith(codeToken) ? codeToken : undefined)
+    if (token === undefined) break
+    rest = rest.slice(token.length).replace(/^\s+/, '')
+    echoed = true
+  }
+  if (!echoed) return body
+  rest = rest.replace(ECHO_SEPARATOR, '')
+  return rest === '' ? body : rest
+}
+
 export function findingNoteBody(finding: ReviewFinding): string {
   const label = severityPrefix(finding.severity)
   const head = finding.code === undefined ? label : `${label} · \`${finding.code}\``
-  const text = sanitizeAgentText(finding.body.startsWith(label) ? finding.body.slice(label.length).replace(/^\s+/, '') : finding.body)
+  const text = sanitizeAgentText(stripHeaderEcho(finding.body, finding.code))
   return `${head}\n\n${text}${finding.code === undefined ? '' : `\n\n${findingCodeMarker(finding.code)}`}`
 }
 
