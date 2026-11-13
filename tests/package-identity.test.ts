@@ -65,6 +65,6 @@ describe('package identity after the maestro-reviewer rename', () => {
     expect(REVIEW_SOURCE_KIND).toBe('plugin:@ddtcorex/maestro-reviewer')
     expect(historyPath('/h')).toBe(join('/h', 'maestro-reviewer', 'reviews.json'))
     expect(read('docker/entrypoint.sh')).toContain('/app/maestro-reviewer')
-    expect(read('src/host/engine.ts')).toContain("'dsh-maestro-reviewer'")
+    expect(read('src/host/engine.ts')).toContain("'maestro-reviewer'")
   })
 })

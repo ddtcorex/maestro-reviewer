@@ -48,7 +48,7 @@ ENV PATH="/app/profiles/reviewer-ci/node_modules/.bin:${PATH}"
 # Reviewer/auditor agent presets now arrive as bundle patch rows shipped by
 # @ddtcorex/maestro-reviewer itself (presets/maestro-{reviewer,auditor}.patch.yml,
 # listed in its `dsh.bundle.patch`), which the profile composes like any other
-# bundle layer — the orchestrator mounts 'dsh-maestro-reviewer'/'dsh-maestro-auditor'
+# bundle layer — the orchestrator mounts 'maestro-reviewer'/'dsh-maestro-auditor'
 # from the agent-preset registry. No .agent-presets COPY: DSH 0.1.7 declares
 # presets from loader rows only, and the plural @deepseek-ai/dsh-agent-presets
 # that used to scan that directory is no longer in this profile.

@@ -6,10 +6,10 @@
 # preset directories in. A profile that wants a different composition overrides
 # this row by bare id (no `insert:` wrapper) rather than inserting a second one.
 - insert:
-    - id: preset-dsh-maestro-reviewer
+    - id: preset-maestro-reviewer
       name: '@deepseek-ai/dsh-agent-preset'
       config:
-        id: dsh-maestro-reviewer
+        id: maestro-reviewer
         name: Maestro Reviewer
         description: >-
           Automated AI Tech Lead that reviews a GitLab merge request's diff against project coding standards. Invoked programmatically by maestro-reviewer's orchestrator — not meant for manual selection.

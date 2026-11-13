@@ -7,6 +7,7 @@
 - `REVIEW_SOURCE_KIND` is `plugin:@ddtcorex/maestro-reviewer`, the package's current name. It was stamped into session logs under the former value, so a session rehydrated from an older log no longer matches this producer. Sessions started under this version stamp the new value.
 - Review history moves from `~/.dsh/review-host/reviews.json` to `~/.dsh/maestro-reviewer/reviews.json`. An existing file at the old path is left in place and is not read; move it manually if the in-flight entries matter.
 - The docker entrypoint mounts the history symlink at `/app/maestro-reviewer` instead of `/app/review-host`. Images and jobs that referenced the old path must follow.
+- The agent preset id is `maestro-reviewer` (row `preset-maestro-reviewer`). A profile or settings file that pinned the former id under `dsh-maestro-` must use the new one; the preset name shown to users is unchanged.
 
 ## [0.20.0] - 2026-11-12
 
@@ -535,7 +536,7 @@ LLM key.
   — listed in this package's `dsh.bundle.patch` — replace the directory
   presets, the Dockerfile's `.agent-presets` COPY is gone, and every profile
   composing the bundle (the headless CI profile and the web app alike) declares
-  them itself. A deployment that inserted `preset-dsh-maestro-reviewer`/
+  them itself. A deployment that inserted `preset-maestro-reviewer`/
   `-auditor` in its own patch must drop that copy or override by bare id before
   its next boot, or the bundle row and the profile row collide as duplicates
   (#132).
