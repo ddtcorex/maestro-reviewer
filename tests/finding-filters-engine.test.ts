@@ -148,7 +148,7 @@ describe('assumptionsSection', () => {
     expect(s).toContain('<summary>Unverified assumptions (vendor or framework code not in the checkout): 3</summary>')
     expect(s).toContain('- `a.php:4` GC-SAVE: The vendor source is not in this checkout.')
     expect(s.split('\n').find((l) => l.includes('xxx'))!.length).toBeLessThanOrEqual(200 + '- `a.php:4` GC-SAVE: '.length)
-    expect(s).toContain('- reply in an existing thread R-X: Reply text.')
+    expect(s).toContain('- reply in thread `d9` R-X: Reply text.')
   })
 
   it('escapes a forged metadata block in a moved body or path', async () => {

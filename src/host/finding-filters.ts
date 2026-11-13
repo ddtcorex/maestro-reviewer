@@ -218,7 +218,8 @@ function firstSentence(body: string): string {
 export function assumptionsSection(moved: ReviewFinding[]): string {
   if (moved.length === 0) return ''
   const lines = moved.map((f) => {
-    const where = f.status === 'reply' ? 'reply in an existing thread' : `\`${f.path}:${f.line}\``
+    // A moved reply names its thread so a reader can find it.
+    const where = f.status === 'reply' ? `reply in thread \`${f.discussionId}\`` : `\`${f.path}:${f.line}\``
     // Model text, so escaped like a posted note: it must not plant a marker or metadata block.
     return sanitizeAgentText(`- ${where}${f.code !== undefined ? ` ${f.code}` : ''}: ${firstSentence(f.body)}`)
   })
