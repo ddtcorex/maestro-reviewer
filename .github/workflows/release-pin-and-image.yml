@@ -121,7 +121,9 @@ jobs:
         run: |
           corepack enable
           corepack prepare pnpm@11.7.0 --activate
-          cd profiles/reviewer-ci && pnpm --config.minimumReleaseAge=0 update @ddtcorex/maestro-reviewer
+          # The profile pins an exact version, which a bare `update` keeps
+          # (v0.20.0's first run locked 0.19.4 and was refused): name the tag.
+          cd profiles/reviewer-ci && pnpm --config.minimumReleaseAge=0 update "@ddtcorex/maestro-reviewer@${{ steps.version.outputs.version }}"
 
       - name: Assert pin-only diff and exact locked version
         id: diff

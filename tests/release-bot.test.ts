@@ -1,4 +1,4 @@
-import { mkdtempSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -99,5 +99,14 @@ describe('readLockedReviewerVersion', () => {
   })
   it('returns undefined when the lockfile is unreadable', () => {
     expect(readLockedReviewerVersion(join(tmpdir(), 'reviewer-ci-missing-dir'))).toBeUndefined()
+  })
+})
+
+describe('release-pin-and-image pin step', () => {
+  it('updates the reviewer to the exact tag version, since the profile pins an exact version that a bare update never moves', () => {
+    const wf = readFileSync(new URL('../.github/workflows/release-pin-and-image.yml', import.meta.url), 'utf8')
+    const step = wf.slice(wf.indexOf('- name: Pin the reviewer in profiles/reviewer-ci'), wf.indexOf('- name: Assert pin-only diff'))
+    expect(step).toContain('update "@ddtcorex/maestro-reviewer@${{ steps.version.outputs.version }}"')
+    expect(step).not.toMatch(/update @ddtcorex\/maestro-reviewer\s*$/m)
   })
 })
