@@ -138,6 +138,30 @@ describe('engine fan-out', () => {
   })
 })
 
+describe('engine evidence check without readable files', () => {
+  const major = (chunk: { files: string[] }) => ({ ...finding(chunk.files[0]), severity: 'major', evidence: [{ path: chunk.files[0], line: 1 }] })
+
+  it('skips the check and keeps the severity when the forge cannot read files', async () => {
+    const { posted, notes } = await runFanout(async (_w, _p, _run, _prof, _blk, chunk) => ({ summary: '', failures: [], findings: [major(chunk)], models: ['fast'], deferredPost: true }))
+    expect(posted.length).toBeGreaterThan(0)
+    expect(posted.every((p: any) => p.severity === 'major' && p.severityNote === undefined)).toBe(true)
+    expect(notes[0]).toContain('Evidence check skipped: files could not be read.')
+  })
+
+  it('skips the check when a forge read fails rather than treating the file as absent', async () => {
+    const { createReviewEngine } = await import('../src/host/engine.js')
+    const f = fanForge()
+    const forge = { ...f.forge, readFile: async () => { throw new Error('GitLab API error 503 reading x') } }
+    await createReviewEngine({} as any, { reviewer: vi.fn(async (_w: any, _p: any, _run: any, _prof: any, _blk: any, chunk: any) => ({ summary: '', failures: [], findings: [major(chunk)], models: ['fast'], deferredPost: true })), auditor: vi.fn() } as any).run(
+      { projectPath: 'g/p', projectId: 1, mrIid: 2, sourceBranch: 'b', headSha: 'abc1', trigger: 'mention', mode: 'quick', scope: { kind: 'mr' } } as any,
+      { gitlab: { baseUrl: 'https://git.example.com', token: 't', botUsername: 'bot' }, access: { kind: 'diff' }, model: { provider: 'p', model: 'fast' } as any,
+        agentTimeoutMs: 1000, forge: forge as any, fanout: { files: 10, bytes: 1_000_000, concurrency: 2 } },
+    )
+    expect(f.posted.every((p: any) => p.severity === 'major')).toBe(true)
+    expect(f.notes[0]).toContain('Evidence check skipped: files could not be read.')
+  })
+})
+
 describe('gitlab tools with a file allowlist', () => {
   it('serve only the chunk files', async () => {
     vi.stubGlobal('fetch', vi.fn(async (url: string) => /\/diffs\?/.test(url) && new URL(url).searchParams.get('page') === '1'

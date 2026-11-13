@@ -152,11 +152,29 @@ export interface AgentRunConfig {
   language?: string
   /** Records one agent session's token usage (null when the session reported none). */
   onUsage: (agent: AgentUsage['agent'], model: string, usage: TokenUsage | null) => void
-  /** Finding filters for an MR review; the file reader is added per checkout when posting. */
-  filters?: Omit<FilterContext, 'lines'>
+  /**
+   * Finding filters for an MR review; the line reader is added per checkout when
+   * posting, from the worktree or else from the forge's own file reads, absent
+   * when the forge has none (the evidence check is then skipped).
+   */
+  filters?: Omit<FilterContext, 'lines'> & Pick<ReviewForge, 'readFile'>
 }
 
-/** Line counts from the checkout when there is one, else through the forge at the reviewed head. */
+/** The filter context for one posting step: the run's filters plus a line reader for its checkout. */
+function filtersFor(worktreePath: string | undefined, f: AgentRunConfig['filters']): FilterContext | undefined {
+  if (f === undefined) return undefined
+  const { readFile, ...rest } = f
+  const lines = linesReader(worktreePath, readFile === undefined ? {} : { readFile }, rest.headSha)
+  return { ...rest, ...(lines !== undefined ? { lines } : {}) }
+}
+
+/** A missing file or directory on the path; any other error means the file could not be read. */
+const isAbsent = (err: unknown) => ['ENOENT', 'ENOTDIR', 'EISDIR'].includes((err as NodeJS.ErrnoException | undefined)?.code ?? '')
+
+/**
+ * Line counts from the checkout when there is one, else through the forge at
+ * the reviewed head: undefined for an absent file, null for a failed read.
+ */
 export function linesReader(worktreePath: string | undefined, forge: Pick<ReviewForge, 'readFile'>, headSha: string): ReadLineCount | undefined {
   const count = (text: string) => (text === '' ? 0 : text.split('\n').length - (text.endsWith('\n') ? 1 : 0))
   if (worktreePath !== undefined) {
@@ -164,14 +182,14 @@ export function linesReader(worktreePath: string | undefined, forge: Pick<Review
     return async (path) => {
       const abs = resolvePath(root, path)
       if (!abs.startsWith(`${root}/`)) return undefined
-      try { return count(await readFileText(abs, 'utf8')) } catch { return undefined }
+      try { return count(await readFileText(abs, 'utf8')) } catch (err) { return isAbsent(err) ? undefined : null }
     }
   }
   if (forge.readFile === undefined) return undefined
   const read = forge.readFile.bind(forge)
   return async (path) => {
-    const text = await read(path, headSha).catch(() => undefined)
-    return text === undefined ? undefined : count(text)
+    // The forge answers undefined only for a missing file; a thrown read (network, 429, 5xx) is unknown.
+    return read(path, headSha).then((text) => (text === undefined ? undefined : count(text)), () => null)
   }
 }
 
@@ -354,7 +372,7 @@ export function createEngineAgents(ctx: Context): EngineAgents {
         }
 
         if (chunk !== undefined) return { summary: '', failures: [], findings: capturedFindings, models: [primaryOptions.model], deferredPost: true }
-        const filters = run.filters === undefined ? undefined : { ...run.filters, lines: linesReader(worktreePath, run.forge, run.filters.headSha) }
+        const filters = filtersFor(worktreePath, run.filters)
         const r = await postFindingsSequentially(run.forge, capturedFindings, { minSeverity: run.minSeverity, muted: run.mutedCodes, ...(filters !== undefined ? { filters } : {}) })
         const f = filterOutcome(r, capturedFindings)
         const base = summaryWithFloor(reviewerSummary(r.postedNew, r.postedReplies, diffTruncated), r.belowMinimum, run.minSeverity)
@@ -576,7 +594,9 @@ export function createReviewEngine(ctx: Context, agents: EngineAgents = createEn
       const filterHead = currentHeadSha ?? payload.headSha
       if (payload.scope.kind === 'mr' && filterHead !== undefined) {
         const [threads, versions] = await Promise.all([forge.ownThreads().catch(() => []), forge.mrVersions().catch(() => undefined)])
-        agentRun.filters = { mode: payload.mode, threads, ...(versions !== undefined ? { versions } : {}), compare: (from, to) => forge.compare(from, to), headSha: filterHead }
+        // File reads come from the forge itself: the wrapper above answers "absent" for a forge without them.
+        const readFile = rawForge.readFile?.bind(rawForge)
+        agentRun.filters = { mode: payload.mode, threads, ...(versions !== undefined ? { versions } : {}), compare: (from, to) => forge.compare(from, to), headSha: filterHead, ...(readFile !== undefined ? { readFile } : {}) }
       }
       timer.mark('fetch')
       agentsStarted = true
@@ -615,7 +635,7 @@ export function createReviewEngine(ctx: Context, agents: EngineAgents = createEn
         const failed = settled.flatMap((r, i) => r.status === 'rejected' ? [{ chunk: chunks[i], reason: r.reason instanceof Error ? r.reason.message : String(r.reason) }] : [])
         if (done.length === 0) throw new Error(`every review part failed: ${[...new Set(failed.map((f) => f.reason))].join('; ')}`)
         const findings = mergeFindings(done.map((o) => o.findings ?? []))
-        const filters = agentRun.filters === undefined ? undefined : { ...agentRun.filters, lines: linesReader(worktreePath, forge, agentRun.filters.headSha) }
+        const filters = filtersFor(worktreePath, agentRun.filters)
         const posted = await postFindingsSequentially(forge, findings, { minSeverity: agentRun.minSeverity, muted: agentRun.mutedCodes, ...(filters !== undefined ? { filters } : {}) })
         const filterSummary = filterOutcome(posted, findings)
         const parts = [`Reviewed in ${chunks.length} parallel parts.`, ...(scopeTruncated ? ['The diff reached the file cap: files beyond it were not reviewed.'] : []), ...failed.map((f) => `Part ${f.chunk.id} (${f.chunk.files.length} files) failed: ${f.reason}; its files were not reviewed.`)]

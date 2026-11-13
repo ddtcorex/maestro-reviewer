@@ -36,8 +36,12 @@ export function classifyPremise(f: ReviewFinding): 'checkout' | 'external' {
   return f.premise === 'external' || saysVendorMissing(f.body) ? 'external' : 'checkout'
 }
 
-/** Line count of a checkout file at the reviewed head; undefined when the file does not exist. */
-export type ReadLineCount = (path: string) => Promise<number | undefined>
+/**
+ * Line count of a checkout file at the reviewed head: undefined when the file
+ * does not exist, null when it could not be read (network, rate limit, server
+ * error), which says nothing about whether it exists.
+ */
+export type ReadLineCount = (path: string) => Promise<number | undefined | null>
 
 /** A relative path that stays inside the checkout once normalized. */
 function insideCheckout(path: string): boolean {
@@ -49,17 +53,27 @@ function insideCheckout(path: string): boolean {
 /**
  * A major or blocking finding keeps its severity only when one evidence entry
  * names an existing checkout file and a line within it; otherwise it is
- * lowered to minor with a note. Without a reader the check is skipped.
+ * lowered to minor with a note. Without a reader, or when an entry could not
+ * be read, the check is skipped and the severity kept.
  */
-export async function checkEvidence(f: ReviewFinding, lines: ReadLineCount | undefined): Promise<ReviewFinding> {
+export async function judgeEvidence(f: ReviewFinding, lines: ReadLineCount | undefined): Promise<{ finding: ReviewFinding; skipped: boolean }> {
   const severity = normalizeFindingSeverity(f.severity)
-  if ((severity !== 'major' && severity !== 'blocking') || lines === undefined) return f
+  if (severity !== 'major' && severity !== 'blocking') return { finding: f, skipped: false }
+  if (lines === undefined) return { finding: f, skipped: true }
+  let unreadable = false
   for (const e of f.evidence ?? []) {
     if (!insideCheckout(e.path)) continue
     const count = await lines(posixNormalize(e.path))
-    if (count !== undefined && e.line >= 1 && e.line <= count) return f
+    if (count === null) unreadable = true
+    else if (count !== undefined && e.line >= 1 && e.line <= count) return { finding: f, skipped: false }
   }
-  return { ...f, severity: 'minor', severityNote: `Severity lowered from ${severity}: no evidence in the checkout.` }
+  if (unreadable) return { finding: f, skipped: true }
+  return { finding: { ...f, severity: 'minor', severityNote: `Severity lowered from ${severity}: no evidence in the checkout.` }, skipped: false }
+}
+
+/** The finding after the evidence check (see judgeEvidence). */
+export async function checkEvidence(f: ReviewFinding, lines: ReadLineCount | undefined): Promise<ReviewFinding> {
+  return (await judgeEvidence(f, lines)).finding
 }
 
 const FALLBACK_LINE = /^\*\*Inline fallback[^\n]*\*\*\n+/
@@ -136,7 +150,7 @@ export interface FilterResult {
   moved: ReviewFinding[]
   lowered: number
   answered: number
-  /** A major or blocking finding could not be checked because files cannot be read. */
+  /** A major or blocking finding could not be checked because files cannot be read or a read failed. */
   evidenceSkipped: boolean
 }
 
@@ -148,12 +162,11 @@ export interface FilterResult {
 export async function applyFilters(findings: ReviewFinding[], ctx: FilterContext): Promise<FilterResult> {
   const out: FilterResult = { post: [], moved: [], lowered: 0, answered: 0, evidenceSkipped: false }
   for (const reported of findings) {
-    const severity = normalizeFindingSeverity(reported.severity)
     // Evidence is asked of new findings only: a reply restates its thread, whose
     // opener the gate reads, and lowering it would render as a downgrade.
-    const isNew = reported.status === 'new'
-    if (isNew && ctx.lines === undefined && (severity === 'major' || severity === 'blocking')) out.evidenceSkipped = true
-    const f = isNew ? await checkEvidence(reported, ctx.lines) : reported
+    const judged = reported.status === 'new' ? await judgeEvidence(reported, ctx.lines) : { finding: reported, skipped: false }
+    if (judged.skipped) out.evidenceSkipped = true
+    const f = judged.finding
     if (f !== reported) out.lowered++
     if (ctx.mode === 'quick' && classifyPremise(f) === 'external') {
       out.moved.push({ ...f, premise: 'external' })

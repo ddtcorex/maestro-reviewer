@@ -79,6 +79,14 @@ describe('postFindingsSequentially with filters', () => {
     expect(r.evidenceSkipped).toBe(false)
   })
 
+  it('keeps the severity and reports a skipped check when a file read fails', async () => {
+    const f = forge()
+    const r = await postFindingsSequentially(f, [{ ...plain, severity: 'blocking', evidence: [{ path: 'a.php', line: 1 }] }], { filters: ctx({ lines: async () => null }) })
+    expect(f.posted[0]).toMatchObject({ severity: 'blocking' })
+    expect(r.lowered).toBe(0)
+    expect(r.evidenceSkipped).toBe(true)
+  })
+
   it('reports a skipped evidence check when files cannot be read', async () => {
     const r = await postFindingsSequentially(forge(), [{ ...plain, severity: 'major' }], { filters: ctx({ lines: undefined }) })
     expect(r.evidenceSkipped).toBe(true)
@@ -162,6 +170,13 @@ describe('linesReader', () => {
     const read = linesReader(undefined, { readFile }, 'h9')!
     expect(await read('a.php')).toBe(2)
     expect(await read('b.php')).toBeUndefined()
+  })
+
+  it('tells a failed forge read (null) from an absent file (undefined)', async () => {
+    const { linesReader } = await import('../src/host/engine.js')
+    const read = linesReader(undefined, { readFile: async (path: string) => { if (path === 'gone.php') return undefined; throw new Error('GitLab API error 429') } }, 'h')!
+    expect(await read('gone.php')).toBeUndefined()
+    expect(await read('a.php')).toBeNull()
   })
 
   it('is undefined when nothing can read files', async () => {
