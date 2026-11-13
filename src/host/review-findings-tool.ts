@@ -22,11 +22,15 @@ export interface ReviewFinding {
   premise?: 'checkout' | 'external'
   /** Checkout places that show the defect; required for major and blocking. */
   evidence?: Array<{ path: string; line: number }>
+  /** Engine only: who called the premise external, recorded when the finding is moved to the summary. */
+  premiseBy?: PremiseSource
   /** Engine only: the severity of the thread a reply belongs to. */
   threadSeverity?: FindingSeverity
   /** Engine only: a line explaining a severity the engine changed. */
   severityNote?: string
 }
+
+export type PremiseSource = 'model' | 'text' | 'both'
 
 export const FINDING_CODE_RE = /^[A-Z][A-Z0-9-]{2,40}$/
 

@@ -51,5 +51,6 @@ describe('report_review_findings schema', () => {
   it('does not expose engine-only fields', () => {
     expect(props.threadSeverity).toBeUndefined()
     expect(props.severityNote).toBeUndefined()
+    expect(props.premiseBy).toBeUndefined()
   })
 })

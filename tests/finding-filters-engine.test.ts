@@ -37,6 +37,7 @@ describe('postFindingsSequentially with filters', () => {
     expect(f.posted.map((p) => p.code)).toEqual(['BUG-LOOP'])
     expect(r.moved).toHaveLength(2)
     expect(r.moved[0].premise).toBe('external')
+    expect(r.moved.map((m) => m.premiseBy)).toEqual(['text', 'both'])
   })
 
   it('posts external findings in deep mode', async () => {

@@ -7,7 +7,9 @@
  */
 
 import { createHash } from 'node:crypto'
-import type { ReviewFinding } from './review-findings-tool.js'
+import type { PremiseSource, ReviewFinding } from './review-findings-tool.js'
+
+const PREMISE_SOURCES: readonly PremiseSource[] = ['model', 'text', 'both']
 
 export type ReviewFlow = 'ci-quick' | 'ci-deep' | 'webhook'
 
@@ -41,7 +43,7 @@ export interface ReviewMeta {
   mode: 'quick' | 'deep'
   models: string[]
   usage?: { input: number; output: number; cached: number }
-  findings: Array<{ code: string; fingerprint: string; severity: string; premise?: 'external' }>
+  findings: Array<{ code: string; fingerprint: string; severity: string; premise?: 'external'; premiseBy?: PremiseSource }>
   /** What the engine's finding filters did in this run. */
   filtered?: { external: number; lowered: number; answered: number }
   muted?: string[]
@@ -82,7 +84,8 @@ function isReviewMeta(x: unknown): x is ReviewMeta {
   if (!Array.isArray(m.models) || !m.models.every(isStr)) return false
   if (!Array.isArray(m.findings) || !m.findings.every(f => f !== null && typeof f === 'object'
     && isStr((f as Record<string, unknown>).code) && isStr((f as Record<string, unknown>).fingerprint) && isStr((f as Record<string, unknown>).severity)
-    && ((f as Record<string, unknown>).premise === undefined || (f as Record<string, unknown>).premise === 'external'))) return false
+    && ((f as Record<string, unknown>).premise === undefined || (f as Record<string, unknown>).premise === 'external')
+    && ((f as Record<string, unknown>).premiseBy === undefined || PREMISE_SOURCES.includes((f as Record<string, unknown>).premiseBy as PremiseSource)))) return false
   if (m.filtered !== undefined) {
     const c = m.filtered as Record<string, unknown>
     if (c === null || typeof c !== 'object' || !isNum(c.external) || !isNum(c.lowered) || !isNum(c.answered)) return false
@@ -143,7 +146,7 @@ export function buildReviewMeta(opts: {
     ...(opts.muted !== undefined && opts.muted.length > 0 ? { muted: opts.muted } : {}),
     ...(opts.filtered !== undefined ? { filtered: opts.filtered } : {}),
     findings: [
-      ...opts.findings.map(f => ({ code: f.code ?? 'none', fingerprint: findingFingerprint(f), severity: f.severity ?? 'minor', ...(f.premise === 'external' ? { premise: 'external' as const } : {}) })),
+      ...opts.findings.map(f => ({ code: f.code ?? 'none', fingerprint: findingFingerprint(f), severity: f.severity ?? 'minor', ...(f.premise === 'external' ? { premise: 'external' as const, ...(f.premiseBy !== undefined ? { premiseBy: f.premiseBy } : {}) } : {}) })),
       ...(opts.carried ?? []).filter(c => !opts.findings.some(f => findingFingerprint(f) === c.fingerprint)),
     ],
     at: (opts.now ?? (() => new Date()))().toISOString(),

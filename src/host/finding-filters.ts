@@ -1,6 +1,6 @@
 import { normalize as posixNormalize } from 'node:path/posix'
 import type { CompareResult, MrVersion, ThreadState } from './forge/types.js'
-import type { FindingSeverity, ReviewFinding } from './review-findings-tool.js'
+import type { FindingSeverity, PremiseSource, ReviewFinding } from './review-findings-tool.js'
 import { sanitizeAgentText } from './agent-text.js'
 import { SEVERITY_ORDER, normalizeFindingSeverity, severityPrefix } from './severity.js'
 
@@ -34,7 +34,14 @@ export function saysVendorMissing(body: string): boolean {
 
 /** `external` when declared, or when the body admits the vendor source was missing whatever was declared. */
 export function classifyPremise(f: ReviewFinding): 'checkout' | 'external' {
-  return f.premise === 'external' || saysVendorMissing(f.body) ? 'external' : 'checkout'
+  return premiseSource(f) === undefined ? 'checkout' : 'external'
+}
+
+/** Who called the premise external: the model's declaration, the body's wording, or both; undefined when neither did. */
+export function premiseSource(f: ReviewFinding): PremiseSource | undefined {
+  const declared = f.premise === 'external'
+  const text = saysVendorMissing(f.body)
+  return declared && text ? 'both' : declared ? 'model' : text ? 'text' : undefined
 }
 
 /**
@@ -189,9 +196,10 @@ export async function applyFilters(findings: ReviewFinding[], ctx: FilterContext
     if (judged.skipped) out.evidenceSkipped = true
     const f = judged.finding
     if (f !== reported) out.lowered++
-    if (ctx.mode === 'quick' && classifyPremise(f) === 'external') {
-      out.moved.push({ ...f, premise: 'external' })
-      out.effective.set(reported, { ...reported, premise: 'external' })
+    const premiseBy = ctx.mode === 'quick' ? premiseSource(f) : undefined
+    if (premiseBy !== undefined) {
+      out.moved.push({ ...f, premise: 'external', premiseBy })
+      out.effective.set(reported, { ...reported, premise: 'external', premiseBy })
       continue
     }
     const thread = f.status === 'reply' ? ctx.threads?.find((t) => t.discussionId === f.discussionId) : undefined

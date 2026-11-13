@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { checkEvidence, classifyPremise, saysVendorMissing } from '../src/host/finding-filters.js'
+import { checkEvidence, classifyPremise, premiseSource, saysVendorMissing } from '../src/host/finding-filters.js'
 import type { ReviewFinding } from '../src/host/review-findings-tool.js'
 
 describe('saysVendorMissing', () => {
@@ -55,6 +55,16 @@ describe('classifyPremise', () => {
 
   it('defaults to checkout when undeclared and silent', () => {
     expect(classifyPremise(finding())).toBe('checkout')
+  })
+})
+
+describe('premiseSource', () => {
+  it('names who called the premise external', () => {
+    const vendor = 'The vendor source is not in this checkout, please confirm.'
+    expect(premiseSource(finding({ premise: 'external' }))).toBe('model')
+    expect(premiseSource(finding({ body: vendor }))).toBe('text')
+    expect(premiseSource(finding({ premise: 'external', body: vendor }))).toBe('both')
+    expect(premiseSource(finding())).toBeUndefined()
   })
 })
 
