@@ -61,7 +61,7 @@ describe('finding filter fields in the prompt', () => {
   it('asks for premise and evidence and keeps the existing rules', () => {
     const prompt = buildReviewerScopePrompt({ scopeKind: 'full', mode: 'quick', profileInstruction: '', lint: LINT })
     expect(prompt).toContain('premise "external"')
-    expect(prompt).toContain('in quick mode it is listed in the summary, not posted as a thread')
+    expect(prompt).not.toContain('listed in the summary')
     expect(prompt).toContain('Give major and blocking findings evidence')
     expect(prompt).toContain('UNVERIFIED RULE')
     expect(prompt).toContain('SETTLED THREAD RULE')

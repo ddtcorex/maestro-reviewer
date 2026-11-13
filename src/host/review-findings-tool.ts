@@ -22,7 +22,7 @@ export interface ReviewFinding {
   premise?: 'checkout' | 'external'
   /** Checkout places that show the defect; required for major and blocking. */
   evidence?: Array<{ path: string; line: number }>
-  /** Engine only: who called the premise external, recorded when the finding is moved to the summary. */
+  /** Engine only: who called the premise external, recorded in the review metadata. */
   premiseBy?: PremiseSource
   /** Engine only: the severity of the thread a reply belongs to. */
   threadSeverity?: FindingSeverity

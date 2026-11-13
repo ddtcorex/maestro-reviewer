@@ -1,7 +1,6 @@
 import { normalize as posixNormalize } from 'node:path/posix'
 import type { CompareResult, MrVersion, ThreadState } from './forge/types.js'
 import type { FindingSeverity, PremiseSource, ReviewFinding } from './review-findings-tool.js'
-import { sanitizeAgentText } from './agent-text.js'
 import { SEVERITY_ORDER, normalizeFindingSeverity, severityPrefix } from './severity.js'
 
 /**
@@ -160,14 +159,14 @@ export interface FilterContext {
 export interface FilterResult {
   /** Findings to post, with their effective severity. */
   post: ReviewFinding[]
-  /** External findings kept out of threads in quick mode, marked `premise: 'external'`. */
-  moved: ReviewFinding[]
+  /** Findings to post whose premise is external; marked with `premise` and `premiseBy`, and posted like any other. */
+  external: number
   lowered: number
   answered: number
   /**
    * Each filtered input (by identity) to the finding the run records: the
    * effective one when posted or dropped (lowered, or a reply with its
-   * thread's severity), the reported one marked external when moved.
+   * thread's severity), marked with its premise when external.
    */
   effective: Map<ReviewFinding, ReviewFinding>
   /** A major or blocking finding could not be checked because files cannot be read or a read failed. */
@@ -176,11 +175,12 @@ export interface FilterResult {
 
 /**
  * Evidence first, for new findings (a lowered finding is then judged like any other), then the
- * external premise (quick mode only), then replies to answered threads, then
- * the reply's severity against its thread.
+ * external premise (recorded, never a reason to hold a finding back: in replay it did not
+ * separate wrong findings from right ones), then replies to answered threads, then the
+ * reply's severity against its thread.
  */
 export async function applyFilters(findings: ReviewFinding[], ctx: FilterContext): Promise<FilterResult> {
-  const out: FilterResult = { post: [], moved: [], lowered: 0, answered: 0, effective: new Map(), evidenceSkipped: false }
+  const out: FilterResult = { post: [], external: 0, lowered: 0, answered: 0, effective: new Map(), evidenceSkipped: false }
   // Replies answered on the same version share one compare.
   const compares = new Map<string, Promise<CompareResult | undefined>>()
   const compare = (from: string, to: string) => {
@@ -194,14 +194,9 @@ export async function applyFilters(findings: ReviewFinding[], ctx: FilterContext
     // opener the gate reads, and lowering it would render as a downgrade.
     const judged = reported.status === 'new' ? await judgeEvidence(reported, ctx.lines) : { finding: reported, skipped: false }
     if (judged.skipped) out.evidenceSkipped = true
-    const f = judged.finding
-    if (f !== reported) out.lowered++
-    const premiseBy = ctx.mode === 'quick' ? premiseSource(f) : undefined
-    if (premiseBy !== undefined) {
-      out.moved.push({ ...f, premise: 'external', premiseBy })
-      out.effective.set(reported, { ...reported, premise: 'external', premiseBy })
-      continue
-    }
+    if (judged.finding !== reported) out.lowered++
+    const premiseBy = premiseSource(judged.finding)
+    const f = premiseBy === undefined ? judged.finding : { ...judged.finding, premise: 'external' as const, premiseBy }
     const thread = f.status === 'reply' ? ctx.threads?.find((t) => t.discussionId === f.discussionId) : undefined
     const effective = effectiveReply(f, thread)
     out.effective.set(reported, effective)
@@ -209,36 +204,15 @@ export async function applyFilters(findings: ReviewFinding[], ctx: FilterContext
       out.answered++
       continue
     }
+    if (premiseBy !== undefined) out.external++
     out.post.push(effective)
   }
   return out
 }
 
-const FIRST_SENTENCE_CAP = 200
-
-function firstSentence(body: string): string {
-  const text = prose(body).replace(/\s+/g, ' ').trim()
-  const end = text.search(/[.!?](\s|$)/)
-  const sentence = end < 0 ? text : text.slice(0, end + 1)
-  return sentence.length > FIRST_SENTENCE_CAP ? `${sentence.slice(0, FIRST_SENTENCE_CAP - 3)}...` : sentence
-}
-
-/** The collapsed summary section listing moved findings; empty when there are none. */
-export function assumptionsSection(moved: ReviewFinding[]): string {
-  if (moved.length === 0) return ''
-  const lines = moved.map((f) => {
-    // A moved reply names its thread so a reader can find it.
-    const where = f.status === 'reply' ? `reply in thread \`${f.discussionId}\`` : `\`${f.path}:${f.line}\``
-    // Model text, so escaped like a posted note: it must not plant a marker or metadata block.
-    return sanitizeAgentText(`- ${where}${f.code !== undefined ? ` ${f.code}` : ''}: ${firstSentence(f.body)}`)
-  })
-  return `<details>\n<summary>Unverified assumptions (vendor or framework code not in the checkout): ${moved.length}</summary>\n\n${lines.join('\n')}\n\n</details>`
-}
-
 /** One sentence on what the filters did; empty when they did nothing. */
-export function filterNotice(r: Pick<FilterResult, 'moved' | 'lowered' | 'answered' | 'evidenceSkipped'>): string {
+export function filterNotice(r: Pick<FilterResult, 'lowered' | 'answered' | 'evidenceSkipped'>): string {
   const parts = [
-    ...(r.moved.length > 0 ? [`${r.moved.length} moved to unverified assumptions`] : []),
     ...(r.lowered > 0 ? [`${r.lowered} lowered to minor`] : []),
     ...(r.answered > 0 ? [`${r.answered} ${r.answered === 1 ? 'reply' : 'replies'} to answered threads not posted`] : []),
   ]

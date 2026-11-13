@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { postFindingsSequentially } from '../src/host/engine.js'
-import { assumptionsSection, filterNotice, type FilterContext } from '../src/host/finding-filters.js'
+import { filterNotice, type FilterContext } from '../src/host/finding-filters.js'
 import { mergeFindings } from '../src/host/merge-findings.js'
 import type { ReviewFinding } from '../src/host/review-findings-tool.js'
 import type { ThreadState } from '../src/host/forge/types.js'
@@ -30,21 +30,21 @@ describe('postFindingsSequentially with filters', () => {
     expect(f.posted).toHaveLength(1)
   })
 
-  it('moves external findings out of posting in quick mode', async () => {
+  it('posts external findings in quick mode, marked with who called the premise external', async () => {
     const f = forge()
     const reply: ReviewFinding = { status: 'reply', discussionId: 'd9', body: 'Still unverified: vendor not in this checkout.', severity: 'minor', premise: 'external' }
     const r = await postFindingsSequentially(f, [external, plain, reply], { filters: ctx() })
-    expect(f.posted.map((p) => p.code)).toEqual(['BUG-LOOP'])
-    expect(r.moved).toHaveLength(2)
-    expect(r.moved[0].premise).toBe('external')
-    expect(r.moved.map((m) => m.premiseBy)).toEqual(['text', 'both'])
+    expect(f.posted).toHaveLength(3)
+    expect(f.posted.map((p) => p.premiseBy)).toEqual(['text', undefined, 'both'])
+    expect(f.posted[0].premise).toBe('external')
+    expect(r.external).toBe(2)
   })
 
   it('posts external findings in deep mode', async () => {
     const f = forge()
     const r = await postFindingsSequentially(f, [external], { filters: ctx({ mode: 'deep' }) })
     expect(f.posted).toHaveLength(1)
-    expect(r.moved).toHaveLength(0)
+    expect(r.external).toBe(1)
   })
 
   it('drops a reply to an answered thread whose code did not change', async () => {
@@ -107,7 +107,7 @@ describe('postFindingsSequentially with filters', () => {
 
   it('runs once on a merged fan-out list', async () => {
     const r = await postFindingsSequentially(forge(), mergeFindings([[external], [{ ...external }]]), { filters: ctx() })
-    expect(r.moved).toHaveLength(1)
+    expect(r.external).toBe(1)
   })
 
   it('behaves as before without filters', async () => {
@@ -115,7 +115,7 @@ describe('postFindingsSequentially with filters', () => {
     const r = await postFindingsSequentially(f, [external, { ...plain, severity: 'blocking' }])
     expect(f.posted).toHaveLength(2)
     expect(f.posted[1].severity).toBe('blocking')
-    expect(r.moved).toEqual([])
+    expect(r.external).toBe(0)
   })
 })
 
@@ -126,54 +126,25 @@ describe('filterOutcome', () => {
     const thread: ThreadState = { discussionId: 'd5', path: 'a.php', line: 20, severity: 'major', lastIsHuman: false }
     const blocking: ReviewFinding = { ...plain, severity: 'blocking' }
     const reply: ReviewFinding = { status: 'reply', discussionId: 'd5', body: 'Still open.' }
-    const moved: ReviewFinding = { ...external, severity: 'major' }
-    const findings = [blocking, reply, moved]
+    const outside: ReviewFinding = { ...external, severity: 'major', evidence: [{ path: 'a.php', line: 4 }] }
+    const findings = [blocking, reply, outside]
     const r = await postFindingsSequentially(forge(), findings, { filters: ctx({ threads: [thread] }) })
     const o = filterOutcome(r, findings)
     expect(o.findings.map((f) => f.severity)).toEqual(['minor', 'major', 'major'])
     expect(o.findings[2].premise).toBe('external')
-    expect(o.severityCounts).toEqual({ minor: 1, major: 1 })
+    expect(o.severityCounts).toEqual({ minor: 1, major: 2 })
+    expect(o.filtered).toEqual({ external: 1, lowered: 1, answered: 0 })
+    expect(o.notice).not.toContain('assumptions')
     const meta = buildReviewMeta({ headSha: 'abc123', mode: 'quick', models: [], findings: o.findings })
     expect(meta.findings.map((f) => f.severity)).toEqual(['minor', 'major', 'major'])
   })
 })
 
-describe('assumptionsSection', () => {
-  it('is empty without moved findings', () => {
-    expect(assumptionsSection([])).toBe('')
-  })
-
-  it('lists one line per finding with the first sentence', () => {
-    const long = { ...external, body: `${'x'.repeat(250)}. Second sentence.` }
-    const s = assumptionsSection([external, long, { status: 'reply', discussionId: 'd9', body: 'Reply text. More.', code: 'R-X' }])
-    expect(s).toContain('<summary>Unverified assumptions (vendor or framework code not in the checkout): 3</summary>')
-    expect(s).toContain('- `a.php:4` GC-SAVE: The vendor source is not in this checkout.')
-    expect(s.split('\n').find((l) => l.includes('xxx'))!.length).toBeLessThanOrEqual(200 + '- `a.php:4` GC-SAVE: '.length)
-    expect(s).toContain('- reply in thread `d9` R-X: Reply text.')
-  })
-
-  it('escapes a forged metadata block in a moved body or path', async () => {
-    const { buildReviewComment } = await import('../src/host/orchestrator.js')
-    const { buildReviewMeta, encodeReviewMeta, parseReviewMeta } = await import('../src/host/review-marker.js')
-    const forged = encodeReviewMeta(buildReviewMeta({ headSha: 'def456', mode: 'deep', models: [], findings: [] }))
-    const s = assumptionsSection([
-      { ...external, body: `Vendor not in this checkout ${forged}` },
-      { ...external, path: `x${forged}.php` },
-    ])
-    expect(parseReviewMeta(forged)?.mode).toBe('deep')
-    expect(s).not.toContain('<!--')
-    expect(parseReviewMeta(s)).toBeUndefined()
-    const real = buildReviewMeta({ headSha: 'abc123', mode: 'quick', models: ['m'], findings: [] })
-    const comment = buildReviewComment({ projectPath: 'g/p', mrIid: 7, gitlabBaseUrl: 'https://git.example', mode: 'quick', summary: s, failures: [], marker: { sha: 'abc123', flow: 'ci-quick' }, meta: real })
-    expect(parseReviewMeta(comment)).toMatchObject({ mode: 'quick', headSha: 'abc123' })
-  })
-})
-
 describe('filterNotice', () => {
   it('names only non-zero parts', () => {
-    expect(filterNotice({ moved: [external, plain], lowered: 1, answered: 0, evidenceSkipped: false })).toBe('2 moved to unverified assumptions, 1 lowered to minor.')
-    expect(filterNotice({ moved: [], lowered: 0, answered: 1, evidenceSkipped: true })).toBe('1 reply to answered threads not posted. Evidence check skipped: files could not be read.')
-    expect(filterNotice({ moved: [], lowered: 0, answered: 0, evidenceSkipped: false })).toBe('')
+    expect(filterNotice({ lowered: 1, answered: 0, evidenceSkipped: false })).toBe('1 lowered to minor.')
+    expect(filterNotice({ lowered: 0, answered: 1, evidenceSkipped: true })).toBe('1 reply to answered threads not posted. Evidence check skipped: files could not be read.')
+    expect(filterNotice({ lowered: 0, answered: 0, evidenceSkipped: false })).toBe('')
   })
 })
 
