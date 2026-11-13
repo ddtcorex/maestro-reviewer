@@ -56,6 +56,17 @@ describe('postFindingsSequentially with filters', () => {
     expect(r.answered).toBe(1)
   })
 
+  it('compares once per version pair across answered replies', async () => {
+    const at = '2026-11-02T12:00:00Z'
+    const threads: ThreadState[] = ['d6', 'd7'].map((id) => ({ discussionId: id, path: 'a.php', line: 20, severity: 'major', lastHumanAt: at, lastIsHuman: true }))
+    const compare = vi.fn(async () => ({ diffs: [{ new_path: 'b.php', old_path: 'b.php', diff: '@@ -1,1 +1,1 @@\n-x\n+y\n' }] }))
+    const r = await postFindingsSequentially(forge(), ['d6', 'd7'].map((id) => ({ status: 'reply' as const, discussionId: id, body: 'Still open.' })), {
+      filters: ctx({ threads, versions: [{ headSha: 'h2', createdAt: '2026-11-01T00:00:00Z' }], compare }),
+    })
+    expect(r.answered).toBe(2)
+    expect(compare).toHaveBeenCalledTimes(1)
+  })
+
   it('gives a reply the thread severity and records it for rendering', async () => {
     const f = forge()
     const thread: ThreadState = { discussionId: 'd2', path: 'a.php', line: 20, severity: 'major', lastIsHuman: false }

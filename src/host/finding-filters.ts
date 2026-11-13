@@ -173,6 +173,14 @@ export interface FilterResult {
  */
 export async function applyFilters(findings: ReviewFinding[], ctx: FilterContext): Promise<FilterResult> {
   const out: FilterResult = { post: [], moved: [], lowered: 0, answered: 0, effective: new Map(), evidenceSkipped: false }
+  // Replies answered on the same version share one compare.
+  const compares = new Map<string, Promise<CompareResult | undefined>>()
+  const compare = (from: string, to: string) => {
+    const key = `${from}..${to}`
+    let result = compares.get(key)
+    if (result === undefined) compares.set(key, result = ctx.compare(from, to))
+    return result
+  }
   for (const reported of findings) {
     // Evidence is asked of new findings only: a reply restates its thread, whose
     // opener the gate reads, and lowering it would render as a downgrade.
@@ -188,7 +196,7 @@ export async function applyFilters(findings: ReviewFinding[], ctx: FilterContext
     const thread = f.status === 'reply' ? ctx.threads?.find((t) => t.discussionId === f.discussionId) : undefined
     const effective = effectiveReply(f, thread)
     out.effective.set(reported, effective)
-    if (thread !== undefined && await isAnsweredUnchanged(thread, { versions: ctx.versions, compare: ctx.compare, headSha: ctx.headSha })) {
+    if (thread !== undefined && await isAnsweredUnchanged(thread, { versions: ctx.versions, compare, headSha: ctx.headSha })) {
       out.answered++
       continue
     }
