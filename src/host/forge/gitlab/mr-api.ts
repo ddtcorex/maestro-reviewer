@@ -216,13 +216,13 @@ export function stripHeaderEcho(body: string, code: string | undefined): string 
   const headerAhead = `(?:${[...SEVERITY_LABELS, ...(codeToken !== undefined ? [codeToken] : [])].map(escapeRe).join('|')}|${wordThenDot})`
   const tokens: RegExp[] = [
     ...SEVERITY_LABELS.map((l) => new RegExp(`^${escapeRe(l)}`)),
-    // A severity word a `·` follows, with its closing bold when the word was bold (`**Major** ·`).
-    new RegExp(`^(?:${SEVERITY_WORDS.join('|')})(?:\\s*\\*\\*)?(?=\\s*·)`),
+    // A severity word in any case a `·` follows, with its closing bold when the word was bold (`**Major** ·`).
+    new RegExp(`^(?:${SEVERITY_WORDS.join('|')})(?:\\s*\\*\\*)?(?=\\s*·)`, 'i'),
     /^·/,
     // A closing bold belongs to the echo only when it sits right after the code.
     ...(codeToken !== undefined ? [new RegExp(`^${escapeRe(codeToken)}(?:\\*\\*)?`)] : []),
     // Any leading symbol (an emoji the model picked) in front of a severity word and a `·`.
-    new RegExp(`^[^\\p{L}\\p{N}\\s\\x60*]{1,4}(?=\\s*(?:\\*\\*)?\\s*(?:${SEVERITY_WORDS.join('|')})\\s*(?:\\*\\*)?\\s*·)`, 'u'),
+    new RegExp(`^[^\\p{L}\\p{N}\\s\\x60*]{1,4}(?=\\s*(?:\\*\\*)?\\s*(?:${SEVERITY_WORDS.join('|')})\\s*(?:\\*\\*)?\\s*·)`, 'iu'),
     new RegExp(`^❓(?=\\s*(?:\\*\\*)?\\s*${headerAhead})`),
     new RegExp(`^\\*\\*(?=\\s*${headerAhead})`),
   ]

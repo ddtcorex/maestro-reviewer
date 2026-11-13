@@ -110,6 +110,14 @@ describe('header echo variants seen in replay', () => {
     expect(stripHeaderEcho('❓ Minor \u2014 **question, not a claim**', 'X-CODE')).toBe('❓ Minor \u2014 **question, not a claim**')
   })
 
+  it('strips a lowercase severity word before the code', () => {
+    expect(stripHeaderEcho('nit · `SCHEMA-X`\n\nThe table drops its comment.', 'SCHEMA-X')).toBe('The table drops its comment.')
+  })
+
+  it('leaves lowercase prose that starts with a severity word alone', () => {
+    expect(stripHeaderEcho('minor typo in the label.', 'X-CODE')).toBe('minor typo in the label.')
+  })
+
   it('strips a bold severity word before the code with its closing bold', () => {
     expect(stripHeaderEcho('**Major** · `X-CODE` text', 'X-CODE')).toBe('text')
     expect(stripHeaderEcho('🟡 **Major** · `X-CODE`\n\nThe loop is wrong.', 'X-CODE')).toBe('The loop is wrong.')
