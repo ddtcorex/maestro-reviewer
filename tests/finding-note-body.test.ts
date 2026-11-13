@@ -119,3 +119,9 @@ describe('header echo variants seen in replay', () => {
     expect(stripHeaderEcho('`X-CODE` **important** text', 'X-CODE')).toBe('**important** text')
   })
 })
+
+describe('echo separator at the end of its line', () => {
+  it('drops a dash that ends the echo line', () => {
+    expect(stripHeaderEcho('`A-CODE` -\nrest', 'A-CODE')).toBe('rest')
+  })
+})

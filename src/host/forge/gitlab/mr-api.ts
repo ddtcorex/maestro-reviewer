@@ -198,7 +198,7 @@ const SEVERITY_LABELS = SEVERITY_ORDER.map((s) => severityPrefix(s))
 const SEVERITY_WORDS = SEVERITY_LABELS.map((l) => l.split(' ')[1])
 // A separator belongs to the echo only on its line and before a space: `- item` on
 // the next line is a list, `-1` is a number.
-const ECHO_SEPARATOR = /^(?:·|-|\u2014)(?:[ \t]+|$)/
+const ECHO_SEPARATOR = /^(?:·|-|\u2014)(?:[ \t]+|$|(?=\n))/
 const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
 /**
