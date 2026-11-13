@@ -107,6 +107,18 @@ describe('isAnsweredUnchanged', () => {
     expect(await isAnsweredUnchanged({ ...answered, line: null }, { versions, compare, headSha: 'h3' })).toBe(false)
   })
 
+  it('orders times by instant, not by text, across GitLab time formats', async () => {
+    // As text, '12:00:00.500Z' sorts before '12:00:00Z'; the version came half a second after the answer.
+    const mixed = [{ headSha: 'h2', createdAt: '2026-11-02T11:00:00+00:00' }, { headSha: 'h3', createdAt: '2026-11-02T12:00:00.500Z' }]
+    const compare = vi.fn(async () => ({ diffs: [hunk('a.php', 20, 1)] }))
+    expect(await isAnsweredUnchanged({ ...answered, lastHumanAt: '2026-11-02T12:00:00Z' }, { versions: mixed, compare, headSha: 'h3' })).toBe(false)
+    expect(compare).toHaveBeenCalledWith('h2', 'h3')
+  })
+
+  it('fails open on an unreadable answer time', async () => {
+    expect(await isAnsweredUnchanged({ ...answered, lastHumanAt: 'yesterday' }, { versions, compare: vi.fn(), headSha: 'h3' })).toBe(false)
+  })
+
   it('fails open without versions or compare', async () => {
     expect(await isAnsweredUnchanged(answered, { versions: undefined, compare: vi.fn(), headSha: 'h3' })).toBe(false)
     expect(await isAnsweredUnchanged(answered, { versions, compare: vi.fn(async () => undefined), headSha: 'h3' })).toBe(false)

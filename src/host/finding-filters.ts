@@ -117,8 +117,14 @@ export async function isAnsweredUnchanged(t: ThreadState, deps: {
   headSha: string
 }): Promise<boolean> {
   if (!t.lastIsHuman || t.lastHumanAt === undefined || deps.versions === undefined) return false
-  const answeredAt = t.lastHumanAt
-  const before = deps.versions.filter((v) => v.createdAt <= answeredAt).sort((a, b) => a.createdAt.localeCompare(b.createdAt)).at(-1)
+  // Instants, not text: GitLab times may differ in offset form and milliseconds.
+  const answeredAt = Date.parse(t.lastHumanAt)
+  if (Number.isNaN(answeredAt)) return false
+  const before = deps.versions
+    .map((v) => ({ v, at: Date.parse(v.createdAt) }))
+    .filter((x) => !Number.isNaN(x.at) && x.at <= answeredAt)
+    .sort((a, b) => a.at - b.at)
+    .at(-1)?.v
   if (before === undefined) return false
   if (before.headSha === deps.headSha) return true
   const result = await deps.compare(before.headSha, deps.headSha)
