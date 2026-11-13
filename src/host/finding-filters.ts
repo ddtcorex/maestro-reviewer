@@ -141,7 +141,7 @@ export interface FilterResult {
 }
 
 /**
- * Evidence first (a lowered finding is then judged like any other), then the
+ * Evidence first, for new findings (a lowered finding is then judged like any other), then the
  * external premise (quick mode only), then replies to answered threads, then
  * the reply's severity against its thread.
  */
@@ -149,8 +149,11 @@ export async function applyFilters(findings: ReviewFinding[], ctx: FilterContext
   const out: FilterResult = { post: [], moved: [], lowered: 0, answered: 0, evidenceSkipped: false }
   for (const reported of findings) {
     const severity = normalizeFindingSeverity(reported.severity)
-    if (ctx.lines === undefined && (severity === 'major' || severity === 'blocking')) out.evidenceSkipped = true
-    const f = await checkEvidence(reported, ctx.lines)
+    // Evidence is asked of new findings only: a reply restates its thread, whose
+    // opener the gate reads, and lowering it would render as a downgrade.
+    const isNew = reported.status === 'new'
+    if (isNew && ctx.lines === undefined && (severity === 'major' || severity === 'blocking')) out.evidenceSkipped = true
+    const f = isNew ? await checkEvidence(reported, ctx.lines) : reported
     if (f !== reported) out.lowered++
     if (ctx.mode === 'quick' && classifyPremise(f) === 'external') {
       out.moved.push({ ...f, premise: 'external' })

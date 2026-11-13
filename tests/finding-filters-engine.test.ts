@@ -63,6 +63,22 @@ describe('postFindingsSequentially with filters', () => {
     expect(f.posted[0]).toMatchObject({ severity: 'major', threadSeverity: 'major' })
   })
 
+  it('never lowers a reply, so it does not render as a downgrade of its thread', async () => {
+    const f = forge()
+    const thread: ThreadState = { discussionId: 'd3', path: 'a.php', line: 20, severity: 'major', lastIsHuman: false }
+    const r = await postFindingsSequentially(f, [{ status: 'reply', discussionId: 'd3', body: 'Still open.', severity: 'major' }], { filters: ctx({ threads: [thread], lines: async () => undefined }) })
+    expect(f.posted[0]).toMatchObject({ severity: 'major', threadSeverity: 'major' })
+    expect(f.posted[0].severityNote).toBeUndefined()
+    expect(r.lowered).toBe(0)
+    const { findingNoteBody } = await import('../src/host/forge/gitlab/mr-api.js')
+    expect(findingNoteBody({ ...f.posted[0], code: 'BUG-X' }).startsWith('`BUG-X`\n\nStill open.')).toBe(true)
+  })
+
+  it('does not report a skipped evidence check for a reply', async () => {
+    const r = await postFindingsSequentially(forge(), [{ status: 'reply', discussionId: 'd4', body: 'Still open.', severity: 'blocking' }], { filters: ctx({ lines: undefined }) })
+    expect(r.evidenceSkipped).toBe(false)
+  })
+
   it('reports a skipped evidence check when files cannot be read', async () => {
     const r = await postFindingsSequentially(forge(), [{ ...plain, severity: 'major' }], { filters: ctx({ lines: undefined }) })
     expect(r.evidenceSkipped).toBe(true)
