@@ -72,16 +72,24 @@ export function openerSeverity(firstNoteBody: string): FindingSeverity | undefin
 
 // A change this close to the thread's line counts as touching it.
 const TOUCH_WINDOW = 5
-const HUNK_RE = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/gm
+const HUNK_RE = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/gm
 
+const overlaps = (start: string, count: string | undefined, line: number) => {
+  const from = Number(start)
+  const to = from + Math.max(Number(count ?? '1'), 1) - 1
+  return from <= line + TOUCH_WINDOW && to >= line - TOUCH_WINDOW
+}
+
+/**
+ * The thread line is in the coordinates of the head at the answer, the old
+ * side of the compare; the new side is checked too, and a diff with no
+ * readable hunk counts as touching (fail open: the reply is posted).
+ */
 function touches(diff: string, line: number | null): boolean {
   if (line === null) return true
-  for (const m of diff.matchAll(HUNK_RE)) {
-    const start = Number(m[1])
-    const end = start + Math.max(Number(m[2] ?? '1'), 1) - 1
-    if (start <= line + TOUCH_WINDOW && end >= line - TOUCH_WINDOW) return true
-  }
-  return false
+  const hunks = [...diff.matchAll(HUNK_RE)]
+  if (hunks.length === 0) return true
+  return hunks.some((m) => overlaps(m[1], m[2], line) || overlaps(m[3], m[4], line))
 }
 
 /**

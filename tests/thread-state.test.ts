@@ -90,6 +90,18 @@ describe('isAnsweredUnchanged', () => {
     expect(await isAnsweredUnchanged(answered, { versions, compare, headSha: 'h3' })).toBe(true)
   })
 
+  it('judges the thread line on the old side when earlier lines shifted it', async () => {
+    // 50 lines inserted at the top, then line 100 (the thread's, at the answer) edited: now line 150.
+    const diff = '@@ -0,0 +1,50 @@\n+new\n@@ -100,1 +150,1 @@\n-x\n+y\n'
+    const compare = vi.fn(async () => ({ diffs: [{ new_path: 'a.php', old_path: 'a.php', diff }] }))
+    expect(await isAnsweredUnchanged({ ...answered, line: 100 }, { versions, compare, headSha: 'h3' })).toBe(false)
+  })
+
+  it('treats a file diff without a readable hunk as touching', async () => {
+    const compare = vi.fn(async () => ({ diffs: [{ new_path: 'a.php', old_path: 'a.php', diff: '' }] }))
+    expect(await isAnsweredUnchanged(answered, { versions, compare, headSha: 'h3' })).toBe(false)
+  })
+
   it('treats any change to the file as touching an unpositioned thread', async () => {
     const compare = vi.fn(async () => ({ diffs: [hunk('a.php', 400, 1)] }))
     expect(await isAnsweredUnchanged({ ...answered, line: null }, { versions, compare, headSha: 'h3' })).toBe(false)
