@@ -1,6 +1,7 @@
 # maestro-reviewer bundle patch: maestro-review-host (skills) and
-# maestro-review-engine (the reviewEngine service). The DSH host rows (webhook,
-# host orchestrator, settings RPC, Settings UI) ship in @ddtcorex/dsh-maestro-review.
+# maestro-review-engine (the reviewEngine service). The package ships no web
+# host rows: the webhook, orchestrator and Settings surfaces are not part of
+# this harness.
 - insert:
     # Mounts the package root (lib/index.js -> apply()). Required: `dsh plugin add`
     # applies ONLY the rows in this file, so without it the skill-provider
@@ -10,8 +11,7 @@
     # skills service exists — a headless/CI profile has no web `connection`, and
     # declaring that unused service left this row pending forever (boot failed
     # with "1 entry did not activate ... waiting for service: connection"):
-    # apply() never touches it (the settings RPC that does lives in
-    # @ddtcorex/dsh-maestro-review).
+    # apply() never touches it (the settings RPC is not part of this package).
     - id: maestro-review-host
       name: '@ddtcorex/maestro-reviewer'
       inject: ['skills']
