@@ -1,5 +1,13 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed (breaking)
+
+- `REVIEW_SOURCE_KIND` is `plugin:@ddtcorex/maestro-reviewer`, the package's current name. It was stamped into session logs under the former value, so a session rehydrated from an older log no longer matches this producer. Sessions started under this version stamp the new value.
+- Review history moves from `~/.dsh/review-host/reviews.json` to `~/.dsh/maestro-reviewer/reviews.json`. An existing file at the old path is left in place and is not read; move it manually if the in-flight entries matter.
+- The docker entrypoint mounts the history symlink at `/app/maestro-reviewer` instead of `/app/review-host`. Images and jobs that referenced the old path must follow.
+
 ## [0.20.0] - 2026-11-12
 
 ### Changed
@@ -293,7 +301,7 @@ External pipeline config so Developers can trigger reviews, the
 ## [0.14.0] - 2026-10-20
 
 Trusted CI trigger, per-project AI providers, and the split into the review
-engine plus CI (this package) and the `@ddtcorex/dsh-maestro-review` DSH host
+engine plus CI (this package) and the `the review host plugin` DSH host
 plugin (#168).
 
 ### Security
@@ -355,7 +363,7 @@ plugin (#168).
   host features (GitLab webhook intake, the host orchestrator with project
   mappings, worktrees and the govard environment, the settings RPC, the
   Maestro Review Settings section and Telegram digests) moved to the
-  `@ddtcorex/dsh-maestro-review` plugin, which runs this engine. The bundle
+  `the review host plugin` plugin, which runs this engine. The bundle
   ships `maestro-review-host` and the new `maestro-review-engine` row (the
   `reviewEngine` service) only, with no client bundle and no
   `@deepseek-ai/dsh-client-connection` peer.
@@ -405,11 +413,11 @@ LLM key.
 
 ### Migration
 
-- Replace the profile dependency `@ddtcorex/dsh-maestro-review` with
+- Replace the profile dependency `the review host plugin` with
   `@ddtcorex/maestro-reviewer`, and update any profile patch entry that names a
-  module path (`@ddtcorex/dsh-maestro-review/lib/...`).
+  module path (`the review host plugin/lib/...`).
 - Unchanged: Cordis row ids (`maestro-review-*`), preset ids, settings keys, the
-  `dsh-maestro-review/` data directory (`reviews.json`, `runtime.json`) and the
+  `review-host/` data directory (`reviews.json`, `runtime.json`) and the
   message source kind, so history and rehydrated sessions carry over.
 - The old npm name is deprecated, not unpublished; pinned CI images keep working.
 
@@ -420,7 +428,7 @@ LLM key.
 - **Declare `webServer` on the `connection` entry for DSH 0.2.x.** On
   0.2.x `ctx.connection.rpc.handle` resolves `webServer` on the connection
   row's own fiber, so the settings-rpc row-level inject could not reach it:
-  `maestro-review-settings-rpc` never activated and `/dsh-maestro-review`
+  `maestro-review-settings-rpc` never activated and `/review-host`
   answered 405. The bundle patch now carries the top-level
   `- id: connection` entry with `[webStartup, webServer]`, identical to
   core/remote/memory/notifier, pinned by `tests/connection-inject.spec.ts`.
@@ -544,7 +552,7 @@ LLM key.
 - **A headless/CI profile can mount the plugin again.** The host row declared
   `inject: ['connection', 'skills']` while `apply()` reads only `skills`, so on
   a profile with no web `connection` the row stayed pending forever and the
-  boot failed with `1 entry did not activate @ddtcorex/dsh-maestro-review:
+  boot failed with `1 entry did not activate the review host plugin:
   pending (waiting for service: connection)` — the failure the published
   reviewer-ci image hit on a real GitLab run. The row now declares the one
   service it reads, and a regression test slices the mounted row (#124).
@@ -577,7 +585,7 @@ LLM key.
 
 - Bump the `@deepseek-ai/*` pins to `0.1.7-alpha.1` (#122) and move to
   vitest 3 so the suite loads the DSH 0.1.6 peers (#121).
-- Pin the `reviewer-ci` profile to `dsh-maestro-review@0.7.5` (#116).
+- Pin the `reviewer-ci` profile to `review-host@0.7.5` (#116).
 
 ## [0.7.5] - 2026-09-14
 
@@ -676,7 +684,7 @@ LLM key.
   project before this fix and confirmed silent afterward. Bumped to
   `0.1.5-rc.2` to match; verified exactly one `@deepseek-ai/dsh-scope`
   instance ships in the built image (no dual-instance regression).
-- `profiles/reviewer-ci`'s `@ddtcorex/dsh-maestro-review` and
+- `profiles/reviewer-ci`'s `the review host plugin` and
   `@ddtcorex/maestro-skills` pins now use caret ranges (`^0.7.1`, `^2.0.0`)
   instead of exact versions, so a future patch release reaches the CI image
   on the next profile lockfile refresh instead of silently lagging behind
@@ -720,7 +728,7 @@ LLM key.
 
 - Document the bot identity best practice for CI reviewer setup (#100) and the
   release checklist (#99); pin the reviewer-ci profile to
-  `dsh-maestro-review@0.6.2` (#98).
+  `review-host@0.6.2` (#98).
 
 All notable changes to this project are documented in this file. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this project uses
@@ -969,7 +977,7 @@ Patch release to unblock publishing and carry forward DSH 0.1.2 compatibility.
 - **DSH 0.1.2 compat** — migrated `apiproxy` row to `client-connection`
   (`chore: migrate apiproxy to client-connection for DSH 0.1.2 compat #36`).
 - **Supervisor model** — accept `supervisorModel` in settings save / bump to 0.1.1
-  (`feat(review): accept supervisorModel in settings save #32`, `chore(dsh-maestro-review):
+  (`feat(review): accept supervisorModel in settings save #32`, `chore(review-host):
   bump to 0.1.1 for supervisorModel #33`).
 - **Reasoning effort fallback** — handle unsupported `reasoningEffort` with fallback
   and clearer error (`fix(review): handle unsupported reasoningEffort #31`).
@@ -981,7 +989,7 @@ Patch release to unblock publishing and carry forward DSH 0.1.2 compatibility.
 
 ## [0.1.0] - 2026-08-25
 
-Initial public release of `@ddtcorex/dsh-maestro-review` — pluggable
+Initial public release of `the review host plugin` — pluggable
 ReviewProvider + orchestrator for automated MR review in DeepSeek Harness.
 
 ### Added
@@ -1011,12 +1019,6 @@ ReviewProvider + orchestrator for automated MR review in DeepSeek Harness.
   (#27), streaming perf log + trailing-error strip (#28/#29), incremental re-review
   context for push-heavy MRs (#17).
 - **Cordis rows** via `cordis.patch.yml` — `maestro-review-webhook`, `maestro-review-orchestrator`,
-  `maestro-review-settings-rpc` (`/dsh-maestro-review` channel).
+  `maestro-review-settings-rpc` (`/review-host` channel).
 - **Client half** — settings section rendered into DSH Web slots.
 
-[0.3.0]: https://github.com/ddtcorex/dsh-maestro-review/releases/tag/v0.3.0
-[0.2.1]: https://github.com/ddtcorex/dsh-maestro-review/releases/tag/v0.2.1
-[0.2.0]: https://github.com/ddtcorex/dsh-maestro-review/releases/tag/v0.2.0
-[0.1.2]: https://github.com/ddtcorex/dsh-maestro-review/releases/tag/v0.1.2
-[0.1.1]: https://github.com/ddtcorex/dsh-maestro-review/releases/tag/v0.1.1
-[0.1.0]: https://github.com/ddtcorex/dsh-maestro-review/releases/tag/v0.1.0

@@ -12,11 +12,11 @@
  * `sessionTitle.rename(...)`: the harness only auto-titles a `kind: 'user'`
  * message, so a plugin-attributed prompt feeds no title.
  *
- * Persisted legacy contract: the value keeps the package's former name
- * (renamed to `@ddtcorex/maestro-reviewer` in 0.13.0) because it is stamped
- * into session logs, and rehydrated sessions must keep recognising it.
+ * The value tracks the current package name: it is stamped into session logs,
+ * so a rename is a breaking change for rehydrated sessions and ships with a
+ * major version.
  */
-export const REVIEW_SOURCE_KIND = 'plugin:@ddtcorex/dsh-maestro-review'
+export const REVIEW_SOURCE_KIND = 'plugin:@ddtcorex/maestro-reviewer'
 
 // `MessageSourceMap` is the harness's merge-extensible sum type: each producer
 // declares its own kind in its own module (see `goal-round-driver` and
@@ -25,6 +25,6 @@ import type {} from '@deepseek-ai/dsh-llm'
 
 declare module '@deepseek-ai/dsh-llm' {
   interface MessageSourceMap {
-    'plugin:@ddtcorex/dsh-maestro-review': { readonly kind: 'plugin:@ddtcorex/dsh-maestro-review' }
+    'plugin:@ddtcorex/maestro-reviewer': { readonly kind: 'plugin:@ddtcorex/maestro-reviewer' }
   }
 }

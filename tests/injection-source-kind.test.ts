@@ -10,7 +10,7 @@ import { REVIEW_SOURCE_KIND } from '../src/host/source.js'
 // kind-'user' message.
 describe('review message attribution', () => {
   it('has a producer-owned kind and never claims a human prompt', () => {
-    expect(REVIEW_SOURCE_KIND).toBe('plugin:@ddtcorex/dsh-maestro-review')
+    expect(REVIEW_SOURCE_KIND).toBe('plugin:@ddtcorex/maestro-reviewer')
     expect(REVIEW_SOURCE_KIND).not.toBe('user')
     expect(REVIEW_SOURCE_KIND).not.toBe('plugin')
 
