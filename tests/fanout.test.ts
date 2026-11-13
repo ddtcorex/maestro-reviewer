@@ -162,6 +162,27 @@ describe('engine evidence check without readable files', () => {
   })
 })
 
+describe('engine filter inputs that fail to load', () => {
+  it('logs a failed thread or versions read instead of swallowing it', async () => {
+    const { createReviewEngine } = await import('../src/host/engine.js')
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const f = fanForge()
+    const forge = { ...f.forge, ownThreads: async () => { throw new Error('GitLab API error 502') }, mrVersions: async () => undefined }
+    try {
+      await createReviewEngine({} as any, { reviewer: vi.fn(async () => ({ summary: '', failures: [], findings: [], models: ['fast'], deferredPost: true })), auditor: vi.fn() } as any).run(
+        { projectPath: 'g/p', projectId: 1, mrIid: 2, sourceBranch: 'b', headSha: 'abc1', trigger: 'mention', mode: 'quick', scope: { kind: 'mr' } } as any,
+        { gitlab: { baseUrl: 'https://git.example.com', token: 't', botUsername: 'bot' }, access: { kind: 'diff' }, model: { provider: 'p', model: 'fast' } as any,
+          agentTimeoutMs: 1000, forge: forge as any, fanout: { files: 10, bytes: 1_000_000, concurrency: 2 } },
+      )
+      const logged = errors.mock.calls.map((c) => c.map(String).join(' '))
+      expect(logged.some((l) => /review threads/.test(l) && /502/.test(l))).toBe(true)
+      expect(logged.some((l) => /merge request versions/.test(l))).toBe(true)
+    } finally {
+      errors.mockRestore()
+    }
+  })
+})
+
 describe('gitlab tools with a file allowlist', () => {
   it('serve only the chunk files', async () => {
     vi.stubGlobal('fetch', vi.fn(async (url: string) => /\/diffs\?/.test(url) && new URL(url).searchParams.get('page') === '1'

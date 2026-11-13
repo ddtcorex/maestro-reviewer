@@ -596,7 +596,21 @@ export function createReviewEngine(ctx: Context, agents: EngineAgents = createEn
       // a failed read leaves that filter out rather than failing the review.
       const filterHead = currentHeadSha ?? payload.headSha
       if (payload.scope.kind === 'mr' && filterHead !== undefined) {
-        const [threads, versions] = await Promise.all([forge.ownThreads().catch(() => []), forge.mrVersions().catch(() => undefined)])
+        // Logged, not thrown: without these, replies to answered threads are posted, and nobody could tell why.
+        const where = `project=${payload.projectPath} mr=!${payload.mrIid}`
+        const [threads, versions] = await Promise.all([
+          forge.ownThreads().catch((err: unknown) => {
+            console.error(`maestro-orchestrator: could not read own review threads for the finding filters ${where}:`, err)
+            return []
+          }),
+          forge.mrVersions().then((v) => {
+            if (v === undefined && rawForge.mrVersions !== undefined) console.error(`maestro-orchestrator: could not read merge request versions for the finding filters ${where}`)
+            return v
+          }, (err: unknown) => {
+            console.error(`maestro-orchestrator: could not read merge request versions for the finding filters ${where}:`, err)
+            return undefined
+          }),
+        ])
         // File reads come from the forge itself: the wrapper above answers "absent" for a forge without them.
         const readFile = rawForge.readFile?.bind(rawForge)
         agentRun.filters = { mode: payload.mode, threads, ...(versions !== undefined ? { versions } : {}), compare: (from, to) => forge.compare(from, to), headSha: filterHead, ...(readFile !== undefined ? { readFile } : {}) }
