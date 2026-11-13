@@ -192,24 +192,40 @@ function lastNewLine(diff: string): number {
 }
 
 const SEVERITY_LABELS = SEVERITY_ORDER.map((s) => severityPrefix(s))
+const SEVERITY_WORDS = SEVERITY_LABELS.map((l) => l.split(' ')[1])
 const ECHO_SEPARATOR = /^(?:·|-|\u2014)\s*/
+const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
 /**
  * The model often restates the header it sees on earlier threads at the start
- * of its body (`· \`CODE\``, then a separator, or another severity label). Removes every
- * leading severity label, `·` and copy of this finding's own code, plus one
- * separator after them; other text is never touched, and a body that is
- * nothing but an echo is returned as it was.
+ * of its body: the label with or without its emoji, a `·`, this finding's
+ * code, sometimes wrapped in bold or led by a question mark, then a separator.
+ * Removes that prefix and nothing else: a bare severity word, bold text or a
+ * question mark is removed only when it is part of such a header. A body that
+ * is nothing but an echo is returned as it was.
  */
 export function stripHeaderEcho(body: string, code: string | undefined): string {
   const codeToken = code === undefined ? undefined : `\`${code}\``
+  // What may follow a stripped bold or question mark: a label, a severity word that a `·` follows, or the code.
+  const wordThenDot = `(?:${SEVERITY_WORDS.join('|')})\\s*(?:\\*\\*)?\\s*·`
+  const headerAhead = `(?:${[...SEVERITY_LABELS, ...(codeToken !== undefined ? [codeToken] : [])].map(escapeRe).join('|')}|${wordThenDot})`
+  const tokens: RegExp[] = [
+    ...SEVERITY_LABELS.map((l) => new RegExp(`^${escapeRe(l)}`)),
+    new RegExp(`^(?:${SEVERITY_WORDS.join('|')})(?=\\s*(?:\\*\\*)?\\s*·)`),
+    /^·/,
+    // A closing bold belongs to the echo only when it sits right after the code.
+    ...(codeToken !== undefined ? [new RegExp(`^${escapeRe(codeToken)}(?:\\*\\*)?`)] : []),
+    // Any leading symbol (an emoji the model picked) in front of a severity word and a `·`.
+    new RegExp(`^[^\\p{L}\\p{N}\\s\\x60*]{1,4}(?=\\s*(?:\\*\\*)?\\s*(?:${SEVERITY_WORDS.join('|')})\\s*(?:\\*\\*)?\\s*·)`, 'u'),
+    new RegExp(`^❓(?=\\s*(?:\\*\\*)?\\s*${headerAhead})`),
+    new RegExp(`^\\*\\*(?=\\s*${headerAhead})`),
+  ]
   let rest = body.replace(/^\s+/, '')
   let echoed = false
   for (;;) {
-    const label = SEVERITY_LABELS.find((l) => rest.startsWith(l))
-    const token = label ?? (rest.startsWith('·') ? '·' : codeToken !== undefined && rest.startsWith(codeToken) ? codeToken : undefined)
-    if (token === undefined) break
-    rest = rest.slice(token.length).replace(/^\s+/, '')
+    const hit = tokens.map((t) => t.exec(rest)).find((m) => m !== null)
+    if (hit === undefined || hit === null) break
+    rest = rest.slice(hit[0].length).replace(/^\s+/, '')
     echoed = true
   }
   if (!echoed) return body

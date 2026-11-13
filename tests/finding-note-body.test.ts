@@ -77,3 +77,34 @@ describe('reply severity header', () => {
     expect(b).toContain('🔵 Minor · `BUG-X`\n\nSeverity lowered from major: no evidence in the checkout.\n\nThe loop skips.')
   })
 })
+
+describe('header echo variants seen in replay', () => {
+  it('strips a label written without its emoji', () => {
+    expect(stripHeaderEcho('Minor · `PAGER-X`\n\nThe pager hides amounts.', 'PAGER-X')).toBe('The pager hides amounts.')
+  })
+
+  it('strips a question mark and bold around the echo', () => {
+    expect(stripHeaderEcho('❓ **Minor · `PHP-X`** \u2014 question, restated: does it compile?', 'PHP-X')).toBe('question, restated: does it compile?')
+    expect(stripHeaderEcho('❓ Minor · `INV-X`\n\nIs the status migrated?', 'INV-X')).toBe('Is the status migrated?')
+  })
+
+  it('leaves prose that starts with a severity word or bold text alone', () => {
+    expect(stripHeaderEcho('Minor typo in the label.', 'X-CODE')).toBe('Minor typo in the label.')
+    expect(stripHeaderEcho('**Bold claim** here.', 'X-CODE')).toBe('**Bold claim** here.')
+    expect(stripHeaderEcho('❓ Why is this here?', 'X-CODE')).toBe('❓ Why is this here?')
+  })
+
+  it('strips a header led by another emoji', () => {
+    expect(stripHeaderEcho('🔩 Nit · `UNUSED-IMPORT`\n\nThe import is unused.', 'UNUSED-IMPORT')).toBe('The import is unused.')
+    expect(stripHeaderEcho('🟡 Nit · `CSS-X` text', 'CSS-X')).toBe('text')
+  })
+
+  it('leaves prose led by bold or a question mark and a severity word without a separator', () => {
+    expect(stripHeaderEcho('**Nit: an entry is classified by a null comparison.**', 'X-CODE')).toBe('**Nit: an entry is classified by a null comparison.**')
+    expect(stripHeaderEcho('❓ Minor \u2014 **question, not a claim**', 'X-CODE')).toBe('❓ Minor \u2014 **question, not a claim**')
+  })
+
+  it('keeps bold text that follows an echo', () => {
+    expect(stripHeaderEcho('`X-CODE` **important** text', 'X-CODE')).toBe('**important** text')
+  })
+})
