@@ -24,6 +24,11 @@ describe('saysVendorMissing', () => {
     'The library call is not in a transaction, so a failure leaves half the rows written.',
     'This third-party payload is not in the allowlist, so it is rejected.',
     'The core check is not present on the admin route.',
+    'The migration for this column is not included in the repository, so deploys fail.',
+    'The db_schema_whitelist.json entry is not present in this repository; setup:upgrade will drop the column.',
+    'The translation key is not present in the repo i18n file.',
+    'The new class is not available in this checkout: the import will fatal.',
+    'The library code path is not readable by the cron user.',
   ])('does not match a checkout defect that only says something is not in or present %#', (body) => {
     expect(saysVendorMissing(body)).toBe(false)
   })

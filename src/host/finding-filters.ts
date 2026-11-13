@@ -15,8 +15,9 @@ const VENDOR_MISSING: readonly RegExp[] = [
   /not (in|part of) (this|the) checkout/i,
   // Absence must be of source or code, or from the checkout: "the framework escaper
   // is not in use" or "the core check is not present" describe checkout defects.
-  /\b(vendor|framework|library|third[- ]party) (source|code|files?)\b[^.\n]{0,60}\bnot (available|present|included|readable)\b/i,
-  /\bnot (available|present|included) in (this|the) (checkout|repository|repo|worktree)\b/i,
+  // The vendor source itself must be what is missing: "the migration is not included in
+  // the repository" or "the library code path is not readable" are checkout defects.
+  /\b(vendor|framework|library|third[- ]party) (source|code|files?) (is |are )?not (available|present|included|readable)\b/i,
   /without the (vendor|framework|library) source/i,
   /(can(no|')t|could not|unable to) (see|read|verify|confirm|inspect)[^.\n]{0,60}\b(vendor|checkout)\b/i,
   /\bvendor\/?`?\s+is (an )?empty/i,
