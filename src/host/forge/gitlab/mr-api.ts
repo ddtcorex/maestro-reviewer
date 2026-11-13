@@ -1,6 +1,6 @@
 import { normalize as posixNormalize } from 'node:path/posix'
 import type { ReviewFinding } from '../../review-findings-tool.js'
-import { SEVERITY_ORDER, severityPrefix } from '../../severity.js'
+import { SEVERITY_ORDER, normalizeFindingSeverity, severityPrefix } from '../../severity.js'
 import { findingCodeMarker } from '../../review-feedback.js'
 import { sanitizeAgentText } from './gitlab-client.js'
 import type { CompareResult, MrVersion } from '../types.js'
@@ -217,11 +217,26 @@ export function stripHeaderEcho(body: string, code: string | undefined): string 
   return rest === '' ? body : rest
 }
 
-export function findingNoteBody(finding: ReviewFinding): string {
+/**
+ * A reply in a thread whose severity is known shows a label only when it
+ * differs from the thread's (`🔵 Minor (was 🟡 Major)`); otherwise the code alone.
+ */
+function noteHeader(finding: ReviewFinding): string {
+  const code = finding.code === undefined ? undefined : `\`${finding.code}\``
   const label = severityPrefix(finding.severity)
-  const head = finding.code === undefined ? label : `${label} · \`${finding.code}\``
-  const text = sanitizeAgentText(stripHeaderEcho(finding.body, finding.code))
-  return `${head}\n\n${text}${finding.code === undefined ? '' : `\n\n${findingCodeMarker(finding.code)}`}`
+  if (finding.status === 'reply' && finding.threadSeverity !== undefined) {
+    if (normalizeFindingSeverity(finding.severity) === finding.threadSeverity) return code ?? ''
+    const changed = `${label} (was ${severityPrefix(finding.threadSeverity)})`
+    return code === undefined ? changed : `${changed} · ${code}`
+  }
+  return code === undefined ? label : `${label} · ${code}`
+}
+
+export function findingNoteBody(finding: ReviewFinding): string {
+  const head = noteHeader(finding)
+  const stripped = stripHeaderEcho(finding.body, finding.code)
+  const text = sanitizeAgentText(finding.severityNote === undefined ? stripped : `${finding.severityNote}\n\n${stripped}`)
+  return `${head === '' ? '' : `${head}\n\n`}${text}${finding.code === undefined ? '' : `\n\n${findingCodeMarker(finding.code)}`}`
 }
 
 export async function postReviewFindings(findings: ReviewFinding[], config: GitlabFindingPoster): Promise<void> {

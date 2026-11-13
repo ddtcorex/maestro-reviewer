@@ -105,3 +105,81 @@ export function effectiveReply(f: ReviewFinding, t: ThreadState | undefined): Re
   if (f.status !== 'reply' || t?.severity === undefined) return f
   return { ...f, severity: f.severity ?? t.severity, threadSeverity: t.severity }
 }
+
+/** What the engine knows about the run when it filters findings. */
+export interface FilterContext {
+  mode: 'quick' | 'deep'
+  /** Line counts of checkout files; undefined skips the evidence check. */
+  lines?: ReadLineCount
+  threads?: ThreadState[]
+  versions?: MrVersion[]
+  compare: (from: string, to: string) => Promise<CompareResult | undefined>
+  headSha: string
+}
+
+export interface FilterResult {
+  /** Findings to post, with their effective severity. */
+  post: ReviewFinding[]
+  /** External findings kept out of threads in quick mode, marked `premise: 'external'`. */
+  moved: ReviewFinding[]
+  lowered: number
+  answered: number
+  /** A major or blocking finding could not be checked because files cannot be read. */
+  evidenceSkipped: boolean
+}
+
+/**
+ * Evidence first (a lowered finding is then judged like any other), then the
+ * external premise (quick mode only), then replies to answered threads, then
+ * the reply's severity against its thread.
+ */
+export async function applyFilters(findings: ReviewFinding[], ctx: FilterContext): Promise<FilterResult> {
+  const out: FilterResult = { post: [], moved: [], lowered: 0, answered: 0, evidenceSkipped: false }
+  for (const reported of findings) {
+    const severity = normalizeFindingSeverity(reported.severity)
+    if (ctx.lines === undefined && (severity === 'major' || severity === 'blocking')) out.evidenceSkipped = true
+    const f = await checkEvidence(reported, ctx.lines)
+    if (f !== reported) out.lowered++
+    if (ctx.mode === 'quick' && classifyPremise(f) === 'external') {
+      out.moved.push({ ...f, premise: 'external' })
+      continue
+    }
+    const thread = f.status === 'reply' ? ctx.threads?.find((t) => t.discussionId === f.discussionId) : undefined
+    if (thread !== undefined && await isAnsweredUnchanged(thread, { versions: ctx.versions, compare: ctx.compare, headSha: ctx.headSha })) {
+      out.answered++
+      continue
+    }
+    out.post.push(effectiveReply(f, thread))
+  }
+  return out
+}
+
+const FIRST_SENTENCE_CAP = 200
+
+function firstSentence(body: string): string {
+  const text = prose(body).replace(/\s+/g, ' ').trim()
+  const end = text.search(/[.!?](\s|$)/)
+  const sentence = end < 0 ? text : text.slice(0, end + 1)
+  return sentence.length > FIRST_SENTENCE_CAP ? `${sentence.slice(0, FIRST_SENTENCE_CAP - 3)}...` : sentence
+}
+
+/** The collapsed summary section listing moved findings; empty when there are none. */
+export function assumptionsSection(moved: ReviewFinding[]): string {
+  if (moved.length === 0) return ''
+  const lines = moved.map((f) => {
+    const where = f.status === 'reply' ? 'reply in an existing thread' : `\`${f.path}:${f.line}\``
+    return `- ${where}${f.code !== undefined ? ` ${f.code}` : ''}: ${firstSentence(f.body)}`
+  })
+  return `<details>\n<summary>Unverified assumptions (vendor or framework code not in the checkout): ${moved.length}</summary>\n\n${lines.join('\n')}\n\n</details>`
+}
+
+/** One sentence on what the filters did; empty when they did nothing. */
+export function filterNotice(r: Pick<FilterResult, 'moved' | 'lowered' | 'answered' | 'evidenceSkipped'>): string {
+  const parts = [
+    ...(r.moved.length > 0 ? [`${r.moved.length} moved to unverified assumptions`] : []),
+    ...(r.lowered > 0 ? [`${r.lowered} lowered to minor`] : []),
+    ...(r.answered > 0 ? [`${r.answered} ${r.answered === 1 ? 'reply' : 'replies'} to answered threads not posted`] : []),
+  ]
+  const counts = parts.length > 0 ? `${parts.join(', ')}.` : ''
+  return [counts, ...(r.evidenceSkipped ? ['Evidence check skipped: files could not be read.'] : [])].filter((s) => s !== '').join(' ')
+}
