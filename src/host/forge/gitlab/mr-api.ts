@@ -211,7 +211,8 @@ export function stripHeaderEcho(body: string, code: string | undefined): string 
   const headerAhead = `(?:${[...SEVERITY_LABELS, ...(codeToken !== undefined ? [codeToken] : [])].map(escapeRe).join('|')}|${wordThenDot})`
   const tokens: RegExp[] = [
     ...SEVERITY_LABELS.map((l) => new RegExp(`^${escapeRe(l)}`)),
-    new RegExp(`^(?:${SEVERITY_WORDS.join('|')})(?=\\s*(?:\\*\\*)?\\s*·)`),
+    // A severity word a `·` follows, with its closing bold when the word was bold (`**Major** ·`).
+    new RegExp(`^(?:${SEVERITY_WORDS.join('|')})(?:\\s*\\*\\*)?(?=\\s*·)`),
     /^·/,
     // A closing bold belongs to the echo only when it sits right after the code.
     ...(codeToken !== undefined ? [new RegExp(`^${escapeRe(codeToken)}(?:\\*\\*)?`)] : []),

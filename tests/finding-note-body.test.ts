@@ -104,6 +104,11 @@ describe('header echo variants seen in replay', () => {
     expect(stripHeaderEcho('❓ Minor \u2014 **question, not a claim**', 'X-CODE')).toBe('❓ Minor \u2014 **question, not a claim**')
   })
 
+  it('strips a bold severity word before the code with its closing bold', () => {
+    expect(stripHeaderEcho('**Major** · `X-CODE` text', 'X-CODE')).toBe('text')
+    expect(stripHeaderEcho('🟡 **Major** · `X-CODE`\n\nThe loop is wrong.', 'X-CODE')).toBe('The loop is wrong.')
+  })
+
   it('keeps bold text that follows an echo', () => {
     expect(stripHeaderEcho('`X-CODE` **important** text', 'X-CODE')).toBe('**important** text')
   })
