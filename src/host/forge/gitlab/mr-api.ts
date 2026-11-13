@@ -193,7 +193,9 @@ function lastNewLine(diff: string): number {
 
 const SEVERITY_LABELS = SEVERITY_ORDER.map((s) => severityPrefix(s))
 const SEVERITY_WORDS = SEVERITY_LABELS.map((l) => l.split(' ')[1])
-const ECHO_SEPARATOR = /^(?:·|-|\u2014)\s*/
+// A separator belongs to the echo only on its line and before a space: `- item` on
+// the next line is a list, `-1` is a number.
+const ECHO_SEPARATOR = /^(?:·|-|\u2014)(?:[ \t]+|$)/
 const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
 /**
@@ -223,14 +225,17 @@ export function stripHeaderEcho(body: string, code: string | undefined): string 
   ]
   let rest = body.replace(/^\s+/, '')
   let echoed = false
+  let gap = ''
   for (;;) {
     const hit = tokens.map((t) => t.exec(rest)).find((m) => m !== null)
     if (hit === undefined || hit === null) break
-    rest = rest.slice(hit[0].length).replace(/^\s+/, '')
+    rest = rest.slice(hit[0].length)
+    gap = /^\s*/.exec(rest)![0]
+    rest = rest.slice(gap.length)
     echoed = true
   }
   if (!echoed) return body
-  rest = rest.replace(ECHO_SEPARATOR, '')
+  if (!gap.includes('\n')) rest = rest.replace(ECHO_SEPARATOR, '').replace(/^\s+/, '')
   return rest === '' ? body : rest
 }
 

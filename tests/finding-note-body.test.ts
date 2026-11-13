@@ -46,6 +46,12 @@ describe('stripHeaderEcho', () => {
     expect(stripHeaderEcho('`A-CODE` · rest', 'A-CODE')).toBe('rest')
   })
 
+  it('takes a separator only on the echo line and before a space', () => {
+    expect(stripHeaderEcho('`A-CODE`\n\n- first bullet\n- second', 'A-CODE')).toBe('- first bullet\n- second')
+    expect(stripHeaderEcho('`A-CODE` -1 is returned', 'A-CODE')).toBe('-1 is returned')
+    expect(stripHeaderEcho('`A-CODE` \u2014 rest', 'A-CODE')).toBe('rest')
+  })
+
   it('leaves a body without an echo untouched', () => {
     expect(stripHeaderEcho('Plain body.', 'A-CODE')).toBe('Plain body.')
     expect(stripHeaderEcho('- a list item', undefined)).toBe('- a list item')
