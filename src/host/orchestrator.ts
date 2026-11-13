@@ -58,7 +58,7 @@ const workingPatternRule = 'WORKING PATTERN RULE: before reporting that code can
 
 // Rejected findings on a long MR fell into these groups: vendor behaviour asserted
 // without the vendor sources, documented design called a bug, answered threads raised again.
-const unverifiedRule = 'UNVERIFIED RULE: a finding that rests on how a framework, library or vendor package behaves, when that code is not in the checkout, is at most minor and is written as a question that names the behaviour to confirm. Never mark it major or blocking.'
+const unverifiedRule = 'UNVERIFIED RULE: a finding that rests on how a framework, library or vendor package behaves, when that code is not in the checkout, is at most minor and is written as a question that names the behaviour to confirm. Never mark it major or blocking. Mark such a finding premise "external"; in quick mode it is listed in the summary, not posted as a thread. Give major and blocking findings evidence: the checkout file and line that show the defect.'
 const documentedIntentRule = 'DOCUMENTED INTENT RULE: before calling behaviour a bug, read the docblock of the code involved and the nearby docs (README, docs/). If they state the behaviour is intended, do not report it as a bug; at most ask a design question, as minor, and quote the line that documents it.'
 // A nit once cited the one sibling plugin with a native return type as the
 // module convention; only 2 of about 35 plugin methods in that module had one.
