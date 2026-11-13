@@ -150,6 +150,12 @@ export interface FilterResult {
   moved: ReviewFinding[]
   lowered: number
   answered: number
+  /**
+   * Each filtered input (by identity) to the finding the run records: the
+   * effective one when posted or dropped (lowered, or a reply with its
+   * thread's severity), the reported one marked external when moved.
+   */
+  effective: Map<ReviewFinding, ReviewFinding>
   /** A major or blocking finding could not be checked because files cannot be read or a read failed. */
   evidenceSkipped: boolean
 }
@@ -160,7 +166,7 @@ export interface FilterResult {
  * the reply's severity against its thread.
  */
 export async function applyFilters(findings: ReviewFinding[], ctx: FilterContext): Promise<FilterResult> {
-  const out: FilterResult = { post: [], moved: [], lowered: 0, answered: 0, evidenceSkipped: false }
+  const out: FilterResult = { post: [], moved: [], lowered: 0, answered: 0, effective: new Map(), evidenceSkipped: false }
   for (const reported of findings) {
     // Evidence is asked of new findings only: a reply restates its thread, whose
     // opener the gate reads, and lowering it would render as a downgrade.
@@ -170,14 +176,17 @@ export async function applyFilters(findings: ReviewFinding[], ctx: FilterContext
     if (f !== reported) out.lowered++
     if (ctx.mode === 'quick' && classifyPremise(f) === 'external') {
       out.moved.push({ ...f, premise: 'external' })
+      out.effective.set(reported, { ...reported, premise: 'external' })
       continue
     }
     const thread = f.status === 'reply' ? ctx.threads?.find((t) => t.discussionId === f.discussionId) : undefined
+    const effective = effectiveReply(f, thread)
+    out.effective.set(reported, effective)
     if (thread !== undefined && await isAnsweredUnchanged(thread, { versions: ctx.versions, compare: ctx.compare, headSha: ctx.headSha })) {
       out.answered++
       continue
     }
-    out.post.push(effectiveReply(f, thread))
+    out.post.push(effective)
   }
   return out
 }

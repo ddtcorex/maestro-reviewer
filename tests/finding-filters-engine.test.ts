@@ -107,6 +107,25 @@ describe('postFindingsSequentially with filters', () => {
   })
 })
 
+describe('filterOutcome', () => {
+  it('records effective severities in the metadata and counts only posted findings', async () => {
+    const { filterOutcome } = await import('../src/host/engine.js')
+    const { buildReviewMeta } = await import('../src/host/review-marker.js')
+    const thread: ThreadState = { discussionId: 'd5', path: 'a.php', line: 20, severity: 'major', lastIsHuman: false }
+    const blocking: ReviewFinding = { ...plain, severity: 'blocking' }
+    const reply: ReviewFinding = { status: 'reply', discussionId: 'd5', body: 'Still open.' }
+    const moved: ReviewFinding = { ...external, severity: 'major' }
+    const findings = [blocking, reply, moved]
+    const r = await postFindingsSequentially(forge(), findings, { filters: ctx({ threads: [thread] }) })
+    const o = filterOutcome(r, findings)
+    expect(o.findings.map((f) => f.severity)).toEqual(['minor', 'major', 'major'])
+    expect(o.findings[2].premise).toBe('external')
+    expect(o.severityCounts).toEqual({ minor: 1, major: 1 })
+    const meta = buildReviewMeta({ headSha: 'abc123', mode: 'quick', models: [], findings: o.findings })
+    expect(meta.findings.map((f) => f.severity)).toEqual(['minor', 'major', 'major'])
+  })
+})
+
 describe('assumptionsSection', () => {
   it('is empty without moved findings', () => {
     expect(assumptionsSection([])).toBe('')
