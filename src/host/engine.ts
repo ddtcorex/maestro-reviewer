@@ -311,6 +311,29 @@ function summaryWithFloor(base: string, belowMinimum: number, minSeverity?: Find
   return belowMinimum > 0 && minSeverity !== undefined ? `${base} ${belowMinimum} finding(s) below ${minSeverity} were counted but not posted.` : base
 }
 
+/**
+ * The posting step both review paths share: post through the filters, then
+ * build the summary, counts and metadata findings from what was posted.
+ */
+export async function postWithFilters(
+  forge: Pick<ReviewForge, 'postFindings'>, findings: ReviewFinding[],
+  opts: { minSeverity?: FindingSeverity; muted?: ReadonlySet<string>; filters?: AgentRunConfig['filters']; worktreePath: string | undefined; diffTruncated: boolean; extra?: string[] },
+): Promise<Pick<ReviewOutcome, 'summary' | 'failures' | 'severityCounts' | 'findings' | 'filtered' | 'postedFindings'>> {
+  const filters = filtersFor(opts.worktreePath, opts.filters)
+  const r = await postFindingsSequentially(forge, findings, { minSeverity: opts.minSeverity, muted: opts.muted, ...(filters !== undefined ? { filters } : {}) })
+  const f = filterOutcome(r, findings)
+  const head = [reviewerSummary(r.postedNew, r.postedReplies, opts.diffTruncated), ...(opts.extra ?? [])].join(' ')
+  const base = summaryWithFloor(head, r.belowMinimum, opts.minSeverity)
+  return {
+    summary: f.notice === '' ? base : `${base} ${f.notice}`,
+    failures: r.failures,
+    severityCounts: f.severityCounts,
+    findings: f.findings,
+    ...(f.filtered !== undefined ? { filtered: f.filtered } : {}),
+    postedFindings: r.posted,
+  }
+}
+
 export function createEngineAgents(ctx: Context): EngineAgents {
   async function reviewer(worktreePath: string | undefined, payload: ReviewRequest, run: AgentRunConfig, reviewProfile?: ReviewSkillProfile, incrementalBlock?: string, chunk?: ReviewChunk): Promise<ReviewOutcome> {
     // MR base SHA feeds the govard diff-scope lint command; undefined omits the
@@ -387,14 +410,9 @@ export function createEngineAgents(ctx: Context): EngineAgents {
         }
 
         if (chunk !== undefined) return { summary: '', failures: [], findings: capturedFindings, models: [primaryOptions.model], deferredPost: true }
-        const filters = filtersFor(worktreePath, run.filters)
-        const r = await postFindingsSequentially(run.forge, capturedFindings, { minSeverity: run.minSeverity, muted: run.mutedCodes, ...(filters !== undefined ? { filters } : {}) })
-        const f = filterOutcome(r, capturedFindings)
-        const base = summaryWithFloor(reviewerSummary(r.postedNew, r.postedReplies, diffTruncated), r.belowMinimum, run.minSeverity)
-        return {
-          postedFindings: r.posted,
-          // A diff cut at MAX_DIFF_FILES left files unseen: the next re-review must be full.
-          ...(diffTruncated ? { partial: true, capped: true } : {}), summary: f.notice === '' ? base : `${base} ${f.notice}`, failures: r.failures, severityCounts: f.severityCounts, findings: f.findings, ...(f.filtered !== undefined ? { filtered: f.filtered } : {}), models: [primaryOptions.model] }
+        const out = await postWithFilters(run.forge, capturedFindings, { minSeverity: run.minSeverity, muted: run.mutedCodes, filters: run.filters, worktreePath, diffTruncated })
+        // A diff cut at MAX_DIFF_FILES left files unseen: the next re-review must be full.
+        return { ...out, ...(diffTruncated ? { partial: true, capped: true } : {}), models: [primaryOptions.model] }
       } finally {
         run.onUsage('reviewer', agentOptions.model, usageFromSession(handle.agent.session))
         await handle.dispose()
@@ -664,17 +682,11 @@ export function createReviewEngine(ctx: Context, agents: EngineAgents = createEn
         const failed = settled.flatMap((r, i) => r.status === 'rejected' ? [{ chunk: chunks[i], reason: r.reason instanceof Error ? r.reason.message : String(r.reason) }] : [])
         if (done.length === 0) throw new Error(`every review part failed: ${[...new Set(failed.map((f) => f.reason))].join('; ')}`)
         const findings = mergeFindings(done.map((o) => o.findings ?? []))
-        const filters = filtersFor(worktreePath, agentRun.filters)
-        const posted = await postFindingsSequentially(forge, findings, { minSeverity: agentRun.minSeverity, muted: agentRun.mutedCodes, ...(filters !== undefined ? { filters } : {}) })
-        const filterSummary = filterOutcome(posted, findings)
         const parts = [`Reviewed in ${chunks.length} parallel parts.`, ...(scopeTruncated ? ['The diff reached the file cap: files beyond it were not reviewed.'] : []), ...failed.map((f) => `Part ${f.chunk.id} (${f.chunk.files.length} files) failed: ${f.reason}; its files were not reviewed.`)]
+        const out = await postWithFilters(forge, findings, { minSeverity: agentRun.minSeverity, muted: agentRun.mutedCodes, filters: agentRun.filters, worktreePath, diffTruncated: false, extra: parts })
         return {
-          summary: `${summaryWithFloor(`${reviewerSummary(posted.postedNew, posted.postedReplies, false)} ${parts.join(' ')}`, posted.belowMinimum, agentRun.minSeverity)}${filterSummary.notice === '' ? '' : ` ${filterSummary.notice}`}`,
-          failures: [...done.flatMap((o) => o.failures), ...posted.failures],
-          severityCounts: filterSummary.severityCounts,
-          findings: filterSummary.findings,
-          ...(filterSummary.filtered !== undefined ? { filtered: filterSummary.filtered } : {}),
-          postedFindings: posted.posted,
+          ...out,
+          failures: [...done.flatMap((o) => o.failures), ...out.failures],
           models: [...new Set(done.flatMap((o) => o.models ?? []))],
           // The count covers failed parts only, so a capped diff leaves it out (it would undercount).
           ...(failed.length > 0 || scopeTruncated ? { partial: true, ...(scopeTruncated ? { capped: true } : { unreviewed: failed.reduce((n, f) => n + f.chunk.files.length, 0) }) } : {}),

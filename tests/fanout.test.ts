@@ -218,3 +218,35 @@ describe('gitlab client config through its schema', () => {
     expect((await tools.find((t) => t.name === 'gitlab_get_mr_diff')!.execute({}, {})).files.map((x: { path: string }) => x.path)).toEqual(['a.php'])
   })
 })
+
+describe('effective severities reach the summary and the metadata', () => {
+  it('posts with filters and reports the lowered severity (shared posting step)', async () => {
+    const { postWithFilters } = await import('../src/host/engine.js')
+    const posted: any[] = []
+    const forge = { postFindings: async (fs: any[]) => { posted.push(...fs) } }
+    const out = await postWithFilters(forge as any, [{ status: 'new', path: 'a.php', line: 1, body: 'Broken loop.', severity: 'major', code: 'BUG-L' }], {
+      filters: { mode: 'quick', compare: async () => undefined, headSha: 'abc1', readFile: async () => 'one line' }, worktreePath: undefined, diffTruncated: false, extra: ['Reviewed in 2 parallel parts.'],
+    })
+    expect(posted[0].severity).toBe('minor')
+    expect(out.severityCounts).toEqual({ minor: 1 })
+    expect(out.findings[0].severity).toBe('minor')
+    expect(out.filtered).toEqual({ external: 0, lowered: 1, answered: 0 })
+    expect(out.summary).toMatch(/^1 new inline comment\(s\), 0 thread\(s\) updated\. Reviewed in 2 parallel parts\. 1 lowered to minor\./)
+  })
+
+  it('records the lowered severity in the fan-out run metadata', async () => {
+    const { parseReviewMeta } = await import('../src/host/review-marker.js')
+    const { createReviewEngine } = await import('../src/host/engine.js')
+    const f = fanForge()
+    const forge = { ...f.forge, readFile: async () => 'one line' }
+    await createReviewEngine({} as any, { reviewer: vi.fn(async (_w: any, _p: any, _run: any, _prof: any, _blk: any, chunk: any) => ({ summary: '', failures: [], findings: [{ ...finding(chunk.files[0]), severity: 'major' }], models: ['fast'], deferredPost: true })), auditor: vi.fn() } as any).run(
+      { projectPath: 'g/p', projectId: 1, mrIid: 2, sourceBranch: 'b', headSha: 'abc1', trigger: 'mention', mode: 'quick', scope: { kind: 'mr' } } as any,
+      { gitlab: { baseUrl: 'https://git.example.com', token: 't', botUsername: 'bot' }, access: { kind: 'diff' }, model: { provider: 'p', model: 'fast' } as any,
+        agentTimeoutMs: 1000, forge: forge as any, fanout: { files: 10, bytes: 1_000_000, concurrency: 2 } },
+    )
+    const meta = parseReviewMeta(f.notes[0])!
+    expect(meta.findings.length).toBeGreaterThan(0)
+    expect(meta.findings.every((m) => m.severity === 'minor')).toBe(true)
+    expect(f.notes[0]).not.toMatch(/major/i)
+  })
+})
