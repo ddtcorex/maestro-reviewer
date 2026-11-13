@@ -6,9 +6,8 @@
 
 The Maestro merge-request review engine and its GitLab CI flow. The DSH host
 features (webhook intake, project mappings and local worktrees, the Settings
-section, Telegram digests) live in `@ddtcorex/dsh-maestro-review`
-(`packages/dsh-maestro-review` in the workspace), which imports this package's
-`lib/` modules listed in `tests/engine-exports.test.ts`.
+section, Telegram digests) are not part of this package: the engine is driven
+here by the CI label and the `resolve` CLI.
 
 Names by boundary: npm package = `@ddtcorex/maestro-reviewer`; Cordis patch rows = `maestro-review-host` (the package root, mounts the skill provider) and `maestro-review-engine` (provides the `reviewEngine` service); the reviewer-ci profile adds `maestro-review-ci-trigger`.
 
@@ -179,9 +178,8 @@ the appendix for one release cycle.
    pushes, merges, or tags; on success it prints the exact branch, PR, and
    guarded tag commands to run yourself. Then PR, CI green, **human
    `APPROVED`**, squash-merge.
-2. **Tag + publish (human gate 2)** (guarded, present the exact commands and
-   get explicit approval before running, per the Guard git-protection rule
-   in the workspace root AGENTS.md):
+2. **Tag + publish (human gate 2)** (guarded: a tag push publishes, so present
+   the exact commands and get explicit approval before running either one):
    ```sh
    git -C <repo> tag vX.Y.Z
    git -C <repo> push origin vX.Y.Z
@@ -300,8 +298,8 @@ docker push ddtcorex/maestro-reviewer:latest
 - **Secrets**: never log or commit real tokens. In CI, `REVIEW_GITLAB_TOKEN` must be a PAT/group token (`api` scope); `CI_JOB_TOKEN` is read-only for posting (probed on GitLab 18.11); redact it from clone URLs and errors.
 - **CI trust model**: never read identity or configuration from a trigger. The reviewer project forbids pipeline variables, and its pipeline file lives in a separate config project protected for Maintainers only (Custom CI config path `<file>@<project>`), because GitLab requires anyone triggering a protected downstream branch to be able to merge it, so the reviewer branch itself must let Developers merge; `resolve` learns the MR from GitLab (GraphQL `pipeline.upstream`, the upstream ref, MR labels) and writes the child pipeline with literal values. Per-project settings are reviewer variables scoped `review/<source project id>`; a project route is all or nothing. Reviewer-project reads use `REVIEW_RESOLVE_TOKEN` (Maintainer, environment scope `resolve`, never present in the review job); source reads use `REVIEW_GITLAB_TOKEN`. No backward compatibility shims.
 - **CI flow**: `providers/ci-trigger.ts` owns the push-gate and coexistence yield and calls the engine with an explicit access: quick with no or the generic profile is `diff`, a framework profile and deep are `clone` (a plain worktree, no vendor or govard linking, static-only auditor). The engine never reads CI variables. CI yields to the webhook flow, never the reverse.
-- **Engine exports are a contract**: `dsh-maestro-review` imports `lib/` modules by path; rename or move one only together with the plugin, and keep `tests/engine-exports.test.ts` in step.
+- **Engine exports are a contract**: the retired review host imported `lib/` modules by path, so treat them as a public surface; rename or move one only together with the consumers you know about, and keep `tests/engine-exports.test.ts` in step.
 
 ## Validation
 
-`pnpm verify` + `pnpm build` + `pnpm test` green before any success claim, and the maestro-harness GitLab rig (tier 1 and tier 2) for CI behavior. Webhook intake is validated in `dsh-maestro-review`.
+`pnpm verify` + `pnpm build` + `pnpm test` green before any success claim, and a real GitLab pipeline for CI behavior. Webhook intake is not shipped here.
