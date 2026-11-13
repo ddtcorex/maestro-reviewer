@@ -147,6 +147,14 @@ jobs:
           DIFF_NAMES="$DIFF_NAMES" node --input-type=module -e "import {lockfileDiffAllowed} from './scripts/release-bot.mjs'; const names = JSON.parse(process.env.DIFF_NAMES); if (!lockfileDiffAllowed(names)) { console.error('::error::pin diff touches files outside the allowlist: ' + names.join(', ')); process.exit(1) }"
           git diff --stat | tee pin-stat.txt
 
+      - name: Commit the pin
+        if: steps.diff.outputs.empty != 'true'
+        run: |
+          git config user.name "maestro-release-bot"
+          git config user.email "maestro-release-bot@users.noreply.github.com"
+          git add profiles/reviewer-ci/package.json profiles/reviewer-ci/pnpm-lock.yaml
+          git commit -m "chore(ci): pin reviewer-ci to maestro-reviewer ${{ steps.version.outputs.version }}"
+
       - name: Push the pin branch
         if: steps.diff.outputs.empty != 'true'
         run: |
