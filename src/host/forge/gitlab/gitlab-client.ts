@@ -9,6 +9,7 @@ import { ENGINE_FINDING_CODES, findingCodeOf } from '../../review-feedback.js'
 import { openerSeverity } from '../../finding-filters.js'
 import { sanitizeAgentText } from '../../agent-text.js'
 import type { ThreadState } from '../types.js'
+import { isReviewerNote } from '../../reviewer-note.js'
 
 export const name = 'maestro-gitlab-client'
 export const inject = ['tools']
@@ -244,7 +245,7 @@ export function selectOwnThreads(
   botUsername: string,
 ): { threads: OwnThread[]; totalDiscussions: number } {
   const threads = discussions
-    .filter(d => d.notes.length > 0 && d.notes[0].author.username === botUsername && threadLocation(d.notes[0]) !== undefined)
+    .filter(d => d.notes.length > 0 && isReviewerNote(d.notes[0], d.notes[0].author.username === botUsername) && threadLocation(d.notes[0]) !== undefined)
     // The engine's own findings are not the model's to answer or regrade.
     .filter(d => !ENGINE_FINDING_CODES.has(findingCodeOf(d.notes[0].body) ?? ''))
     .map(d => ({
@@ -253,7 +254,7 @@ export function selectOwnThreads(
       // Human replies reach the model here too: redact them like the diffs.
       lastCommentBody: redact(d.notes.filter(n => n.system !== true).at(-1)!.body).text.slice(0, REPLY_CAP),
       finding: findingHead(d.notes[0].body),
-      humanReplies: d.notes.slice(1).filter(n => n.system !== true && n.author.username !== botUsername).slice(-REPLIES_KEPT).map(n => redact(n.body).text.slice(0, REPLY_CAP)),
+      humanReplies: d.notes.slice(1).filter(n => n.system !== true && !isReviewerNote(n, n.author.username === botUsername)).slice(-REPLIES_KEPT).map(n => redact(n.body).text.slice(0, REPLY_CAP)),
       resolved: d.notes[0].resolved === true,
     }))
   return { threads, totalDiscussions: discussions.length }
@@ -263,12 +264,13 @@ export function selectOwnThreads(
 export function threadStates(discussions: GitlabDiscussion[], botUsername: string): ThreadState[] {
   return discussions.flatMap((d) => {
     const first = d.notes[0]
-    if (first === undefined || first.author.username !== botUsername) return []
+    const ours = (n: { author: { username: string }; body: string; system?: boolean }) => isReviewerNote(n, n.author.username === botUsername)
+    if (first === undefined || !ours(first)) return []
     const where = threadLocation(first)
     if (where === undefined) return []
     const spoken = d.notes.filter((n) => n.system !== true)
-    const human = spoken.filter((n) => n.author.username !== botUsername)
-    const bot = spoken.filter((n) => n.author.username === botUsername)
+    const human = spoken.filter((n) => !ours(n))
+    const bot = spoken.filter((n) => ours(n))
     const severity = openerSeverity(first.body)
     return [{
       discussionId: d.id,
@@ -276,7 +278,7 @@ export function threadStates(discussions: GitlabDiscussion[], botUsername: strin
       ...(severity !== undefined ? { severity } : {}),
       ...(human.at(-1)?.created_at !== undefined ? { lastHumanAt: human.at(-1)!.created_at } : {}),
       ...(bot.at(-1)?.created_at !== undefined ? { lastBotAt: bot.at(-1)!.created_at } : {}),
-      lastIsHuman: spoken.at(-1)?.author.username !== botUsername,
+      lastIsHuman: spoken.at(-1) !== undefined && !ours(spoken.at(-1)!),
     }]
   })
 }

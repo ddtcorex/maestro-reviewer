@@ -11,6 +11,8 @@ import { normalizeFindingSeverity, severityPrefix } from './severity.js'
 export const MUTE_THRESHOLD = 3
 export const FEEDBACK_WINDOW = 50
 
+import { isReviewerNote } from './reviewer-note.js'
+
 const MARKER = /<!-- maestro-finding code=([A-Z][A-Z0-9-]{2,40}) -->/
 
 /** Codes the engine itself raises: the model never sees or answers their threads. */
@@ -52,8 +54,10 @@ export function findingCodeMarker(code: string): string {
 
 interface Note { author?: { username?: string; id?: number }; body?: string; system?: boolean }
 
+const ours = (n: Note, botUsername: string) => isReviewerNote(n, n.author?.username === botUsername)
+
 const threadCodeOf = (notes: Note[], botUsername: string) =>
-  notes[0]?.author?.username === botUsername ? MARKER.exec(notes[0].body ?? '')?.[1] : undefined
+  notes[0] !== undefined && ours(notes[0], botUsername) ? MARKER.exec(notes[0].body ?? '')?.[1] : undefined
 
 /** Pure. The non-bot authors of dismiss commands, by username, for the caller's access check. */
 export function dismissalAuthors(discussions: Array<{ notes?: Note[] }>, botUsername: string): Map<string, number> {
@@ -61,7 +65,7 @@ export function dismissalAuthors(discussions: Array<{ notes?: Note[] }>, botUser
   for (const d of discussions) {
     for (const n of d.notes ?? []) {
       const name = n.author?.username
-      if (n.system === true || name === undefined || name === botUsername || typeof n.author?.id !== 'number') continue
+      if (n.system === true || name === undefined || ours(n, botUsername) || typeof n.author?.id !== 'number') continue
       if (parseCommand(n.body ?? '')?.kind === 'dismiss') authors.set(name, n.author.id)
     }
   }
@@ -82,7 +86,7 @@ export function countDismissals(discussions: Array<{ notes?: Note[] }>, botUsern
     const threadCode = threadCodeOf(notes, botUsername)
     for (const n of notes) {
       const name = n.author?.username
-      if (n.system === true || name === undefined || name === botUsername || !authorized(name)) continue
+      if (n.system === true || name === undefined || ours(n, botUsername) || !authorized(name)) continue
       const cmd = parseCommand(n.body ?? '')
       if (cmd?.kind !== 'dismiss') continue
       const code = cmd.code ?? threadCode

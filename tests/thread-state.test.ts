@@ -35,7 +35,7 @@ describe('threadStates', () => {
     const [t] = threadStates([{ id: 'd2', notes: [
       note('bot', '🔵 Minor · `X`', '2026-11-01T10:00:00Z', { position: pos }),
       note('dev', 'Why?', '2026-11-01T11:00:00Z'),
-      note('bot', 'Because.', '2026-11-01T12:00:00Z'),
+      note('bot', 'Because.\n\n<!-- maestro-note -->', '2026-11-01T12:00:00Z'),
     ] }], 'bot')
     expect(t.lastIsHuman).toBe(false)
   })
@@ -150,5 +150,31 @@ describe('effectiveReply', () => {
   it('leaves the finding unchanged without thread state', () => {
     const f = { status: 'reply' as const, discussionId: 'd', body: 'x' }
     expect(effectiveReply(f, undefined)).toBe(f)
+  })
+})
+
+describe('threadStates on a shared bot account', () => {
+  const marked = (b: string) => `${b}\n\n<!-- maestro-finding code=X-CODE -->`
+  it('reads an unmarked note written with the bot account as a person', () => {
+    const [t] = threadStates([{ id: 'd1', notes: [
+      note('bot', marked('🟡 Major · `X-CODE`\n\nbody'), '2026-11-01T10:00:00Z', { position: pos }),
+      note('bot', 'Not a bug, the config sets it.', '2026-11-01T11:00:00Z'),
+    ] }], 'bot')
+    expect(t.lastIsHuman).toBe(true)
+    expect(t.lastHumanAt).toBe('2026-11-01T11:00:00Z')
+    expect(t.lastBotAt).toBe('2026-11-01T10:00:00Z')
+  })
+
+  it('reads a marked reply as the reviewer', () => {
+    const [t] = threadStates([{ id: 'd1', notes: [
+      note('bot', marked('🟡 Major · `X-CODE`\n\nbody'), '2026-11-01T10:00:00Z', { position: pos }),
+      note('bot', 'Still open.\n\n<!-- maestro-note -->', '2026-11-01T11:00:00Z'),
+    ] }], 'bot')
+    expect(t.lastIsHuman).toBe(false)
+    expect(t.lastHumanAt).toBeUndefined()
+  })
+
+  it('does not own a thread a person opened with the bot account', () => {
+    expect(threadStates([{ id: 'd1', notes: [note('bot', 'Please check the cron.', '2026-11-01T10:00:00Z', { position: pos })] }], 'bot')).toEqual([])
   })
 })

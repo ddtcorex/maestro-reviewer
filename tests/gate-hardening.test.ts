@@ -145,7 +145,7 @@ describe('redaction reaches every text the model reads', () => {
 
   it('redacts thread bodies listed to the agent', async () => {
     const { selectOwnThreads } = await import('../src/host/forge/gitlab/gitlab-client.js')
-    const r = selectOwnThreads([{ id: 'd', notes: [{ body: 'x', author: { username: 'bot' }, position: { new_path: 'a', new_line: 1 }, resolved: false }, { body: 'DB_PASSWORD=hunter22', author: { username: 'dev' }, resolved: false }] }], 'bot')
+    const r = selectOwnThreads([{ id: 'd', notes: [{ body: '🔵 Minor\n\nx', author: { username: 'bot' }, position: { new_path: 'a', new_line: 1 }, resolved: false }, { body: 'DB_PASSWORD=hunter22', author: { username: 'dev' }, resolved: false }] }], 'bot')
     expect(r.threads[0].lastCommentBody).not.toContain('hunter22')
   })
 })
