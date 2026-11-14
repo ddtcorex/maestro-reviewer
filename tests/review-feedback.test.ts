@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { parseCommand } from '../src/host/commands.js'
-import { countDismissals, mutedCodes, findingCodeMarker } from '../src/host/review-feedback.js'
+import { countDismissals, dismissalAuthors, mutedCodes, findingCodeMarker } from '../src/host/review-feedback.js'
 import { parseReviewMeta } from '../src/host/review-marker.js'
 
 vi.mock('../src/host/review-history.js', async (importOriginal) => {
@@ -41,7 +41,7 @@ describe('dismissal authorization', () => {
 })
 
 describe('countDismissals', () => {
-  it('counts each code at most once per MR, from non-bot authors, resolving a bare dismiss from the thread', () => {
+  it('counts each code at most once per MR, from people (a dismiss written with the bot account included), resolving a bare dismiss from the thread', () => {
     const mr = [
       thread('RIG-A', ['dev', '/maestro dismiss'], ['dev2', '/maestro dismiss']),
       thread('RIG-B', ['dev', '/maestro dismiss RIG-C wrong code named']),
@@ -51,7 +51,7 @@ describe('countDismissals', () => {
       { notes: [note('dev', '/maestro dismiss RIG-E reason')] },
       thread(undefined, ['dev', '/maestro dismiss']),
     ]
-    expect(countDismissals(mr, BOT, () => true)).toEqual(new Set(['RIG-A', 'RIG-C', 'RIG-E']))
+    expect(countDismissals(mr, BOT, () => true)).toEqual(new Set(['RIG-A', 'RIG-C', 'RIG-D', 'RIG-E']))
   })
 })
 
@@ -122,5 +122,14 @@ describe('engine muting', () => {
     expect(notes[0]).toContain('Muted for this project')
     expect(notes[0]).toContain('RIG-A')
     expect(parseReviewMeta(notes[0])?.muted).toEqual(['RIG-A'])
+  })
+})
+
+describe('dismissals on a shared bot account', () => {
+  it('counts a dismiss written with the bot account and names its author', () => {
+    const mr = [thread('RIG-A', [BOT, '/maestro dismiss'])]
+    expect(countDismissals(mr, BOT, () => true)).toEqual(new Set(['RIG-A']))
+    const withIds = [{ notes: [...mr[0].notes.slice(0, 1), { author: { username: BOT, id: 7 }, body: '/maestro dismiss', system: false }] }]
+    expect(dismissalAuthors(withIds, BOT)).toEqual(new Map([[BOT, 7]]))
   })
 })

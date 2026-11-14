@@ -113,36 +113,66 @@ function touches(diff: string, line: number | null): boolean {
   return hunks.some((m) => overlaps(m[1], m[2], line) || overlaps(m[3], m[4], line))
 }
 
-/**
- * The thread was answered by a person and no commit since touched its lines.
- * The head at the answer is the newest version created before it. Any missing
- * piece (versions, compare) answers false, so the reply is posted.
- */
-export async function isAnsweredUnchanged(t: ThreadState, deps: {
+type ChangeDeps = {
   versions: MrVersion[] | undefined
   compare: (from: string, to: string) => Promise<CompareResult | undefined>
   headSha: string
-}): Promise<boolean> {
-  if (!t.lastIsHuman || t.lastHumanAt === undefined || deps.versions === undefined) return false
-  // Instants, not text: GitLab times may differ in offset form and milliseconds.
-  const answeredAt = Date.parse(t.lastHumanAt)
-  if (Number.isNaN(answeredAt)) return false
-  const before = deps.versions
-    .map((v) => ({ v, at: Date.parse(v.createdAt) }))
-    .filter((x) => !Number.isNaN(x.at) && x.at <= answeredAt)
-    .sort((a, b) => a.at - b.at)
-    .at(-1)?.v
-  if (before === undefined) return false
-  if (before.headSha === deps.headSha) return true
-  const result = await deps.compare(before.headSha, deps.headSha)
+}
+
+/** No commit between `from` and the current head touched the thread's lines; a failed compare answers false. */
+/** The text names this file: its full path, or a file name with an extension as a word. */
+function namesPath(text: string, path: string): boolean {
+  if (text.includes(path)) return true
+  const base = path.split('/').at(-1) ?? ''
+  return /\.[A-Za-z0-9]+$/.test(base) && base.length >= 5 && new RegExp(`(^|[^\\w./-])${base.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}($|[^\\w-])`).test(text)
+}
+
+/**
+ * No commit between `from` and the current head touched the thread's lines, or
+ * changed a file `mentions` names (a fix attempt made elsewhere that the reply
+ * answers); a failed compare answers false.
+ */
+export async function isUnchangedFrom(from: string, t: ThreadState, deps: Pick<ChangeDeps, 'compare' | 'headSha'>, mentions = ''): Promise<boolean> {
+  if (from === deps.headSha) return true
+  const result = await deps.compare(from, deps.headSha)
   if (result === undefined || result.compare_timeout === true || result.diffs === undefined) return false
+  if (mentions !== '' && result.diffs.some((d) => typeof d.new_path === 'string' && d.new_path !== t.path && namesPath(mentions, d.new_path))) return false
   return !result.diffs.some((d) => (d.new_path === t.path || d.old_path === t.path) && (d.diff === undefined || d.too_large === true || d.collapsed === true || touches(d.diff, t.line)))
 }
 
-/** A reply takes its thread's severity when it reports none, and records the thread's for rendering. */
+/**
+ * No commit since `at` touched the thread's lines. The head at that time is the
+ * newest version created at or before it. Any missing piece (time, versions,
+ * compare) answers false, so the reply is posted.
+ */
+export async function isUnchangedSince(at: string | undefined, t: ThreadState, deps: ChangeDeps, mentions = ''): Promise<boolean> {
+  if (at === undefined || deps.versions === undefined) return false
+  // Instants, not text: GitLab times may differ in offset form and milliseconds.
+  const since = Date.parse(at)
+  if (Number.isNaN(since)) return false
+  const before = deps.versions
+    .map((v) => ({ v, at: Date.parse(v.createdAt) }))
+    .filter((x) => !Number.isNaN(x.at) && x.at <= since)
+    .sort((a, b) => a.at - b.at)
+    .at(-1)?.v
+  if (before === undefined) return false
+  return isUnchangedFrom(before.headSha, t, deps, mentions)
+}
+
+/** The thread was answered by a person and no commit since touched its lines. */
+export async function isAnsweredUnchanged(t: ThreadState, deps: ChangeDeps): Promise<boolean> {
+  return t.lastIsHuman && isUnchangedSince(t.lastHumanAt, t, deps)
+}
+
+/**
+ * A reply takes its thread's current severity (the latest the reviewer stated,
+ * else the opener's) when it reports none, and records it for rendering, so a
+ * move back to the opener's severity is shown as a change too.
+ */
 export function effectiveReply(f: ReviewFinding, t: ThreadState | undefined): ReviewFinding {
-  if (f.status !== 'reply' || t?.severity === undefined) return f
-  return { ...f, severity: f.severity ?? t.severity, threadSeverity: t.severity }
+  const current = t?.currentSeverity ?? t?.severity
+  if (f.status !== 'reply' || current === undefined) return f
+  return { ...f, severity: f.severity ?? current, threadSeverity: current }
 }
 
 /** What the engine knows about the run when it filters findings. */
@@ -163,6 +193,8 @@ export interface FilterResult {
   external: number
   lowered: number
   answered: number
+  /** Same-severity replies in unanswered threads whose code did not change since the reviewer's last note. */
+  restated: number
   /**
    * Each filtered input (by identity) to the finding the run records: the
    * effective one when posted or dropped (lowered, or a reply with its
@@ -180,7 +212,7 @@ export interface FilterResult {
  * reply's severity against its thread.
  */
 export async function applyFilters(findings: ReviewFinding[], ctx: FilterContext): Promise<FilterResult> {
-  const out: FilterResult = { post: [], external: 0, lowered: 0, answered: 0, effective: new Map(), evidenceSkipped: false }
+  const out: FilterResult = { post: [], external: 0, lowered: 0, answered: 0, restated: 0, effective: new Map(), evidenceSkipped: false }
   // Replies answered on the same version share one compare.
   const compares = new Map<string, Promise<CompareResult | undefined>>()
   const compare = (from: string, to: string) => {
@@ -200,21 +232,33 @@ export async function applyFilters(findings: ReviewFinding[], ctx: FilterContext
     const thread = f.status === 'reply' ? ctx.threads?.find((t) => t.discussionId === f.discussionId) : undefined
     const effective = effectiveReply(f, thread)
     out.effective.set(reported, effective)
-    if (thread !== undefined && await isAnsweredUnchanged(thread, { versions: ctx.versions, compare, headSha: ctx.headSha })) {
+    const deps = { versions: ctx.versions, compare, headSha: ctx.headSha }
+    if (thread !== undefined && await isAnsweredUnchanged(thread, deps)) {
       out.answered++
       continue
     }
+    // A reply that only restates an open finding on untouched code adds nothing; a severity change does.
+    // A thread resolved since the reviewer last wrote in it gets its reply once: an unfixed finding closed without a word.
+    const resolvedSince = thread?.resolvedAt !== undefined && (thread.lastBotAt === undefined || Date.parse(thread.resolvedAt) > Date.parse(thread.lastBotAt))
+    if (thread !== undefined && !thread.lastIsHuman && !resolvedSince && effective.threadSeverity !== undefined && effective.severity === effective.threadSeverity
+      // The head the reviewer read is exact; a note time only approximates it (older notes record no head).
+      && await (thread.lastBotHead !== undefined ? isUnchangedFrom(thread.lastBotHead, thread, deps, effective.body) : isUnchangedSince(thread.lastBotAt, thread, deps, effective.body))) {
+      out.restated++
+      continue
+    }
     if (premiseBy !== undefined) out.external++
-    out.post.push(effective)
+    out.post.push({ ...effective, reviewedHead: ctx.headSha })
   }
   return out
 }
 
 /** One sentence on what the filters did; empty when they did nothing. */
-export function filterNotice(r: Pick<FilterResult, 'lowered' | 'answered' | 'evidenceSkipped'>): string {
+export function filterNotice(r: Pick<FilterResult, 'lowered' | 'answered' | 'evidenceSkipped'> & { restated?: number }): string {
+  const restated = r.restated ?? 0
   const parts = [
     ...(r.lowered > 0 ? [`${r.lowered} lowered to minor`] : []),
     ...(r.answered > 0 ? [`${r.answered} ${r.answered === 1 ? 'reply' : 'replies'} to answered threads not posted`] : []),
+    ...(restated > 0 ? [`${restated} restated ${restated === 1 ? 'reply' : 'replies'} on unchanged code not posted`] : []),
   ]
   const counts = parts.length > 0 ? `${parts.join(', ')}.` : ''
   return [counts, ...(r.evidenceSkipped ? ['Evidence check skipped: files could not be read.'] : [])].filter((s) => s !== '').join(' ')

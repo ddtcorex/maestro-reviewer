@@ -1,8 +1,9 @@
 import { describe, it, expect } from 'vitest'
 import { selectOwnThreads } from '../src/host/forge/gitlab/gitlab-client.js'
 
+// A reviewer note always carries a marker; a bot-account note without one is a person's.
 function note(author: string, body: string, extra: Record<string, unknown> = {}) {
-  return { body, author: { username: author }, ...extra }
+  return { body: author === 'review-bot' && !body.includes('<!-- maestro-') ? `${body}\n\n<!-- maestro-note -->` : body, author: { username: author }, ...extra }
 }
 
 const pos = (path: string, line: number) => ({ new_path: path, new_line: line })
@@ -50,7 +51,7 @@ describe('selectOwnThreads', () => {
         note('review-bot', 'follow-up', { resolved: false }),
       ] },
     ], 'review-bot')
-    expect(out.threads[0].lastCommentBody).toBe('follow-up')
+    expect(out.threads[0].lastCommentBody).toBe('follow-up\n\n<!-- maestro-note -->')
   })
 })
 
@@ -165,5 +166,16 @@ describe('final review fixes: thread list', () => {
     const { fetchAllDiscussions } = await import('../src/host/forge/gitlab/gitlab-client.js')
     const fetcher = (async () => new Response(JSON.stringify([{ id: 'x', notes: [] }]), { headers: { 'x-next-page': '2' } })) as unknown as typeof fetch
     await expect(fetchAllDiscussions(fetcher, 'https://g/x', {})).rejects.toThrow(/pages/)
+  })
+})
+
+describe('selectOwnThreads on a shared bot account', () => {
+  it('passes a person note written with the bot account to the model, not a marked reply', () => {
+    const out = selectOwnThreads([{ id: 'd1', notes: [
+      note('review-bot', '🔵 Minor · `X-CODE`\n\nfirst\n\n<!-- maestro-finding code=X-CODE -->', { position: pos('a.php', 3), resolved: false }),
+      note('review-bot', 'Still open.\n\n<!-- maestro-note -->'),
+      { body: 'This is intended.', author: { username: 'review-bot' } },
+    ] }], 'review-bot')
+    expect(out.threads[0].humanReplies).toEqual(['This is intended.'])
   })
 })

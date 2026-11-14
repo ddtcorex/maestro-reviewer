@@ -41,14 +41,20 @@ export interface ThreadState {
   line: number | null
   /** The opener's severity, when its label can be read. */
   severity?: FindingSeverity
+  /** The latest severity the reviewer stated in the thread (opener or a changed-severity reply). */
+  currentSeverity?: FindingSeverity
   lastHumanAt?: string
   lastBotAt?: string
+  /** The MR head the reviewer's latest note in the thread was written at, when that note records it. */
+  lastBotHead?: string
+  /** When the thread was resolved, if it is. */
+  resolvedAt?: string
   /** The last non-system note was written by a person. */
   lastIsHuman: boolean
 }
 
 /** One merge request version: the head it pointed at and when it was created. */
-export interface MrVersion { headSha: string; createdAt: string }
+export interface MrVersion { headSha: string; createdAt: string; patchIdSha?: string }
 
 export interface ForgeSignals {
   start(): Promise<void>

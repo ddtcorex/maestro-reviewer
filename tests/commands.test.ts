@@ -178,3 +178,14 @@ describe('engine metadata of a path-limited review', () => {
     expect(meta.findings.map((f) => f.code).sort()).toEqual(['RIG-L', 'SEC-X'])
   })
 })
+
+describe('findPendingCommands on a shared bot account', () => {
+  it('answers a command written with the bot account, never its own answers', async () => {
+    const fetcher = stub([
+      { id: 'd1', notes: [n(1, BOT_ID, '/maestro rereview src/')] },
+      { id: 'd2', notes: [n(2, BOT_ID, '/maestro explain'), n(3, BOT_ID, `Re-reviewed.\n\n/maestro rereview\n\n${commandMarker(2)}`)] },
+    ], { [BOT_ID]: 40 })
+    const pending = await findPendingCommands(fetcher as any, { baseUrl: 'https://g', token: 't', projectId: 1, mrIid: 2, botUserId: BOT_ID })
+    expect(pending).toEqual([{ noteId: 1, attempts: 0, discussionId: 'd1', command: { kind: 'rereview', path: 'src/' } }])
+  })
+})

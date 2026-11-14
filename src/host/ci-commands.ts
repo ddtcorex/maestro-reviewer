@@ -1,5 +1,6 @@
 import { gitlabAuthHeaders } from './forge/gitlab/gitlab-auth.js'
 import { parseCommand, type MaestroCommand } from './commands.js'
+import { isReviewerNote } from './reviewer-note.js'
 import { sanitizeAgentText } from './forge/gitlab/gitlab-client.js'
 
 /**
@@ -60,7 +61,7 @@ export async function findPendingCommands(
   const answered = new Set<number>()
   const retries = new Map<number, number>()
   for (const d of discussions) for (const note of d.notes ?? []) {
-    if (note.author?.id !== opts.botUserId) continue
+    if (!isReviewerNote(note, note.author?.id === opts.botUserId)) continue
     for (const m of (note.body ?? '').matchAll(ANSWER)) answered.add(Number(m[1]))
     for (const m of (note.body ?? '').matchAll(RETRY)) retries.set(Number(m[1]), (retries.get(Number(m[1])) ?? 0) + 1)
   }
@@ -69,7 +70,7 @@ export async function findPendingCommands(
     const notes = d.notes ?? []
     const first = notes[0]
     const code = FINDING_CODE.exec(first?.body ?? '')?.[1]
-    const finding = first?.author?.id === opts.botUserId && first.position?.new_path !== undefined && typeof first.position.new_line === 'number'
+    const finding = first !== undefined && isReviewerNote(first, first.author?.id === opts.botUserId) && first.position?.new_path !== undefined && typeof first.position.new_line === 'number'
       ? {
           path: first.position.new_path, line: first.position.new_line,
           ...(code !== undefined ? { code } : {}),
@@ -78,7 +79,7 @@ export async function findPendingCommands(
       : undefined
     for (const note of notes) {
       const authorId = note.author?.id
-      if (note.system === true || authorId === undefined || authorId === opts.botUserId || answered.has(note.id)) continue
+      if (note.system === true || authorId === undefined || isReviewerNote(note, authorId === opts.botUserId) || answered.has(note.id)) continue
       const command = parseCommand(note.body ?? '')
       if (command === undefined || command.kind === 'dismiss') continue
       candidates.push({ noteId: note.id, discussionId: d.id, command, ...(finding !== undefined && command.kind !== 'rereview' ? { finding } : {}), attempts: retries.get(note.id) ?? 0, authorId })

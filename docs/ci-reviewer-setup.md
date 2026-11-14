@@ -179,6 +179,15 @@ that person can do.
   would inherit Developer on the config project, which `resolve` refuses, and
   GitLab cannot lower an inherited role. Then give the bot Reporter on both.
 
+If a dedicated identity is not available yet, the reviewer still works on a
+person's account. It tells its own notes apart by the markers it writes
+(older notes by their leading severity label), so anything else that person
+writes with the account counts as theirs: a `/maestro dismiss` mutes a code,
+other `/maestro` commands are answered, and an answer in a finding thread
+stops the reviewer from restating the finding on unchanged code. Move to a
+dedicated bot user as soon as you can: the notes are still attributed to the
+person, and the job still holds their access.
+
 Then:
 
 1. Store the token as `REVIEW_GITLAB_TOKEN` and the bot's username as

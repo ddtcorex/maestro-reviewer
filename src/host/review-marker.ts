@@ -45,7 +45,7 @@ export interface ReviewMeta {
   usage?: { input: number; output: number; cached: number }
   findings: Array<{ code: string; fingerprint: string; severity: string; premise?: 'external'; premiseBy?: PremiseSource }>
   /** What the engine's finding filters did in this run. */
-  filtered?: { external: number; lowered: number; answered: number }
+  filtered?: { external: number; lowered: number; answered: number; restated?: number }
   muted?: string[]
   truncated?: boolean
   /** The review did not see every file (a failed fan-out part, a capped diff): the next one must be full. */
@@ -88,7 +88,7 @@ function isReviewMeta(x: unknown): x is ReviewMeta {
     && ((f as Record<string, unknown>).premiseBy === undefined || PREMISE_SOURCES.includes((f as Record<string, unknown>).premiseBy as PremiseSource)))) return false
   if (m.filtered !== undefined) {
     const c = m.filtered as Record<string, unknown>
-    if (c === null || typeof c !== 'object' || !isNum(c.external) || !isNum(c.lowered) || !isNum(c.answered)) return false
+    if (c === null || typeof c !== 'object' || !isNum(c.external) || !isNum(c.lowered) || !isNum(c.answered) || (c.restated !== undefined && !isNum(c.restated))) return false
   }
   if (m.usage !== undefined) {
     const u = m.usage as Record<string, unknown>
@@ -129,7 +129,7 @@ export function buildReviewMeta(opts: {
   partial?: boolean
   capped?: boolean
   muted?: string[]
-  filtered?: { external: number; lowered: number; answered: number }
+  filtered?: { external: number; lowered: number; answered: number; restated?: number }
   /** Findings of an earlier review of this head that this (narrower) review must not drop. */
   carried?: ReviewMeta['findings']
   now?: () => Date

@@ -309,3 +309,46 @@ describe('ci engine options', () => {
     })
   })
 })
+
+describe('patch unchanged skip', () => {
+  const v = (headSha: string, patchIdSha?: string) => ({ headSha, createdAt: '2026-11-01T00:00:00Z', ...(patchIdSha !== undefined ? { patchIdSha } : {}) })
+
+  it('patchUnchanged compares the patch ids of the prior and current heads', async () => {
+    const { patchUnchanged } = await import('../src/host/providers/ci-trigger.js')
+    expect(patchUnchanged([v('bbb', 'p1'), v('aaa', 'p1')], 'aaa', 'bbb')).toBe(true)
+    expect(patchUnchanged([v('bbb', 'p2'), v('aaa', 'p1')], 'aaa', 'bbb')).toBe(false)
+    expect(patchUnchanged([v('bbb'), v('aaa', 'p1')], 'aaa', 'bbb')).toBe(false)
+    expect(patchUnchanged([v('bbb', 'p1')], 'aaa', 'bbb')).toBe(false)
+    expect(patchUnchanged(undefined, 'aaa', 'bbb')).toBe(false)
+  })
+
+  async function run(versions: unknown[], prior: Record<string, unknown> = { headSha: 'aaa' }) {
+    const { parseCiEnvConfig, runCiTrigger } = await import('../src/host/providers/ci-trigger.js')
+    const cfg = parseCiEnvConfig({ GITLAB_HOST: 'h', REVIEW_GITLAB_TOKEN: 'tok', SOURCE_PROJECT_ID: '1', MR_IID: '2', REVIEW_ON_PUSH: '1' })
+    const fakeCtx = { reviewEngine: { run: vi.fn(async () => ({ ok: true, summary: 'done', failures: [], durationMs: 5 })) } }
+    const fetcher = vi.fn(async (url: string) => String(url).includes('/versions')
+      ? new Response(JSON.stringify(versions), { status: 200 })
+      : new Response(JSON.stringify({ source_branch: 'feat/x', sha: 'bbb' }), { status: 200 }))
+    const result = await runCiTrigger(fakeCtx as any, cfg, {
+      fetcher: fetcher as unknown as typeof fetch, writeFile: (async () => {}) as any, history: { lastCompletedReview: vi.fn(async () => prior) },
+    })
+    return { result, ran: fakeCtx.reviewEngine.run.mock.calls.length > 0 }
+  }
+
+  it('skips a push whose patch did not change', async () => {
+    const { result, ran } = await run([{ head_commit_sha: 'bbb', created_at: '2026-11-02T00:00:00Z', patch_id_sha: 'p1' }, { head_commit_sha: 'aaa', created_at: '2026-11-01T00:00:00Z', patch_id_sha: 'p1' }])
+    expect(ran).toBe(false)
+    expect(result.summary).toBe('patch unchanged since aaa, skipping')
+  })
+
+  it('still runs a full review after a partial one, even with the same patch', async () => {
+    const same = [{ head_commit_sha: 'bbb', created_at: '2026-11-02T00:00:00Z', patch_id_sha: 'p1' }, { head_commit_sha: 'aaa', created_at: '2026-11-01T00:00:00Z', patch_id_sha: 'p1' }]
+    expect((await run(same, { headSha: 'aaa', partial: true })).ran).toBe(true)
+    expect((await run(same, { headSha: 'aaa', partial: true, capped: true })).ran).toBe(false)
+  })
+
+  it('runs when the patch changed', async () => {
+    const { ran } = await run([{ head_commit_sha: 'bbb', created_at: '2026-11-02T00:00:00Z', patch_id_sha: 'p2' }, { head_commit_sha: 'aaa', created_at: '2026-11-01T00:00:00Z', patch_id_sha: 'p1' }])
+    expect(ran).toBe(true)
+  })
+})

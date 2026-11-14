@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { findingNoteBody, stripHeaderEcho } from '../src/host/forge/gitlab/mr-api.js'
+import { isReviewerNote } from '../src/host/reviewer-note.js'
 
 const visible = (b: string) => b.replace(/<!--[\s\S]*?-->/g, '')
 
@@ -36,7 +37,7 @@ describe('findingNoteBody header echo', () => {
 
   it('keeps an exact label echo stripped as before', () => {
     const b = findingNoteBody({ status: 'new', path: 'a', line: 1, body: '🔵 Minor Escape the output.', severity: 'minor' })
-    expect(b).toBe('🔵 Minor\n\nEscape the output.')
+    expect(b).toBe('🔵 Minor\n\nEscape the output.\n\n<!-- maestro-note -->')
   })
 })
 
@@ -64,8 +65,18 @@ describe('reply severity header', () => {
     expect(b.startsWith('`X-CODE`\n\nStill open.')).toBe(true)
   })
 
-  it('shows nothing above the text for a matching reply without a code', () => {
-    expect(findingNoteBody({ status: 'reply', discussionId: 'd', body: 'Still open.', severity: 'major', threadSeverity: 'major' })).toBe('Still open.')
+  it('shows nothing above the text for a matching reply without a code, and marks it', () => {
+    expect(findingNoteBody({ status: 'reply', discussionId: 'd', body: 'Still open.', severity: 'major', threadSeverity: 'major' })).toBe('Still open.\n\n<!-- maestro-note -->')
+  })
+
+  it('renders every note so the reviewer can tell it is its own', () => {
+    const cases = [
+      { status: 'reply' as const, discussionId: 'd', body: 'Still open.', severity: 'major' as const, threadSeverity: 'major' as const },
+      { status: 'reply' as const, discussionId: 'd', body: 'x', severity: 'minor' as const, threadSeverity: 'major' as const },
+      { status: 'new' as const, path: 'a', line: 1, body: 'Escape the output.', severity: 'minor' as const },
+      { status: 'new' as const, path: 'a', line: 1, body: 'x', severity: 'nit' as const, code: 'X-CODE' },
+    ]
+    for (const f of cases) expect(isReviewerNote({ body: findingNoteBody(f) }, true)).toBe(true)
   })
 
   it('shows the change when the reply differs', () => {
@@ -118,6 +129,25 @@ describe('header echo variants seen in replay', () => {
     expect(stripHeaderEcho('question · `NOTIFY-X`\n\nThe flag defaults to true.', 'NOTIFY-X')).toBe('The flag defaults to true.')
   })
 
+  it('strips a bold one-word tag and a dot before the echoed code', () => {
+    expect(stripHeaderEcho('**Question · `NOTIFY-X`**\n\nIs the flag internal?', 'NOTIFY-X')).toBe('Is the flag internal?')
+  })
+
+  it('strips a severity word with a parenthetical before the echoed code', () => {
+    expect(stripHeaderEcho('🟡 Minor (question, vendor behaviour not in the checkout) · `GIFT-X`\n\nIs the list refreshed?', 'GIFT-X')).toBe('Is the list refreshed?')
+    expect(stripHeaderEcho('🔵 Nit (design question) · `EVENT-X`\n\nWhy both?', 'EVENT-X')).toBe('Why both?')
+  })
+
+  it('keeps a parenthetical that another code or prose follows', () => {
+    expect(stripHeaderEcho('Minor (see below) · `OTHER-Y` is wrong', 'GIFT-X')).toBe('Minor (see below) · `OTHER-Y` is wrong')
+    expect(stripHeaderEcho('Minor (as noted) the list is stale.', 'GIFT-X')).toBe('Minor (as noted) the list is stale.')
+  })
+
+  it('keeps bold prose that starts with a word and a dot', () => {
+    expect(stripHeaderEcho('**Note · the flag is internal.**', 'NOTIFY-X')).toBe('**Note · the flag is internal.**')
+    expect(stripHeaderEcho('**Question · `OTHER-Y`** is wrong', 'NOTIFY-X')).toBe('**Question · `OTHER-Y`** is wrong')
+  })
+
   it('keeps a one-word tag and a dot that another code follows', () => {
     expect(stripHeaderEcho('question · `OTHER-Y` is wrong', 'NOTIFY-X')).toBe('question · `OTHER-Y` is wrong')
     expect(stripHeaderEcho('Note · the flag defaults to true.', 'NOTIFY-X')).toBe('Note · the flag defaults to true.')
@@ -140,5 +170,13 @@ describe('header echo variants seen in replay', () => {
 describe('echo separator at the end of its line', () => {
   it('drops a dash that ends the echo line', () => {
     expect(stripHeaderEcho('`A-CODE` -\nrest', 'A-CODE')).toBe('rest')
+  })
+})
+
+describe('reviewed head marker', () => {
+  it('records the head a finding was reviewed at, as a reviewer marker', () => {
+    const b = findingNoteBody({ status: 'reply', discussionId: 'd', body: 'Still open.', severity: 'major', threadSeverity: 'major', reviewedHead: 'abc123' })
+    expect(b).toContain('<!-- maestro-head sha=abc123 -->')
+    expect(isReviewerNote({ body: 'x\n\n<!-- maestro-head sha=abc123 -->' }, true)).toBe(true)
   })
 })

@@ -15,6 +15,8 @@ import { effectiveConfig } from '../repo-config.js'
 import { toCodeQuality, type ReviewGate } from '../codequality.js'
 import { openBlockingThreads } from '../ci-gate.js'
 import { timedFetcher } from '../forge/gitlab/gitlab-client.js'
+import { fetchMrVersions } from '../forge/gitlab/mr-api.js'
+import type { MrVersion } from '../forge/types.js'
 import { answerCommands, commandMarker, findPendingCommands, replyToCommand, type PendingCommand } from '../ci-commands.js'
 import { loadRepoSettings } from '../ci-repo-settings.js'
 import { fetchBotUserId, hasCompletedDeepReview, hasCompletedReviewForSha, hasRunningEyes, latestCompletedReview, removeDeepLabel } from '../ci-coexist.js'
@@ -159,6 +161,18 @@ export async function fetchMrDetail(config: CiEnvConfig, fetcher: typeof fetch =
 }
 
 /**
+ * The merge request patch at `head` is the one reviewed at `priorHead`: both
+ * versions carry a patch id and they match. Anything missing answers false,
+ * so the review runs. Pure.
+ */
+export function patchUnchanged(versions: MrVersion[] | undefined, priorHead: string, head: string): boolean {
+  const patchOf = (sha: string) => versions?.find((v) => v.headSha === sha)?.patchIdSha
+  const before = patchOf(priorHead)
+  const now = patchOf(head)
+  return before !== undefined && now !== undefined && before === now
+}
+
+/**
  * How CI reaches the code: quick with no or the generic profile reads the
  * diff only (no clone cost); a framework profile and every deep review clone
  * the source at the head SHA. Deep never audits a runtime here (no environment).
@@ -299,6 +313,10 @@ export async function runCiTrigger(
     result = { ok: true, summary: `already reviewed at ${headSha}, skipping`, failures: [], durationMs: 0 }
   } else if (prior !== undefined && prior.headSha !== headSha && !config.rereviewOnPush) {
     result = { ok: true, summary: `new commits since ${prior.headSha} but REVIEW_ON_PUSH is not set, skipping`, failures: [], durationMs: 0 }
+  } else if (prior?.headSha !== undefined && prior.headSha !== headSha && (prior.partial !== true || prior.capped === true) && patchUnchanged(await fetchMrVersions(config.gitlabBaseUrl, config.gitlabToken, config.sourceProjectId, config.mrIid, coFetcher), prior.headSha, headSha)) {
+    // A rebase or a base merge that leaves the MR's own diff as it was: nothing new to review.
+    // A partial prior review does not count: the next run must be full, as for the same head.
+    result = { ok: true, summary: `patch unchanged since ${prior.headSha}, skipping`, failures: [], durationMs: 0 }
   } else if (await hasCompletedReviewForSha(coFetcher, config.gitlabBaseUrl, config.gitlabToken, config.sourceProjectId, config.mrIid, headSha, botUserId)) {
     // Coexistence (CI yields to webhook): the CI history store is invisible to
     // the webhook flow and vice versa, so check the MR itself for a completed

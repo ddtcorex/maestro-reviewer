@@ -208,3 +208,152 @@ describe('linesReader', () => {
     expect(linesReader(undefined, {}, 'h')).toBeUndefined()
   })
 })
+
+describe('restated replies', () => {
+  const versions = [{ headSha: 'h1', createdAt: '2026-11-01T00:00:00Z' }]
+  const open = (over: Partial<ThreadState> = {}): ThreadState => ({ discussionId: 'd1', path: 'a.php', line: 20, severity: 'minor', currentSeverity: 'minor', lastBotAt: '2026-11-02T00:00:00Z', lastIsHuman: false, ...over })
+  const reply = (severity: ReviewFinding['severity']): ReviewFinding => ({ status: 'reply', discussionId: 'd1', body: 'Still open.', severity })
+  const untouched = vi.fn(async () => ({ diffs: [{ new_path: 'a.php', old_path: 'a.php', diff: '@@ -90,1 +90,1 @@\n-x\n+y\n' }] }))
+  const touched = vi.fn(async () => ({ diffs: [{ new_path: 'a.php', old_path: 'a.php', diff: '@@ -19,2 +19,2 @@\n-x\n+y\n' }] }))
+
+  it('drops a same-severity reply on unchanged code', async () => {
+    const f = forge()
+    const r = await postFindingsSequentially(f, [reply('minor')], { filters: ctx({ threads: [open()], versions, compare: untouched }) })
+    expect(f.posted).toHaveLength(0)
+    expect(r.restated).toBe(1)
+  })
+
+  it('posts it when the code under the thread changed', async () => {
+    const f = forge()
+    const r = await postFindingsSequentially(f, [reply('minor')], { filters: ctx({ threads: [open()], versions, compare: touched }) })
+    expect(f.posted).toHaveLength(1)
+    expect(r.restated).toBe(0)
+  })
+
+  it('posts a reply that changes the severity', async () => {
+    const f = forge()
+    const r = await postFindingsSequentially(f, [reply('major')], { filters: ctx({ threads: [open()], versions, compare: untouched }) })
+    expect(f.posted).toHaveLength(1)
+    expect(r.restated).toBe(0)
+  })
+
+  it('posts it when versions cannot be read', async () => {
+    const f = forge()
+    await postFindingsSequentially(f, [reply('minor')], { filters: ctx({ threads: [open()], compare: untouched }) })
+    expect(f.posted).toHaveLength(1)
+  })
+
+  it('compares with the current severity, not the opener', async () => {
+    const f = forge()
+    const r = await postFindingsSequentially(f, [reply('minor')], { filters: ctx({ threads: [open({ severity: 'major', currentSeverity: 'minor' })], versions, compare: untouched }) })
+    expect(f.posted).toHaveLength(0)
+    expect(r.restated).toBe(1)
+  })
+
+  it('leaves answered threads to the answered filter', async () => {
+    const f = forge()
+    const r = await postFindingsSequentially(f, [reply('minor')], { filters: ctx({ threads: [open({ lastIsHuman: true, lastHumanAt: '2026-11-03T00:00:00Z' })], versions, compare: untouched }) })
+    expect(r.answered).toBe(1)
+    expect(r.restated).toBe(0)
+  })
+
+  it('records restated in the outcome and the notice', async () => {
+    const { filterOutcome } = await import('../src/host/engine.js')
+    const findings = [reply('minor')]
+    const r = await postFindingsSequentially(forge(), findings, { filters: ctx({ threads: [open()], versions, compare: untouched }) })
+    const o = filterOutcome(r, findings)
+    expect(o.filtered).toEqual({ external: 0, lowered: 0, answered: 0, restated: 1 })
+    expect(o.notice).toBe('1 restated reply on unchanged code not posted.')
+  })
+})
+
+describe('filterNotice with restated replies', () => {
+  it('counts them', () => {
+    expect(filterNotice({ lowered: 0, answered: 0, restated: 2, evidenceSkipped: false })).toBe('2 restated replies on unchanged code not posted.')
+  })
+})
+
+describe('a thread that went back to its opener severity', () => {
+  it('posts the move back with a label, so the next run sees the new severity', async () => {
+    const f = forge()
+    const thread: ThreadState = { discussionId: 'd1', path: 'a.php', line: 20, severity: 'major', currentSeverity: 'minor', lastBotAt: '2026-11-02T00:00:00Z', lastIsHuman: false }
+    const untouched = vi.fn(async () => ({ diffs: [] }))
+    await postFindingsSequentially(f, [{ status: 'reply', discussionId: 'd1', body: 'Worse again.', severity: 'major' }], { filters: ctx({ threads: [thread], versions: [{ headSha: 'h1', createdAt: '2026-11-01T00:00:00Z' }], compare: untouched }) })
+    expect(f.posted).toHaveLength(1)
+    expect(f.posted[0]).toMatchObject({ severity: 'major', threadSeverity: 'minor' })
+  })
+})
+
+describe('restated replies anchored on the reviewed head', () => {
+  it('posts the reply when the code changed since the head the reviewer read, whatever the note time', async () => {
+    const f = forge()
+    // The reviewer read h1; a later note time sits after v2 (a command answer, or a run that overlapped a push).
+    const thread: ThreadState = { discussionId: 'd1', path: 'a.php', line: 20, severity: 'major', currentSeverity: 'major', lastBotAt: '2026-11-05T00:00:00Z', lastBotHead: 'h1', lastIsHuman: false }
+    const compare = vi.fn(async (from: string) => (from === 'h1' ? { diffs: [{ new_path: 'a.php', old_path: 'a.php', diff: '@@ -19,2 +19,2 @@\n-x\n+y\n' }] } : { diffs: [] }))
+    const versions = [{ headSha: 'h1', createdAt: '2026-11-01T00:00:00Z' }, { headSha: 'h2', createdAt: '2026-11-02T00:00:00Z' }]
+    const r = await postFindingsSequentially(f, [{ status: 'reply', discussionId: 'd1', body: 'Still broken.', severity: 'major' }], { filters: ctx({ threads: [thread], versions, compare }) })
+    expect(f.posted).toHaveLength(1)
+    expect(r.restated).toBe(0)
+    expect(compare).toHaveBeenCalledWith('h1', 'h3')
+  })
+
+  it('drops it when nothing changed since that head', async () => {
+    const f = forge()
+    const thread: ThreadState = { discussionId: 'd1', path: 'a.php', line: 20, severity: 'major', currentSeverity: 'major', lastBotHead: 'h3', lastIsHuman: false }
+    const r = await postFindingsSequentially(f, [{ status: 'reply', discussionId: 'd1', body: 'Still open.', severity: 'major' }], { filters: ctx({ threads: [thread] }) })
+    expect(f.posted).toHaveLength(0)
+    expect(r.restated).toBe(1)
+  })
+
+  it('marks every posted finding with the head it was reviewed at', async () => {
+    const f = forge()
+    await postFindingsSequentially(f, [plain], { filters: ctx() })
+    expect(f.posted[0].reviewedHead).toBe('h3')
+  })
+})
+
+describe('restated replies the developer still needs', () => {
+  const base: ThreadState = { discussionId: 'd1', path: 'a.php', line: 20, severity: 'minor', currentSeverity: 'minor', lastBotAt: '2026-11-02T00:00:00Z', lastBotHead: 'h1', lastIsHuman: false }
+  const untouched = vi.fn(async () => ({ diffs: [{ new_path: 'b/Helper.php', old_path: 'b/Helper.php', diff: '@@ -3,1 +3,1 @@\n-x\n+y\n' }] }))
+
+  it('posts once when the thread was resolved after the reviewer last wrote in it', async () => {
+    const f = forge()
+    await postFindingsSequentially(f, [{ status: 'reply', discussionId: 'd1', body: 'Still open.', severity: 'minor' }], { filters: ctx({ threads: [{ ...base, resolvedAt: '2026-11-03T00:00:00Z' }], compare: untouched }) })
+    expect(f.posted).toHaveLength(1)
+  })
+
+  it('drops it again once the reviewer wrote after the resolution', async () => {
+    const f = forge()
+    const r = await postFindingsSequentially(f, [{ status: 'reply', discussionId: 'd1', body: 'Still open.', severity: 'minor' }], { filters: ctx({ threads: [{ ...base, resolvedAt: '2026-11-01T00:00:00Z' }], compare: untouched }) })
+    expect(r.restated).toBe(1)
+  })
+
+  it('posts when the reply names a file the new commits changed', async () => {
+    const f = forge()
+    await postFindingsSequentially(f, [{ status: 'reply', discussionId: 'd1', body: 'The change in `b/Helper.php` does not fix this: the loop still skips.', severity: 'minor' }], { filters: ctx({ threads: [base], compare: untouched }) })
+    expect(f.posted).toHaveLength(1)
+  })
+
+  it('still drops it when the reply names no changed file', async () => {
+    const f = forge()
+    const r = await postFindingsSequentially(f, [{ status: 'reply', discussionId: 'd1', body: 'Still open in `c/Other.php`.', severity: 'minor' }], { filters: ctx({ threads: [base], compare: untouched }) })
+    expect(r.restated).toBe(1)
+  })
+})
+
+describe('a named file only counts as a whole name', () => {
+  it('ignores a file name inside a longer word or path', async () => {
+    const f = forge()
+    const thread: ThreadState = { discussionId: 'd1', path: 'a.php', line: 20, severity: 'minor', currentSeverity: 'minor', lastBotHead: 'h1', lastIsHuman: false }
+    const compare = vi.fn(async () => ({ diffs: [{ new_path: 'b/Helper.php', old_path: 'b/Helper.php', diff: '@@ -3,1 +3,1 @@\n-x\n+y\n' }] }))
+    const r = await postFindingsSequentially(f, [{ status: 'reply', discussionId: 'd1', body: 'See `c/MyHelper.php` and Helper.phpx.', severity: 'minor' }], { filters: ctx({ threads: [thread], compare }) })
+    expect(r.restated).toBe(1)
+  })
+  it('counts a bare file name', async () => {
+    const f = forge()
+    const thread: ThreadState = { discussionId: 'd1', path: 'a.php', line: 20, severity: 'minor', currentSeverity: 'minor', lastBotHead: 'h1', lastIsHuman: false }
+    const compare = vi.fn(async () => ({ diffs: [{ new_path: 'b/Helper.php', old_path: 'b/Helper.php', diff: '@@ -3,1 +3,1 @@\n-x\n+y\n' }] }))
+    await postFindingsSequentially(f, [{ status: 'reply', discussionId: 'd1', body: 'The change in Helper.php does not cover this.', severity: 'minor' }], { filters: ctx({ threads: [thread], compare }) })
+    expect(f.posted).toHaveLength(1)
+  })
+})

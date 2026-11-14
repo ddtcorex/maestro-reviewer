@@ -63,7 +63,7 @@ describe('postReviewFindings severity prefix', () => {
       poster(calls) as never,
     )
     expect((calls[0] as { body: string }).body.startsWith('🔵 Minor')).toBe(true)
-    expect((calls[1] as { body: string }).body).toBe('🔵 Minor\n\nquoted')
+    expect((calls[1] as { body: string }).body).toBe('🔵 Minor\n\nquoted\n\n<!-- maestro-note -->')
   })
 })
 

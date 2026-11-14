@@ -2,6 +2,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { ReviewForge } from '../types.js'
 import { gitlabAuthHeaders } from './gitlab-auth.js'
 import * as GitlabClient from './gitlab-client.js'
+import { isReviewerNote, markReviewerNote } from '../../reviewer-note.js'
 import { fetchRepoFile, fetchCompare, fetchMrBaseSha, fetchMrDetailHeadSha, fetchMrVersions, postReviewFindings, type GitlabFindingPoster } from './mr-api.js'
 import { createReviewSignals } from './review-signals.js'
 import { DEFAULT_IGNORE_GLOBS, filterDiffs } from '../../diff-filter.js'
@@ -50,7 +51,7 @@ export function gitlabForge(
     const response = await GitlabClient.fetchWithTimeout(url, {
       method: 'POST',
       headers: { ...gitlabAuthHeaders(cfg.token), 'Content-Type': 'application/json' },
-      body: JSON.stringify({ body }),
+      body: JSON.stringify({ body: markReviewerNote(body) }),
     })
     if (!response.ok) throw new Error(`GitLab API error ${response.status}: ${await response.text()}`)
   }
@@ -71,7 +72,7 @@ export function gitlabForge(
         for (const d of batch) {
           const first = d.notes?.[0]
           const code = /<!-- maestro-finding code=([A-Z][A-Z0-9-]{2,40}) -->/.exec(first?.body ?? '')?.[1]
-          if (first?.author?.username === cfg.botUsername && first.resolved !== true && code !== undefined && first.position?.new_path !== undefined) for (const k of openFindingKeys(code, first.position.new_path, first.body ?? '')) keys.add(k)
+          if (first !== undefined && isReviewerNote(first, first.author?.username === cfg.botUsername) && first.resolved !== true && code !== undefined && first.position?.new_path !== undefined) for (const k of openFindingKeys(code, first.position.new_path, first.body ?? '')) keys.add(k)
         }
         if (batch.length < 100) break
       }

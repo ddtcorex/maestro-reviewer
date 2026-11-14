@@ -2,6 +2,7 @@ import { normalize as posixNormalize } from 'node:path/posix'
 import type { ReviewFinding } from '../../review-findings-tool.js'
 import { SEVERITY_ORDER, normalizeFindingSeverity, severityPrefix } from '../../severity.js'
 import { findingCodeMarker } from '../../review-feedback.js'
+import { NOTE_MARKER, headMarker } from '../../reviewer-note.js'
 import { sanitizeAgentText } from './gitlab-client.js'
 import type { CompareResult, MrVersion } from '../types.js'
 import { gitlabAuthHeaders } from './gitlab-auth.js'
@@ -56,8 +57,8 @@ export async function fetchMrVersions(
   try {
     const response = await fetcher(`${baseUrl}/api/v4/projects/${projectId}/merge_requests/${mrIid}/versions?per_page=100`, { headers: gitlabAuthHeaders(token) })
     if (!response.ok) return undefined
-    const versions = await response.json() as Array<{ head_commit_sha?: string; created_at?: string }>
-    return versions.flatMap((v) => (typeof v.head_commit_sha === 'string' && typeof v.created_at === 'string' ? [{ headSha: v.head_commit_sha, createdAt: v.created_at }] : []))
+    const versions = await response.json() as Array<{ head_commit_sha?: string; created_at?: string; patch_id_sha?: string }>
+    return versions.flatMap((v) => (typeof v.head_commit_sha === 'string' && typeof v.created_at === 'string' ? [{ headSha: v.head_commit_sha, createdAt: v.created_at, ...(typeof v.patch_id_sha === 'string' && v.patch_id_sha !== '' ? { patchIdSha: v.patch_id_sha } : {}) }] : []))
   } catch {
     return undefined
   }
@@ -227,6 +228,10 @@ export function stripHeaderEcho(body: string, code: string | undefined): string 
     new RegExp(`^[^\\p{L}\\p{N}\\s\\x60*]{1,4}(?=\\s*(?:\\*\\*)?\\s*(?:${SEVERITY_WORDS.join('|')})\\s*(?:\\*\\*)?\\s*·)`, 'iu'),
     new RegExp(`^❓(?=\\s*(?:\\*\\*)?\\s*${headerAhead})`),
     new RegExp(`^\\*\\*(?=\\s*${headerAhead})`),
+    // An emoji, a severity word and a short parenthetical, then a dot and this finding's code (`🟡 Minor (question) · \`CODE\``).
+    ...(codeToken !== undefined ? [new RegExp(`^(?:[^\\p{L}\\p{N}\\s\\x60*]{1,4}\\s*)?(?:${SEVERITY_WORDS.join('|')})\\s*\\([^)\\n]{1,120}\\)\\s*·(?=\\s*${escapeRe(codeToken)})`, 'iu')] : []),
+    // An opening bold before a one-word tag, a dot and this finding's code (`**Question · \`CODE\`**`).
+    ...(codeToken !== undefined ? [new RegExp(`^\\*\\*(?=\\s*\\p{L}+\\s*·\\s*${escapeRe(codeToken)})`, 'u')] : []),
   ]
   let rest = body.replace(/^\s+/, '')
   let echoed = false
@@ -263,7 +268,7 @@ export function findingNoteBody(finding: ReviewFinding): string {
   const head = noteHeader(finding)
   const stripped = stripHeaderEcho(finding.body, finding.code)
   const text = sanitizeAgentText(finding.severityNote === undefined ? stripped : `${finding.severityNote}\n\n${stripped}`)
-  return `${head === '' ? '' : `${head}\n\n`}${text}${finding.code === undefined ? '' : `\n\n${findingCodeMarker(finding.code)}`}`
+  return `${head === '' ? '' : `${head}\n\n`}${text}\n\n${finding.code === undefined ? NOTE_MARKER : findingCodeMarker(finding.code)}${finding.reviewedHead === undefined ? '' : `\n${headMarker(finding.reviewedHead)}`}`
 }
 
 export async function postReviewFindings(findings: ReviewFinding[], config: GitlabFindingPoster): Promise<void> {
