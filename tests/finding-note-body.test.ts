@@ -133,6 +133,16 @@ describe('header echo variants seen in replay', () => {
     expect(stripHeaderEcho('**Question · `NOTIFY-X`**\n\nIs the flag internal?', 'NOTIFY-X')).toBe('Is the flag internal?')
   })
 
+  it('strips a severity word with a parenthetical before the echoed code', () => {
+    expect(stripHeaderEcho('🟡 Minor (question, vendor behaviour not in the checkout) · `GIFT-X`\n\nIs the list refreshed?', 'GIFT-X')).toBe('Is the list refreshed?')
+    expect(stripHeaderEcho('🔵 Nit (design question) · `EVENT-X`\n\nWhy both?', 'EVENT-X')).toBe('Why both?')
+  })
+
+  it('keeps a parenthetical that another code or prose follows', () => {
+    expect(stripHeaderEcho('Minor (see below) · `OTHER-Y` is wrong', 'GIFT-X')).toBe('Minor (see below) · `OTHER-Y` is wrong')
+    expect(stripHeaderEcho('Minor (as noted) the list is stale.', 'GIFT-X')).toBe('Minor (as noted) the list is stale.')
+  })
+
   it('keeps bold prose that starts with a word and a dot', () => {
     expect(stripHeaderEcho('**Note · the flag is internal.**', 'NOTIFY-X')).toBe('**Note · the flag is internal.**')
     expect(stripHeaderEcho('**Question · `OTHER-Y`** is wrong', 'NOTIFY-X')).toBe('**Question · `OTHER-Y`** is wrong')

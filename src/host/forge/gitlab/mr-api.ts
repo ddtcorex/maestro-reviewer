@@ -228,6 +228,8 @@ export function stripHeaderEcho(body: string, code: string | undefined): string 
     new RegExp(`^[^\\p{L}\\p{N}\\s\\x60*]{1,4}(?=\\s*(?:\\*\\*)?\\s*(?:${SEVERITY_WORDS.join('|')})\\s*(?:\\*\\*)?\\s*·)`, 'iu'),
     new RegExp(`^❓(?=\\s*(?:\\*\\*)?\\s*${headerAhead})`),
     new RegExp(`^\\*\\*(?=\\s*${headerAhead})`),
+    // An emoji, a severity word and a short parenthetical, then a dot and this finding's code (`🟡 Minor (question) · \`CODE\``).
+    ...(codeToken !== undefined ? [new RegExp(`^(?:[^\\p{L}\\p{N}\\s\\x60*]{1,4}\\s*)?(?:${SEVERITY_WORDS.join('|')})\\s*\\([^)\\n]{1,120}\\)\\s*·(?=\\s*${escapeRe(codeToken)})`, 'iu')] : []),
     // An opening bold before a one-word tag, a dot and this finding's code (`**Question · \`CODE\`**`).
     ...(codeToken !== undefined ? [new RegExp(`^\\*\\*(?=\\s*\\p{L}+\\s*·\\s*${escapeRe(codeToken)})`, 'u')] : []),
   ]
