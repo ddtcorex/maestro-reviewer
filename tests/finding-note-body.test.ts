@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { findingNoteBody, stripHeaderEcho } from '../src/host/forge/gitlab/mr-api.js'
+import { isReviewerNote } from '../src/host/reviewer-note.js'
 
 const visible = (b: string) => b.replace(/<!--[\s\S]*?-->/g, '')
 
@@ -36,7 +37,7 @@ describe('findingNoteBody header echo', () => {
 
   it('keeps an exact label echo stripped as before', () => {
     const b = findingNoteBody({ status: 'new', path: 'a', line: 1, body: '🔵 Minor Escape the output.', severity: 'minor' })
-    expect(b).toBe('🔵 Minor\n\nEscape the output.')
+    expect(b).toBe('🔵 Minor\n\nEscape the output.\n\n<!-- maestro-note -->')
   })
 })
 
@@ -64,8 +65,18 @@ describe('reply severity header', () => {
     expect(b.startsWith('`X-CODE`\n\nStill open.')).toBe(true)
   })
 
-  it('shows nothing above the text for a matching reply without a code', () => {
-    expect(findingNoteBody({ status: 'reply', discussionId: 'd', body: 'Still open.', severity: 'major', threadSeverity: 'major' })).toBe('Still open.')
+  it('shows nothing above the text for a matching reply without a code, and marks it', () => {
+    expect(findingNoteBody({ status: 'reply', discussionId: 'd', body: 'Still open.', severity: 'major', threadSeverity: 'major' })).toBe('Still open.\n\n<!-- maestro-note -->')
+  })
+
+  it('renders every note so the reviewer can tell it is its own', () => {
+    const cases = [
+      { status: 'reply' as const, discussionId: 'd', body: 'Still open.', severity: 'major' as const, threadSeverity: 'major' as const },
+      { status: 'reply' as const, discussionId: 'd', body: 'x', severity: 'minor' as const, threadSeverity: 'major' as const },
+      { status: 'new' as const, path: 'a', line: 1, body: 'Escape the output.', severity: 'minor' as const },
+      { status: 'new' as const, path: 'a', line: 1, body: 'x', severity: 'nit' as const, code: 'X-CODE' },
+    ]
+    for (const f of cases) expect(isReviewerNote({ body: findingNoteBody(f) }, true)).toBe(true)
   })
 
   it('shows the change when the reply differs', () => {

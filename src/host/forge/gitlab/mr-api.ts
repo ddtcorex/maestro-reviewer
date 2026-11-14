@@ -2,6 +2,7 @@ import { normalize as posixNormalize } from 'node:path/posix'
 import type { ReviewFinding } from '../../review-findings-tool.js'
 import { SEVERITY_ORDER, normalizeFindingSeverity, severityPrefix } from '../../severity.js'
 import { findingCodeMarker } from '../../review-feedback.js'
+import { NOTE_MARKER } from '../../reviewer-note.js'
 import { sanitizeAgentText } from './gitlab-client.js'
 import type { CompareResult, MrVersion } from '../types.js'
 import { gitlabAuthHeaders } from './gitlab-auth.js'
@@ -263,7 +264,7 @@ export function findingNoteBody(finding: ReviewFinding): string {
   const head = noteHeader(finding)
   const stripped = stripHeaderEcho(finding.body, finding.code)
   const text = sanitizeAgentText(finding.severityNote === undefined ? stripped : `${finding.severityNote}\n\n${stripped}`)
-  return `${head === '' ? '' : `${head}\n\n`}${text}${finding.code === undefined ? '' : `\n\n${findingCodeMarker(finding.code)}`}`
+  return `${head === '' ? '' : `${head}\n\n`}${text}\n\n${finding.code === undefined ? NOTE_MARKER : findingCodeMarker(finding.code)}`
 }
 
 export async function postReviewFindings(findings: ReviewFinding[], config: GitlabFindingPoster): Promise<void> {
