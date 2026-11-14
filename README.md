@@ -50,9 +50,15 @@ through a small bridge job, with no DSH host and no project mapping.
 - **Safe input.** Secrets and personal data are redacted before any model
   call, and generated, vendored and lock files never reach the model; large
   MRs are reviewed in parallel parts, re-pushes only by their interdiff.
+- **Quiet re-reviews.** A push that leaves the MR's own patch unchanged (a
+  rebase, a base merge) is skipped; a reply that only restates an open
+  finding on code nobody touched since is not posted, and neither is one in
+  a thread a person answered, unless the code there changed.
 - **MR commands.** `/maestro explain`, `/maestro fix` (a GitLab suggestion
   block), `/maestro rereview [path]` and `/maestro dismiss [CODE]`, answered
-  by the next review job; a code a project keeps dismissing is muted.
+  by the next review job; a code a project keeps dismissing is muted. A
+  dedicated bot user is recommended; on a shared account the reviewer tells
+  its own notes apart by its markers, so the person's commands still count.
 - **Optional gate and reports.** `REVIEW_GATE=blocking` fails the review job
   while the MR has an open blocking thread; a Code Quality artifact and a
   scheduled periodic report (findings, tokens, tool calls per project).
