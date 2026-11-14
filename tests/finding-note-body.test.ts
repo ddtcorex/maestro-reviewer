@@ -114,6 +114,15 @@ describe('header echo variants seen in replay', () => {
     expect(stripHeaderEcho('nit · `SCHEMA-X`\n\nThe table drops its comment.', 'SCHEMA-X')).toBe('The table drops its comment.')
   })
 
+  it('strips any one-word tag and a dot before the echoed code', () => {
+    expect(stripHeaderEcho('question · `NOTIFY-X`\n\nThe flag defaults to true.', 'NOTIFY-X')).toBe('The flag defaults to true.')
+  })
+
+  it('keeps a one-word tag and a dot that another code follows', () => {
+    expect(stripHeaderEcho('question · `OTHER-Y` is wrong', 'NOTIFY-X')).toBe('question · `OTHER-Y` is wrong')
+    expect(stripHeaderEcho('Note · the flag defaults to true.', 'NOTIFY-X')).toBe('Note · the flag defaults to true.')
+  })
+
   it('leaves lowercase prose that starts with a severity word alone', () => {
     expect(stripHeaderEcho('minor typo in the label.', 'X-CODE')).toBe('minor typo in the label.')
   })

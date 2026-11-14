@@ -221,6 +221,8 @@ export function stripHeaderEcho(body: string, code: string | undefined): string 
     /^·/,
     // A closing bold belongs to the echo only when it sits right after the code.
     ...(codeToken !== undefined ? [new RegExp(`^${escapeRe(codeToken)}(?:\\*\\*)?`)] : []),
+    // Any one-word tag the model put before the code (`question · \`CODE\``), only when this finding's code follows.
+    ...(codeToken !== undefined ? [new RegExp(`^\\p{L}+\\s*·(?=\\s*${escapeRe(codeToken)})`, 'u')] : []),
     // Any leading symbol (an emoji the model picked) in front of a severity word and a `·`.
     new RegExp(`^[^\\p{L}\\p{N}\\s\\x60*]{1,4}(?=\\s*(?:\\*\\*)?\\s*(?:${SEVERITY_WORDS.join('|')})\\s*(?:\\*\\*)?\\s*·)`, 'iu'),
     new RegExp(`^❓(?=\\s*(?:\\*\\*)?\\s*${headerAhead})`),
