@@ -357,3 +357,13 @@ describe('a named file only counts as a whole name', () => {
     expect(f.posted).toHaveLength(1)
   })
 })
+
+describe('a reply that reports a fix', () => {
+  it('is never dropped as restated, even on unchanged code', async () => {
+    const f = forge()
+    const thread: ThreadState = { discussionId: 'd1', path: 'a.php', line: 20, severity: 'minor', currentSeverity: 'minor', lastBotHead: 'h3', lastIsHuman: false }
+    const r = await postFindingsSequentially(f, [{ status: 'reply', discussionId: 'd1', body: 'Fixed by the helper change, thanks.', severity: 'minor', resolution: 'fixed' }], { filters: ctx({ threads: [thread] }) })
+    expect(f.posted).toHaveLength(1)
+    expect(r.restated).toBe(0)
+  })
+})
