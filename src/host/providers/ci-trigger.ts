@@ -313,8 +313,9 @@ export async function runCiTrigger(
     result = { ok: true, summary: `already reviewed at ${headSha}, skipping`, failures: [], durationMs: 0 }
   } else if (prior !== undefined && prior.headSha !== headSha && !config.rereviewOnPush) {
     result = { ok: true, summary: `new commits since ${prior.headSha} but REVIEW_ON_PUSH is not set, skipping`, failures: [], durationMs: 0 }
-  } else if (prior?.headSha !== undefined && prior.headSha !== headSha && patchUnchanged(await fetchMrVersions(config.gitlabBaseUrl, config.gitlabToken, config.sourceProjectId, config.mrIid, coFetcher), prior.headSha, headSha)) {
+  } else if (prior?.headSha !== undefined && prior.headSha !== headSha && (prior.partial !== true || prior.capped === true) && patchUnchanged(await fetchMrVersions(config.gitlabBaseUrl, config.gitlabToken, config.sourceProjectId, config.mrIid, coFetcher), prior.headSha, headSha)) {
     // A rebase or a base merge that leaves the MR's own diff as it was: nothing new to review.
+    // A partial prior review does not count: the next run must be full, as for the same head.
     result = { ok: true, summary: `patch unchanged since ${prior.headSha}, skipping`, failures: [], durationMs: 0 }
   } else if (await hasCompletedReviewForSha(coFetcher, config.gitlabBaseUrl, config.gitlabToken, config.sourceProjectId, config.mrIid, headSha, botUserId)) {
     // Coexistence (CI yields to webhook): the CI history store is invisible to

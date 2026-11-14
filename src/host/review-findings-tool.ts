@@ -24,6 +24,8 @@ export interface ReviewFinding {
   evidence?: Array<{ path: string; line: number }>
   /** Engine only: who called the premise external, recorded in the review metadata. */
   premiseBy?: PremiseSource
+  /** Engine-only: the MR head this finding was reviewed at, written into its note. */
+  reviewedHead?: string
   /** Engine only: the severity of the thread a reply belongs to. */
   threadSeverity?: FindingSeverity
   /** Engine only: a line explaining a severity the engine changed. */

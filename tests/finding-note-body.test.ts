@@ -153,3 +153,11 @@ describe('echo separator at the end of its line', () => {
     expect(stripHeaderEcho('`A-CODE` -\nrest', 'A-CODE')).toBe('rest')
   })
 })
+
+describe('reviewed head marker', () => {
+  it('records the head a finding was reviewed at, as a reviewer marker', () => {
+    const b = findingNoteBody({ status: 'reply', discussionId: 'd', body: 'Still open.', severity: 'major', threadSeverity: 'major', reviewedHead: 'abc123' })
+    expect(b).toContain('<!-- maestro-head sha=abc123 -->')
+    expect(isReviewerNote({ body: 'x\n\n<!-- maestro-head sha=abc123 -->' }, true)).toBe(true)
+  })
+})

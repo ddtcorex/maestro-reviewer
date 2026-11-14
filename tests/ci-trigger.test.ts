@@ -322,7 +322,7 @@ describe('patch unchanged skip', () => {
     expect(patchUnchanged(undefined, 'aaa', 'bbb')).toBe(false)
   })
 
-  async function run(versions: unknown[]) {
+  async function run(versions: unknown[], prior: Record<string, unknown> = { headSha: 'aaa' }) {
     const { parseCiEnvConfig, runCiTrigger } = await import('../src/host/providers/ci-trigger.js')
     const cfg = parseCiEnvConfig({ GITLAB_HOST: 'h', REVIEW_GITLAB_TOKEN: 'tok', SOURCE_PROJECT_ID: '1', MR_IID: '2', REVIEW_ON_PUSH: '1' })
     const fakeCtx = { reviewEngine: { run: vi.fn(async () => ({ ok: true, summary: 'done', failures: [], durationMs: 5 })) } }
@@ -330,7 +330,7 @@ describe('patch unchanged skip', () => {
       ? new Response(JSON.stringify(versions), { status: 200 })
       : new Response(JSON.stringify({ source_branch: 'feat/x', sha: 'bbb' }), { status: 200 }))
     const result = await runCiTrigger(fakeCtx as any, cfg, {
-      fetcher: fetcher as unknown as typeof fetch, writeFile: (async () => {}) as any, history: { lastCompletedReview: vi.fn(async () => ({ headSha: 'aaa' })) },
+      fetcher: fetcher as unknown as typeof fetch, writeFile: (async () => {}) as any, history: { lastCompletedReview: vi.fn(async () => prior) },
     })
     return { result, ran: fakeCtx.reviewEngine.run.mock.calls.length > 0 }
   }
@@ -339,6 +339,12 @@ describe('patch unchanged skip', () => {
     const { result, ran } = await run([{ head_commit_sha: 'bbb', created_at: '2026-11-02T00:00:00Z', patch_id_sha: 'p1' }, { head_commit_sha: 'aaa', created_at: '2026-11-01T00:00:00Z', patch_id_sha: 'p1' }])
     expect(ran).toBe(false)
     expect(result.summary).toBe('patch unchanged since aaa, skipping')
+  })
+
+  it('still runs a full review after a partial one, even with the same patch', async () => {
+    const same = [{ head_commit_sha: 'bbb', created_at: '2026-11-02T00:00:00Z', patch_id_sha: 'p1' }, { head_commit_sha: 'aaa', created_at: '2026-11-01T00:00:00Z', patch_id_sha: 'p1' }]
+    expect((await run(same, { headSha: 'aaa', partial: true })).ran).toBe(true)
+    expect((await run(same, { headSha: 'aaa', partial: true, capped: true })).ran).toBe(false)
   })
 
   it('runs when the patch changed', async () => {

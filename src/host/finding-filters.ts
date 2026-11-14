@@ -113,16 +113,26 @@ function touches(diff: string, line: number | null): boolean {
   return hunks.some((m) => overlaps(m[1], m[2], line) || overlaps(m[3], m[4], line))
 }
 
+type ChangeDeps = {
+  versions: MrVersion[] | undefined
+  compare: (from: string, to: string) => Promise<CompareResult | undefined>
+  headSha: string
+}
+
+/** No commit between `from` and the current head touched the thread's lines; a failed compare answers false. */
+export async function isUnchangedFrom(from: string, t: ThreadState, deps: Pick<ChangeDeps, 'compare' | 'headSha'>): Promise<boolean> {
+  if (from === deps.headSha) return true
+  const result = await deps.compare(from, deps.headSha)
+  if (result === undefined || result.compare_timeout === true || result.diffs === undefined) return false
+  return !result.diffs.some((d) => (d.new_path === t.path || d.old_path === t.path) && (d.diff === undefined || d.too_large === true || d.collapsed === true || touches(d.diff, t.line)))
+}
+
 /**
  * No commit since `at` touched the thread's lines. The head at that time is the
  * newest version created at or before it. Any missing piece (time, versions,
  * compare) answers false, so the reply is posted.
  */
-export async function isUnchangedSince(at: string | undefined, t: ThreadState, deps: {
-  versions: MrVersion[] | undefined
-  compare: (from: string, to: string) => Promise<CompareResult | undefined>
-  headSha: string
-}): Promise<boolean> {
+export async function isUnchangedSince(at: string | undefined, t: ThreadState, deps: ChangeDeps): Promise<boolean> {
   if (at === undefined || deps.versions === undefined) return false
   // Instants, not text: GitLab times may differ in offset form and milliseconds.
   const since = Date.parse(at)
@@ -133,21 +143,23 @@ export async function isUnchangedSince(at: string | undefined, t: ThreadState, d
     .sort((a, b) => a.at - b.at)
     .at(-1)?.v
   if (before === undefined) return false
-  if (before.headSha === deps.headSha) return true
-  const result = await deps.compare(before.headSha, deps.headSha)
-  if (result === undefined || result.compare_timeout === true || result.diffs === undefined) return false
-  return !result.diffs.some((d) => (d.new_path === t.path || d.old_path === t.path) && (d.diff === undefined || d.too_large === true || d.collapsed === true || touches(d.diff, t.line)))
+  return isUnchangedFrom(before.headSha, t, deps)
 }
 
 /** The thread was answered by a person and no commit since touched its lines. */
-export async function isAnsweredUnchanged(t: ThreadState, deps: Parameters<typeof isUnchangedSince>[2]): Promise<boolean> {
+export async function isAnsweredUnchanged(t: ThreadState, deps: ChangeDeps): Promise<boolean> {
   return t.lastIsHuman && isUnchangedSince(t.lastHumanAt, t, deps)
 }
 
-/** A reply takes its thread's severity when it reports none, and records the thread's for rendering. */
+/**
+ * A reply takes its thread's current severity (the latest the reviewer stated,
+ * else the opener's) when it reports none, and records it for rendering, so a
+ * move back to the opener's severity is shown as a change too.
+ */
 export function effectiveReply(f: ReviewFinding, t: ThreadState | undefined): ReviewFinding {
-  if (f.status !== 'reply' || t?.severity === undefined) return f
-  return { ...f, severity: f.severity ?? t.severity, threadSeverity: t.severity }
+  const current = t?.currentSeverity ?? t?.severity
+  if (f.status !== 'reply' || current === undefined) return f
+  return { ...f, severity: f.severity ?? current, threadSeverity: current }
 }
 
 /** What the engine knows about the run when it filters findings. */
@@ -213,13 +225,14 @@ export async function applyFilters(findings: ReviewFinding[], ctx: FilterContext
       continue
     }
     // A reply that only restates an open finding on untouched code adds nothing; a severity change does.
-    const current = thread?.currentSeverity ?? thread?.severity
-    if (thread !== undefined && !thread.lastIsHuman && current !== undefined && effective.severity === current && await isUnchangedSince(thread.lastBotAt, thread, deps)) {
+    if (thread !== undefined && !thread.lastIsHuman && effective.threadSeverity !== undefined && effective.severity === effective.threadSeverity
+      // The head the reviewer read is exact; a note time only approximates it (older notes record no head).
+      && await (thread.lastBotHead !== undefined ? isUnchangedFrom(thread.lastBotHead, thread, deps) : isUnchangedSince(thread.lastBotAt, thread, deps))) {
       out.restated++
       continue
     }
     if (premiseBy !== undefined) out.external++
-    out.post.push(effective)
+    out.post.push({ ...effective, reviewedHead: ctx.headSha })
   }
   return out
 }

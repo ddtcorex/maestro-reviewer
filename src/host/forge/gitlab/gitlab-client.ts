@@ -9,7 +9,7 @@ import { ENGINE_FINDING_CODES, findingCodeOf } from '../../review-feedback.js'
 import { openerSeverity } from '../../finding-filters.js'
 import { sanitizeAgentText } from '../../agent-text.js'
 import type { ThreadState } from '../types.js'
-import { isReviewerNote } from '../../reviewer-note.js'
+import { isCommandAnswer, isReviewerNote, noteHead } from '../../reviewer-note.js'
 
 export const name = 'maestro-gitlab-client'
 export const inject = ['tools']
@@ -271,6 +271,9 @@ export function threadStates(discussions: GitlabDiscussion[], botUsername: strin
     const spoken = d.notes.filter((n) => n.system !== true)
     const human = spoken.filter((n) => !ours(n))
     const bot = spoken.filter((n) => ours(n))
+    // A command answer is not a review of the code under the thread.
+    const reviewed = bot.filter((n) => !isCommandAnswer(n.body))
+    const lastBotHead = reviewed.map((n) => noteHead(n.body)).filter((h) => h !== undefined).at(-1)
     const severity = openerSeverity(first.body)
     const currentSeverity = bot.map((n) => openerSeverity(n.body)).filter((s) => s !== undefined).at(-1) ?? severity
     return [{
@@ -279,7 +282,8 @@ export function threadStates(discussions: GitlabDiscussion[], botUsername: strin
       ...(severity !== undefined ? { severity } : {}),
       ...(currentSeverity !== undefined ? { currentSeverity } : {}),
       ...(human.at(-1)?.created_at !== undefined ? { lastHumanAt: human.at(-1)!.created_at } : {}),
-      ...(bot.at(-1)?.created_at !== undefined ? { lastBotAt: bot.at(-1)!.created_at } : {}),
+      ...(reviewed.at(-1)?.created_at !== undefined ? { lastBotAt: reviewed.at(-1)!.created_at } : {}),
+      ...(lastBotHead !== undefined ? { lastBotHead } : {}),
       lastIsHuman: spoken.at(-1) !== undefined && !ours(spoken.at(-1)!),
     }]
   })

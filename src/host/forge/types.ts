@@ -45,6 +45,8 @@ export interface ThreadState {
   currentSeverity?: FindingSeverity
   lastHumanAt?: string
   lastBotAt?: string
+  /** The MR head the reviewer's latest note in the thread was written at, when that note records it. */
+  lastBotHead?: string
   /** The last non-system note was written by a person. */
   lastIsHuman: boolean
 }

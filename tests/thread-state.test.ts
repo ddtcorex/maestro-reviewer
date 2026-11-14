@@ -213,3 +213,26 @@ describe('isUnchangedSince', () => {
     expect(await isUnchangedSince(t.lastBotAt, t, { versions, compare, headSha: 'h2' })).toBe(true)
   })
 })
+
+describe('effectiveReply after a severity change', () => {
+  const changed: ThreadState = { discussionId: 'd', path: 'a.php', line: 20, severity: 'major', currentSeverity: 'minor', lastIsHuman: false }
+  it('defaults to and compares with the current severity, not the opener', () => {
+    expect(effectiveReply({ status: 'reply', discussionId: 'd', body: 'x' }, changed)).toMatchObject({ severity: 'minor', threadSeverity: 'minor' })
+  })
+  it('shows a move back to the opener severity as a change', () => {
+    expect(effectiveReply({ status: 'reply', discussionId: 'd', body: 'x', severity: 'major' }, changed)).toMatchObject({ severity: 'major', threadSeverity: 'minor' })
+  })
+})
+
+describe('the head the reviewer last read in a thread', () => {
+  const m = (b: string, head?: string) => `${b}\n\n<!-- maestro-note -->${head ? `\n<!-- maestro-head sha=${head} -->` : ''}`
+  it('reads it from the latest reviewer note that carries one, and leaves command answers out of lastBotAt', () => {
+    const [t] = threadStates([{ id: 'd1', notes: [
+      note('bot', m('🟡 Major · `X`\n\nbody', 'abc1234'), '2026-11-01T10:00:00Z', { position: pos }),
+      note('dev', '/maestro explain', '2026-11-02T09:00:00Z'),
+      note('bot', 'Because the loop skips.\n\n<!-- maestro-command note=7 -->', '2026-11-02T10:00:00Z'),
+    ] }], 'bot')
+    expect(t.lastBotHead).toBe('abc1234')
+    expect(t.lastBotAt).toBe('2026-11-01T10:00:00Z')
+  })
+})
