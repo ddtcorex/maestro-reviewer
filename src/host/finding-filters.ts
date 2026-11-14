@@ -240,7 +240,8 @@ export async function applyFilters(findings: ReviewFinding[], ctx: FilterContext
     // A reply that only restates an open finding on untouched code adds nothing; a severity change does.
     // A thread resolved since the reviewer last wrote in it gets its reply once: an unfixed finding closed without a word.
     const resolvedSince = thread?.resolvedAt !== undefined && (thread.lastBotAt === undefined || Date.parse(thread.resolvedAt) > Date.parse(thread.lastBotAt))
-    if (thread !== undefined && !thread.lastIsHuman && !resolvedSince && effective.threadSeverity !== undefined && effective.severity === effective.threadSeverity
+    // A reply that reports a fix is news, whatever changed under the thread.
+    if (thread !== undefined && !thread.lastIsHuman && !resolvedSince && effective.resolution !== 'fixed' && effective.threadSeverity !== undefined && effective.severity === effective.threadSeverity
       // The head the reviewer read is exact; a note time only approximates it (older notes record no head).
       && await (thread.lastBotHead !== undefined ? isUnchangedFrom(thread.lastBotHead, thread, deps, effective.body) : isUnchangedSince(thread.lastBotAt, thread, deps, effective.body))) {
       out.restated++

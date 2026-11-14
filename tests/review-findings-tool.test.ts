@@ -54,3 +54,20 @@ describe('report_review_findings schema', () => {
     expect(props.premiseBy).toBeUndefined()
   })
 })
+
+describe('reply resolution', () => {
+  const props = FINDINGS_PARAMETERS.findings.items.properties as Record<string, { type: string; enum?: string[] }>
+  it('lets a reply say whether its finding is fixed or still open', () => {
+    expect(props.resolution).toMatchObject({ type: 'string', enum: ['open', 'fixed'] })
+  })
+  it('keeps a valid resolution on a reply only', () => {
+    const [reply, unknown, onNew] = normalizeFindings([
+      { status: 'reply', discussionId: 'd', body: 'x', resolution: 'fixed' },
+      { status: 'reply', discussionId: 'd', body: 'x', resolution: 'done' as never },
+      { status: 'new', path: 'a.php', line: 1, body: 'x', code: 'BUG-X', resolution: 'fixed' },
+    ])
+    expect(reply.resolution).toBe('fixed')
+    expect('resolution' in unknown).toBe(false)
+    expect('resolution' in onNew).toBe(false)
+  })
+})

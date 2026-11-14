@@ -20,6 +20,8 @@ export interface ReviewFinding {
   code?: string
   /** "external" when the finding rests on framework or vendor code that is not in the checkout. */
   premise?: 'checkout' | 'external'
+  /** A reply's verdict on its thread's finding: fixed by the new commits, or still open. */
+  resolution?: 'open' | 'fixed'
   /** Checkout places that show the defect; required for major and blocking. */
   evidence?: Array<{ path: string; line: number }>
   /** Engine only: who called the premise external, recorded in the review metadata. */
@@ -43,10 +45,11 @@ const validEvidence = (e: unknown): e is { path: string; line: number } =>
 /** Drops malformed `code`, `premise` and `evidence` values so one bad field never loses the finding itself. */
 export function normalizeFindings(findings: ReviewFinding[]): ReviewFinding[] {
   return findings.map((f) => {
-    const { code, premise, evidence, ...rest } = f
+    const { code, premise, evidence, resolution, ...rest } = f
     const kept: ReviewFinding = { ...rest }
     if (code !== undefined && FINDING_CODE_RE.test(code)) kept.code = code
     if (premise === 'checkout' || premise === 'external') kept.premise = premise
+    if (f.status === 'reply' && (resolution === 'open' || resolution === 'fixed')) kept.resolution = resolution
     const entries = Array.isArray(evidence) ? evidence.filter(validEvidence).map((e) => ({ path: e.path, line: e.line })) : []
     if (entries.length > 0) kept.evidence = entries
     return kept
@@ -77,6 +80,7 @@ export const FINDINGS_PARAMETERS = {
         severity: { type: 'string', enum: ['blocking', 'major', 'minor', 'nit'] },
         category: { type: 'string' },
         code: { type: 'string', description: 'Required for a new finding: short stable id for the kind of issue, uppercase with dashes, e.g. SEC-XSS-ESCAPE or PERF-N-PLUS-ONE. Reuse the same code for the same kind of issue.' },
+        resolution: { type: 'string', enum: ['open', 'fixed'], description: 'For a reply: "fixed" when the new commits resolve the thread\'s finding, "open" when it still applies. Leave it out for a new finding.' },
         premise: { type: 'string', enum: ['checkout', 'external'], description: '"external" when the finding rests on how a framework, library or vendor package behaves and that code is not in the checkout; otherwise "checkout".' },
         evidence: {
           type: 'array',
@@ -94,7 +98,7 @@ export function apply(ctx: Context, config: Config): void {
   let askedForCodes = false
   ctx.tools.register(defineTool({
     name: 'report_review_findings',
-    description: 'Submit your complete list of review findings exactly once, when done analyzing. Each finding is {status: "new", path, line, body, severity, category?} for a location with no existing thread, or {status: "reply", discussionId, body, severity, category?} to update an existing thread returned by gitlab_list_own_review_threads (reply to a resolved thread reopens it — prefer reply over new when the substance matches). Severity (required in spirit, defaults to minor): blocking = must fix before merge (regression, data loss, real XSS/RCE); major = should fix (correctness bug, security hardening with a realistic path); minor = nice to fix (perf nit with impact, stale docs, fragile coupling); nit = style/micro with no behavior impact.',
+    description: 'Submit your complete list of review findings exactly once, when done analyzing. Each finding is {status: "new", path, line, body, severity, category?} for a location with no existing thread, or {status: "reply", discussionId, body, severity, resolution, category?} to update an existing thread (resolution "fixed" when the new commits fix it, "open" when it still applies) returned by gitlab_list_own_review_threads (reply to a resolved thread reopens it; prefer reply over new when the substance matches). Severity (required in spirit, defaults to minor): blocking = must fix before merge (regression, data loss, real XSS/RCE); major = should fix (correctness bug, security hardening with a realistic path); minor = nice to fix (perf nit with impact, stale docs, fragile coupling); nit = style/micro with no behavior impact.',
     parameters: FINDINGS_PARAMETERS,
     output: {
       schema: { type: 'object', additionalProperties: false, properties: { received: { type: 'number', required: true } } },
