@@ -57,6 +57,11 @@ describe('fetchMrVersions', () => {
     expect(String(fetcher.mock.calls[0][0])).toBe('https://g/api/v4/projects/1/merge_requests/5/versions?per_page=100')
   })
 
+  it('maps the patch id when GitLab sends one', async () => {
+    const fetcher = vi.fn(async () => new Response(JSON.stringify([{ head_commit_sha: 'h2', created_at: 't', patch_id_sha: 'p' }]), { status: 200 }))
+    expect(await fetchMrVersions('https://g', 't', 1, 5, fetcher as unknown as typeof fetch)).toEqual([{ headSha: 'h2', createdAt: 't', patchIdSha: 'p' }])
+  })
+
   it('is undefined on an API error', async () => {
     const fetcher = vi.fn(async () => new Response('no', { status: 500 }))
     expect(await fetchMrVersions('https://g', 't', 1, 5, fetcher as unknown as typeof fetch)).toBeUndefined()

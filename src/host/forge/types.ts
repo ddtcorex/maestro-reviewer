@@ -50,7 +50,7 @@ export interface ThreadState {
 }
 
 /** One merge request version: the head it pointed at and when it was created. */
-export interface MrVersion { headSha: string; createdAt: string }
+export interface MrVersion { headSha: string; createdAt: string; patchIdSha?: string }
 
 export interface ForgeSignals {
   start(): Promise<void>

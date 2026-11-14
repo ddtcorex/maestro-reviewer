@@ -57,8 +57,8 @@ export async function fetchMrVersions(
   try {
     const response = await fetcher(`${baseUrl}/api/v4/projects/${projectId}/merge_requests/${mrIid}/versions?per_page=100`, { headers: gitlabAuthHeaders(token) })
     if (!response.ok) return undefined
-    const versions = await response.json() as Array<{ head_commit_sha?: string; created_at?: string }>
-    return versions.flatMap((v) => (typeof v.head_commit_sha === 'string' && typeof v.created_at === 'string' ? [{ headSha: v.head_commit_sha, createdAt: v.created_at }] : []))
+    const versions = await response.json() as Array<{ head_commit_sha?: string; created_at?: string; patch_id_sha?: string }>
+    return versions.flatMap((v) => (typeof v.head_commit_sha === 'string' && typeof v.created_at === 'string' ? [{ headSha: v.head_commit_sha, createdAt: v.created_at, ...(typeof v.patch_id_sha === 'string' && v.patch_id_sha !== '' ? { patchIdSha: v.patch_id_sha } : {}) }] : []))
   } catch {
     return undefined
   }
