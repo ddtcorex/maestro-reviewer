@@ -9,7 +9,7 @@ import { ENGINE_FINDING_CODES, findingCodeOf } from '../../review-feedback.js'
 import { openerSeverity } from '../../finding-filters.js'
 import { sanitizeAgentText } from '../../agent-text.js'
 import type { ThreadState } from '../types.js'
-import { isCommandAnswer, isReviewerNote, noteHead } from '../../reviewer-note.js'
+import { isCommandAnswer, isReviewerNote, markReviewerNote, noteHead } from '../../reviewer-note.js'
 
 export const name = 'maestro-gitlab-client'
 export const inject = ['tools']
@@ -155,6 +155,7 @@ interface GitlabDiscussionNote {
   author: { username: string }
   position?: { new_path: string, new_line: number | null }
   resolved: boolean
+  resolved_at?: string | null
   /** GitLab's own notes, e.g. "changed this line in version 3 of the diff". */
   system?: boolean
   created_at?: string
@@ -284,6 +285,7 @@ export function threadStates(discussions: GitlabDiscussion[], botUsername: strin
       ...(human.at(-1)?.created_at !== undefined ? { lastHumanAt: human.at(-1)!.created_at } : {}),
       ...(reviewed.at(-1)?.created_at !== undefined ? { lastBotAt: reviewed.at(-1)!.created_at } : {}),
       ...(lastBotHead !== undefined ? { lastBotHead } : {}),
+      ...(first.resolved === true && typeof first.resolved_at === 'string' ? { resolvedAt: first.resolved_at } : {}),
       lastIsHuman: spoken.at(-1) !== undefined && !ours(spoken.at(-1)!),
     }]
   })
@@ -383,7 +385,7 @@ export function apply(ctx: Context, config: Config): void {
       const response = await fetch(`${apiBase}/notes`, {
         method: 'POST',
         headers: { ...headers, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ body: sanitizeAgentText(args.body) }),
+        body: JSON.stringify({ body: markReviewerNote(sanitizeAgentText(args.body)) }),
       })
       if (!response.ok) {
         throw new Error(`GitLab API error ${response.status}: ${await response.text()}`)
@@ -448,7 +450,7 @@ export function apply(ctx: Context, config: Config): void {
         method: 'POST',
         headers: { ...headers, 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          body: sanitizeAgentText(args.body),
+          body: markReviewerNote(sanitizeAgentText(args.body)),
           position: {
             position_type: 'text',
             base_sha: diffRefs.base_sha,
@@ -482,7 +484,7 @@ export function apply(ctx: Context, config: Config): void {
       const response = await fetch(`${apiBase}/discussions/${args.discussionId}/notes`, {
         method: 'POST',
         headers: { ...headers, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ body: sanitizeAgentText(args.body) }),
+        body: JSON.stringify({ body: markReviewerNote(sanitizeAgentText(args.body)) }),
       })
       if (!response.ok) {
         throw new Error(`GitLab API error ${response.status}: ${await response.text()}`)

@@ -2,7 +2,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { ReviewForge } from '../types.js'
 import { gitlabAuthHeaders } from './gitlab-auth.js'
 import * as GitlabClient from './gitlab-client.js'
-import { isReviewerNote } from '../../reviewer-note.js'
+import { isReviewerNote, markReviewerNote } from '../../reviewer-note.js'
 import { fetchRepoFile, fetchCompare, fetchMrBaseSha, fetchMrDetailHeadSha, fetchMrVersions, postReviewFindings, type GitlabFindingPoster } from './mr-api.js'
 import { createReviewSignals } from './review-signals.js'
 import { DEFAULT_IGNORE_GLOBS, filterDiffs } from '../../diff-filter.js'
@@ -51,7 +51,7 @@ export function gitlabForge(
     const response = await GitlabClient.fetchWithTimeout(url, {
       method: 'POST',
       headers: { ...gitlabAuthHeaders(cfg.token), 'Content-Type': 'application/json' },
-      body: JSON.stringify({ body }),
+      body: JSON.stringify({ body: markReviewerNote(body) }),
     })
     if (!response.ok) throw new Error(`GitLab API error ${response.status}: ${await response.text()}`)
   }

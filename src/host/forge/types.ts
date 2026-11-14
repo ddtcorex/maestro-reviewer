@@ -47,6 +47,8 @@ export interface ThreadState {
   lastBotAt?: string
   /** The MR head the reviewer's latest note in the thread was written at, when that note records it. */
   lastBotHead?: string
+  /** When the thread was resolved, if it is. */
+  resolvedAt?: string
   /** The last non-system note was written by a person. */
   lastIsHuman: boolean
 }

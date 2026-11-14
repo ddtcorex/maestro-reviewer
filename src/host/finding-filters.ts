@@ -120,10 +120,23 @@ type ChangeDeps = {
 }
 
 /** No commit between `from` and the current head touched the thread's lines; a failed compare answers false. */
-export async function isUnchangedFrom(from: string, t: ThreadState, deps: Pick<ChangeDeps, 'compare' | 'headSha'>): Promise<boolean> {
+/** The text names this file: its full path, or a file name with an extension as a word. */
+function namesPath(text: string, path: string): boolean {
+  if (text.includes(path)) return true
+  const base = path.split('/').at(-1) ?? ''
+  return /\.[A-Za-z0-9]+$/.test(base) && base.length >= 5 && new RegExp(`(^|[^\\w./-])${base.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}($|[^\\w-])`).test(text)
+}
+
+/**
+ * No commit between `from` and the current head touched the thread's lines, or
+ * changed a file `mentions` names (a fix attempt made elsewhere that the reply
+ * answers); a failed compare answers false.
+ */
+export async function isUnchangedFrom(from: string, t: ThreadState, deps: Pick<ChangeDeps, 'compare' | 'headSha'>, mentions = ''): Promise<boolean> {
   if (from === deps.headSha) return true
   const result = await deps.compare(from, deps.headSha)
   if (result === undefined || result.compare_timeout === true || result.diffs === undefined) return false
+  if (mentions !== '' && result.diffs.some((d) => typeof d.new_path === 'string' && d.new_path !== t.path && namesPath(mentions, d.new_path))) return false
   return !result.diffs.some((d) => (d.new_path === t.path || d.old_path === t.path) && (d.diff === undefined || d.too_large === true || d.collapsed === true || touches(d.diff, t.line)))
 }
 
@@ -132,7 +145,7 @@ export async function isUnchangedFrom(from: string, t: ThreadState, deps: Pick<C
  * newest version created at or before it. Any missing piece (time, versions,
  * compare) answers false, so the reply is posted.
  */
-export async function isUnchangedSince(at: string | undefined, t: ThreadState, deps: ChangeDeps): Promise<boolean> {
+export async function isUnchangedSince(at: string | undefined, t: ThreadState, deps: ChangeDeps, mentions = ''): Promise<boolean> {
   if (at === undefined || deps.versions === undefined) return false
   // Instants, not text: GitLab times may differ in offset form and milliseconds.
   const since = Date.parse(at)
@@ -143,7 +156,7 @@ export async function isUnchangedSince(at: string | undefined, t: ThreadState, d
     .sort((a, b) => a.at - b.at)
     .at(-1)?.v
   if (before === undefined) return false
-  return isUnchangedFrom(before.headSha, t, deps)
+  return isUnchangedFrom(before.headSha, t, deps, mentions)
 }
 
 /** The thread was answered by a person and no commit since touched its lines. */
@@ -225,9 +238,11 @@ export async function applyFilters(findings: ReviewFinding[], ctx: FilterContext
       continue
     }
     // A reply that only restates an open finding on untouched code adds nothing; a severity change does.
-    if (thread !== undefined && !thread.lastIsHuman && effective.threadSeverity !== undefined && effective.severity === effective.threadSeverity
+    // A thread resolved since the reviewer last wrote in it gets its reply once: an unfixed finding closed without a word.
+    const resolvedSince = thread?.resolvedAt !== undefined && (thread.lastBotAt === undefined || Date.parse(thread.resolvedAt) > Date.parse(thread.lastBotAt))
+    if (thread !== undefined && !thread.lastIsHuman && !resolvedSince && effective.threadSeverity !== undefined && effective.severity === effective.threadSeverity
       // The head the reviewer read is exact; a note time only approximates it (older notes record no head).
-      && await (thread.lastBotHead !== undefined ? isUnchangedFrom(thread.lastBotHead, thread, deps) : isUnchangedSince(thread.lastBotAt, thread, deps))) {
+      && await (thread.lastBotHead !== undefined ? isUnchangedFrom(thread.lastBotHead, thread, deps, effective.body) : isUnchangedSince(thread.lastBotAt, thread, deps, effective.body))) {
       out.restated++
       continue
     }

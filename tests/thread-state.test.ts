@@ -236,3 +236,10 @@ describe('the head the reviewer last read in a thread', () => {
     expect(t.lastBotAt).toBe('2026-11-01T10:00:00Z')
   })
 })
+
+describe('thread resolution time', () => {
+  it('records when the opener was resolved', () => {
+    const [t] = threadStates([{ id: 'd1', notes: [note('bot', '🔵 Minor · `X`\n\nbody\n\n<!-- maestro-note -->', '2026-11-01T10:00:00Z', { position: pos, resolved: true, resolved_at: '2026-11-02T10:00:00Z' })] }], 'bot')
+    expect(t.resolvedAt).toBe('2026-11-02T10:00:00Z')
+  })
+})

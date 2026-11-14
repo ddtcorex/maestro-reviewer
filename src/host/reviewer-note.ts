@@ -3,7 +3,7 @@ import { openerSeverity } from './finding-filters.js'
 /** Marks a reviewer note that carries no other marker (a reply without a code). */
 export const NOTE_MARKER = '<!-- maestro-note -->'
 
-const MARKERS = /<!-- maestro-(?:finding code=|review sha=|review-meta:v1 |command note=|command-retry note=|note -->|head sha=)/
+const MARKERS = /<!-- maestro-(?:finding code=|review sha=|review-meta:v1 |command note=|command-retry note=|note -->|head sha=|review-unconfigured -->)/
 
 /** The MR head a reviewer note was written at. */
 export function headMarker(sha: string): string {
@@ -23,6 +23,11 @@ export function isCommandAnswer(body: string): boolean {
 
 export function hasReviewerMarker(body: string): boolean {
   return MARKERS.test(body)
+}
+
+/** The body with the note marker added when it carries no reviewer marker yet, so every reviewer note can be told from a person's. */
+export function markReviewerNote(body: string): string {
+  return hasReviewerMarker(body) ? body : `${body}\n\n${NOTE_MARKER}`
 }
 
 /**
