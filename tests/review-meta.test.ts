@@ -144,3 +144,37 @@ describe('review flows embed metadata in the posted comment', () => {
     expect(parseReviewMeta(posted[0])?.headSha).toBe('def456')
   })
 })
+
+describe('filter metadata', () => {
+  it('carries filtered counts and the external premise', async () => {
+    const { buildReviewMeta, encodeReviewMeta, parseReviewMeta } = await import('../src/host/review-marker.js')
+    const meta = buildReviewMeta({
+      headSha: 'abc123', mode: 'quick', models: ['m'],
+      findings: [{ status: 'new', path: 'a.php', line: 1, body: 'x', code: 'GC-X', severity: 'minor', premise: 'external' }, { status: 'new', path: 'b.php', line: 2, body: 'y', code: 'BUG-Y' }],
+      filtered: { external: 1, lowered: 0, answered: 2 },
+    })
+    expect(meta.filtered).toEqual({ external: 1, lowered: 0, answered: 2 })
+    expect(meta.findings[0].premise).toBe('external')
+    expect('premise' in meta.findings[1]).toBe(false)
+    expect(parseReviewMeta(encodeReviewMeta(meta))).toEqual(meta)
+  })
+
+  it('records who called the premise external', async () => {
+    const { buildReviewMeta, encodeReviewMeta, parseReviewMeta } = await import('../src/host/review-marker.js')
+    const meta = buildReviewMeta({
+      headSha: 'abc123', mode: 'quick', models: ['m'],
+      findings: [{ status: 'new', path: 'a.php', line: 1, body: 'x', code: 'GC-X', severity: 'minor', premise: 'external', premiseBy: 'model' }],
+    })
+    expect(meta.findings[0]).toMatchObject({ premise: 'external', premiseBy: 'model' })
+    expect(parseReviewMeta(encodeReviewMeta(meta))).toEqual(meta)
+  })
+
+  it('rejects a non-numeric filtered count or an unknown premise', async () => {
+    const { parseReviewMeta } = await import('../src/host/review-marker.js')
+    const wrap = (m: unknown) => `<!-- maestro-review-meta:v1 ${Buffer.from(JSON.stringify(m)).toString('base64url')} -->`
+    const ok = { v: 1, headSha: 'abc', mode: 'quick', models: [], findings: [], at: '2026-11-13T00:00:00Z' }
+    expect(parseReviewMeta(wrap({ ...ok, filtered: { external: 'x', lowered: 0, answered: 0 } }))).toBeUndefined()
+    expect(parseReviewMeta(wrap({ ...ok, findings: [{ code: 'A', fingerprint: 'f', severity: 'minor', premise: 'vendor' }] }))).toBeUndefined()
+    expect(parseReviewMeta(wrap({ ...ok, findings: [{ code: 'A', fingerprint: 'f', severity: 'minor', premise: 'external', premiseBy: 'guess' }] }))).toBeUndefined()
+  })
+})

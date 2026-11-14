@@ -58,7 +58,7 @@ const workingPatternRule = 'WORKING PATTERN RULE: before reporting that code can
 
 // Rejected findings on a long MR fell into these groups: vendor behaviour asserted
 // without the vendor sources, documented design called a bug, answered threads raised again.
-const unverifiedRule = 'UNVERIFIED RULE: a finding that rests on how a framework, library or vendor package behaves, when that code is not in the checkout, is at most minor and is written as a question that names the behaviour to confirm. Never mark it major or blocking.'
+const unverifiedRule = 'UNVERIFIED RULE: a finding that rests on how a framework, library or vendor package behaves, when that code is not in the checkout, is at most minor and is written as a question that names the behaviour to confirm. Never mark it major or blocking. Mark such a finding premise "external". Give major and blocking findings evidence: the checkout file and line that show the defect.'
 const documentedIntentRule = 'DOCUMENTED INTENT RULE: before calling behaviour a bug, read the docblock of the code involved and the nearby docs (README, docs/). If they state the behaviour is intended, do not report it as a bug; at most ask a design question, as minor, and quote the line that documents it.'
 // A nit once cited the one sibling plugin with a native return type as the
 // module convention; only 2 of about 35 plugin methods in that module had one.
@@ -346,6 +346,8 @@ export interface ReviewOutcome {
   unreviewed?: number
   /** The findings actually posted (muted and below-floor ones left out). */
   postedFindings?: ReviewFinding[]
+  /** What the finding filters did, for the review metadata. */
+  filtered?: { external: number; lowered: number; answered: number }
 }
 
 function partialOf(outcome: Pick<ReviewOutcome, 'partial' | 'unreviewed'>): { partial?: { unreviewed?: number } } {
@@ -366,10 +368,10 @@ interface UsageDeps {
   carryFindings?: ReviewMeta['findings']
 }
 
-function metaFor(payload: ReviewRequest, outcome: Pick<ReviewOutcome, 'findings' | 'models' | 'partial' | 'capped'>, deps: UsageDeps): ReviewMeta | undefined {
+function metaFor(payload: ReviewRequest, outcome: Pick<ReviewOutcome, 'findings' | 'models' | 'partial' | 'capped' | 'filtered'>, deps: UsageDeps): ReviewMeta | undefined {
   if (payload.headSha === undefined) return undefined
   const usage = deps.usageTotal?.() ?? undefined
-  return buildReviewMeta({ headSha: payload.headSha, ...(deps.baseSha !== undefined ? { baseSha: deps.baseSha } : {}), mode: payload.mode, models: outcome.models ?? [], findings: outcome.findings ?? [], ...(usage !== undefined ? { usage } : {}), ...(outcome.partial === true || deps.pathLimited === true ? { partial: true } : {}), ...(outcome.capped === true ? { capped: true } : {}), ...(deps.carryFindings !== undefined ? { carried: deps.carryFindings } : {}), ...(deps.muted !== undefined && deps.muted.length > 0 ? { muted: deps.muted } : {}) })
+  return buildReviewMeta({ headSha: payload.headSha, ...(deps.baseSha !== undefined ? { baseSha: deps.baseSha } : {}), mode: payload.mode, models: outcome.models ?? [], findings: outcome.findings ?? [], ...(usage !== undefined ? { usage } : {}), ...(outcome.partial === true || deps.pathLimited === true ? { partial: true } : {}), ...(outcome.capped === true ? { capped: true } : {}), ...(deps.carryFindings !== undefined ? { carried: deps.carryFindings } : {}), ...(deps.muted !== undefined && deps.muted.length > 0 ? { muted: deps.muted } : {}), ...(outcome.filtered !== undefined ? { filtered: outcome.filtered } : {}) })
 }
 
 /**

@@ -1,7 +1,7 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile as readFileText, realpath, rm, stat, writeFile } from 'node:fs/promises'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import { join } from 'node:path'
+import { join, resolve as resolvePath } from 'node:path'
 import { homedir, tmpdir } from 'node:os'
 import type { Context } from '@deepseek-ai/cordis'
 import { SessionId } from '@deepseek-ai/dsh-session'
@@ -11,6 +11,7 @@ import { installModelSelection } from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-agent-preset-registry'
 import type {} from '@deepseek-ai/dsh-session-title'
 import * as ReviewFindingsTool from './review-findings-tool.js'
+import { applyFilters, filterNotice, type FilterContext, type FilterResult, type ReadLineCount } from './finding-filters.js'
 import * as HyvaThemeInspectTool from './hyva-theme-inspect-tool.js'
 import * as HyvaCspScanTool from './hyva-csp-scan-tool.js'
 import * as LayoutXmlTool from './layout-xml-tool.js'
@@ -151,6 +152,69 @@ export interface AgentRunConfig {
   language?: string
   /** Records one agent session's token usage (null when the session reported none). */
   onUsage: (agent: AgentUsage['agent'], model: string, usage: TokenUsage | null) => void
+  /**
+   * Finding filters for an MR review; the line reader is added per checkout when
+   * posting, from the worktree or else from the forge's own file reads, absent
+   * when the forge has none (the evidence check is then skipped).
+   */
+  filters?: Omit<FilterContext, 'lines'> & Pick<ReviewForge, 'readFile'>
+}
+
+/** The filter context for one posting step: the run's filters plus a line reader for its checkout. */
+function filtersFor(worktreePath: string | undefined, f: AgentRunConfig['filters']): FilterContext | undefined {
+  if (f === undefined) return undefined
+  const { readFile, ...rest } = f
+  const lines = linesReader(worktreePath, readFile === undefined ? {} : { readFile }, rest.headSha)
+  return { ...rest, ...(lines !== undefined ? { lines } : {}) }
+}
+
+/** A missing file or directory on the path; any other error means the file could not be read. */
+const isAbsent = (err: unknown) => ['ENOENT', 'ENOTDIR', 'EISDIR'].includes((err as NodeJS.ErrnoException | undefined)?.code ?? '')
+
+/** Checkout files larger than this are not counted: their line count is unknown, as for a failed read. */
+export const LINES_MAX_BYTES = 5_000_000
+
+/**
+ * Line counts from the checkout when there is one, else through the forge at
+ * the reviewed head: undefined for an absent file, null for a failed read.
+ */
+export function linesReader(worktreePath: string | undefined, forge: Pick<ReviewForge, 'readFile'>, headSha: string): ReadLineCount | undefined {
+  const count = (text: string) => (text === '' ? 0 : text.split('\n').length - (text.endsWith('\n') ? 1 : 0))
+  if (worktreePath !== undefined) {
+    const root = resolvePath(worktreePath)
+    const realRoot = realpath(root).catch(() => root)
+    return async (path) => {
+      const abs = resolvePath(root, path)
+      if (!abs.startsWith(`${root}/`)) return undefined
+      try {
+        // A committed symlink may point anywhere (another tree, /dev/zero, /proc): resolve it and stay inside.
+        const real = await realpath(abs)
+        if (!real.startsWith(`${await realRoot}/`)) return undefined
+        const info = await stat(real)
+        if (!info.isFile()) return undefined
+        if (info.size > LINES_MAX_BYTES) return null
+        return count(await readFileText(real, 'utf8'))
+      } catch (err) { return isAbsent(err) ? undefined : null }
+    }
+  }
+  if (forge.readFile === undefined) return undefined
+  const read = forge.readFile.bind(forge)
+  return async (path) => {
+    // The forge answers undefined only for a missing file; a thrown read (network, 429, 5xx) is unknown.
+    return read(path, headSha).then((text) => (text === undefined ? undefined : count(text)), () => null)
+  }
+}
+
+/**
+ * Everything a posting step reports about the filters, for the summary and the
+ * metadata: findings with the severity the run settled on (marked with their
+ * premise when external), and severity counts of the findings posted.
+ */
+export function filterOutcome(r: Omit<FilterResult, 'post'> & { posted: ReviewFinding[] }, findings: ReviewFinding[]): { notice: string; filtered?: { external: number; lowered: number; answered: number }; findings: ReviewFinding[]; severityCounts: Partial<Record<FindingSeverity, number>> } {
+  const recorded = findings.map((f) => r.effective.get(f) ?? f)
+  const notice = filterNotice(r)
+  const any = r.external + r.lowered + r.answered > 0
+  return { notice, ...(any ? { filtered: { external: r.external, lowered: r.lowered, answered: r.answered } } : {}), findings: recorded, severityCounts: countFindingSeverities(r.posted) }
 }
 
 /** The reviewer and auditor agent runs; separate so the run flow can be tested without agents. */
@@ -214,8 +278,8 @@ async function readFrameworkLine(forge: Required<ReviewForge>, ref: string): Pro
 
 /** Posts findings one by one so one bad position never loses the rest. */
 export async function postFindingsSequentially(
-  forge: Pick<ReviewForge, 'postFindings'>, findings: ReviewFinding[], filter: { minSeverity?: FindingSeverity; muted?: ReadonlySet<string> } = {},
-): Promise<{ postedNew: number; postedReplies: number; failures: string[]; belowMinimum: number; muted: number; posted: ReviewFinding[] }> {
+  forge: Pick<ReviewForge, 'postFindings'>, findings: ReviewFinding[], filter: { minSeverity?: FindingSeverity; muted?: ReadonlySet<string>; filters?: FilterContext } = {},
+): Promise<{ postedNew: number; postedReplies: number; failures: string[]; belowMinimum: number; muted: number; posted: ReviewFinding[] } & Omit<FilterResult, 'post'>> {
   const failures: string[] = []
   let postedNew = 0
   let postedReplies = 0
@@ -223,8 +287,12 @@ export async function postFindingsSequentially(
   const aboveFloor = findings.filter((f) => SEVERITY_ORDER.indexOf(normalizeFindingSeverity(f.severity)) <= floor)
   // Blocking findings are never muted: a project cannot dismiss its way past a blocker.
   const kept = aboveFloor.filter((f) => f.code === undefined || filter.muted?.has(f.code) !== true || normalizeFindingSeverity(f.severity) === 'blocking')
+  // The floor and mute decide on the reported severity; the filters then lower, mark or drop.
+  const filtered: FilterResult = filter.filters === undefined
+    ? { post: kept, external: 0, lowered: 0, answered: 0, effective: new Map(), evidenceSkipped: false }
+    : await applyFilters(kept, filter.filters)
   const posted: ReviewFinding[] = []
-  for (const finding of kept) {
+  for (const finding of filtered.post) {
     try {
       await forge.postFindings([finding])
       posted.push(finding)
@@ -235,12 +303,35 @@ export async function postFindingsSequentially(
       failures.push(`${locator}: ${err instanceof Error ? err.message : String(err)}`)
     }
   }
-  return { postedNew, postedReplies, failures, belowMinimum: findings.length - aboveFloor.length, muted: aboveFloor.length - kept.length, posted }
+  return { postedNew, postedReplies, failures, belowMinimum: findings.length - aboveFloor.length, muted: aboveFloor.length - kept.length, posted, external: filtered.external, lowered: filtered.lowered, answered: filtered.answered, effective: filtered.effective, evidenceSkipped: filtered.evidenceSkipped }
 }
 
 /** Summary line, plus the count of findings below the project's minimum severity. */
 function summaryWithFloor(base: string, belowMinimum: number, minSeverity?: FindingSeverity): string {
   return belowMinimum > 0 && minSeverity !== undefined ? `${base} ${belowMinimum} finding(s) below ${minSeverity} were counted but not posted.` : base
+}
+
+/**
+ * The posting step both review paths share: post through the filters, then
+ * build the summary, counts and metadata findings from what was posted.
+ */
+export async function postWithFilters(
+  forge: Pick<ReviewForge, 'postFindings'>, findings: ReviewFinding[],
+  opts: { minSeverity?: FindingSeverity; muted?: ReadonlySet<string>; filters?: AgentRunConfig['filters']; worktreePath: string | undefined; diffTruncated: boolean; extra?: string[] },
+): Promise<Pick<ReviewOutcome, 'summary' | 'failures' | 'severityCounts' | 'findings' | 'filtered' | 'postedFindings'>> {
+  const filters = filtersFor(opts.worktreePath, opts.filters)
+  const r = await postFindingsSequentially(forge, findings, { minSeverity: opts.minSeverity, muted: opts.muted, ...(filters !== undefined ? { filters } : {}) })
+  const f = filterOutcome(r, findings)
+  const head = [reviewerSummary(r.postedNew, r.postedReplies, opts.diffTruncated), ...(opts.extra ?? [])].join(' ')
+  const base = summaryWithFloor(head, r.belowMinimum, opts.minSeverity)
+  return {
+    summary: f.notice === '' ? base : `${base} ${f.notice}`,
+    failures: r.failures,
+    severityCounts: f.severityCounts,
+    findings: f.findings,
+    ...(f.filtered !== undefined ? { filtered: f.filtered } : {}),
+    postedFindings: r.posted,
+  }
 }
 
 export function createEngineAgents(ctx: Context): EngineAgents {
@@ -319,11 +410,9 @@ export function createEngineAgents(ctx: Context): EngineAgents {
         }
 
         if (chunk !== undefined) return { summary: '', failures: [], findings: capturedFindings, models: [primaryOptions.model], deferredPost: true }
-        const { postedNew, postedReplies, failures, belowMinimum, posted } = await postFindingsSequentially(run.forge, capturedFindings, { minSeverity: run.minSeverity, muted: run.mutedCodes })
-        return {
-          postedFindings: posted,
-          // A diff cut at MAX_DIFF_FILES left files unseen: the next re-review must be full.
-          ...(diffTruncated ? { partial: true, capped: true } : {}), summary: summaryWithFloor(reviewerSummary(postedNew, postedReplies, diffTruncated), belowMinimum, run.minSeverity), failures, severityCounts: countFindingSeverities(capturedFindings), findings: capturedFindings, models: [primaryOptions.model] }
+        const out = await postWithFilters(run.forge, capturedFindings, { minSeverity: run.minSeverity, muted: run.mutedCodes, filters: run.filters, worktreePath, diffTruncated })
+        // A diff cut at MAX_DIFF_FILES left files unseen: the next re-review must be full.
+        return { ...out, ...(diffTruncated ? { partial: true, capped: true } : {}), models: [primaryOptions.model] }
       } finally {
         run.onUsage('reviewer', agentOptions.model, usageFromSession(handle.agent.session))
         await handle.dispose()
@@ -451,6 +540,9 @@ export function createReviewEngine(ctx: Context, agents: EngineAgents = createEn
       readFile: (path, ref) => rawForge.readFile?.(path, ref) ?? Promise.resolve(undefined),
       openFindingKeys: () => rawForge.openFindingKeys?.() ?? Promise.resolve(new Set<string>()),
       compare: (from, to) => rawForge.compare(from, to),
+      // No thread state or versions: replies are posted as reported.
+      ownThreads: () => rawForge.ownThreads?.() ?? Promise.resolve([]),
+      mrVersions: () => rawForge.mrVersions?.() ?? Promise.resolve(undefined),
       postNote: (body) => timedPost(() => rawForge.postNote(body)),
       replyToDiscussion: (id, body) => timedPost(() => rawForge.replyToDiscussion(id, body)),
       postFindings: (findings) => timedPost(() => rawForge.postFindings(findings)),
@@ -530,6 +622,29 @@ export function createReviewEngine(ctx: Context, agents: EngineAgents = createEn
       const signals = payload.scope.kind === 'mr' ? forge.signals() : undefined
       reviewStart = Date.now()
       await signals?.start()
+      // Filters need the head the review reads and, for replies, the threads and versions;
+      // a failed read leaves that filter out rather than failing the review.
+      const filterHead = currentHeadSha ?? payload.headSha
+      if (payload.scope.kind === 'mr' && filterHead !== undefined) {
+        // Logged, not thrown: without these, replies to answered threads are posted, and nobody could tell why.
+        const where = `project=${payload.projectPath} mr=!${payload.mrIid}`
+        const [threads, versions] = await Promise.all([
+          forge.ownThreads().catch((err: unknown) => {
+            console.error(`maestro-orchestrator: could not read own review threads for the finding filters ${where}:`, err)
+            return []
+          }),
+          forge.mrVersions().then((v) => {
+            if (v === undefined && rawForge.mrVersions !== undefined) console.error(`maestro-orchestrator: could not read merge request versions for the finding filters ${where}`)
+            return v
+          }, (err: unknown) => {
+            console.error(`maestro-orchestrator: could not read merge request versions for the finding filters ${where}:`, err)
+            return undefined
+          }),
+        ])
+        // File reads come from the forge itself: the wrapper above answers "absent" for a forge without them.
+        const readFile = rawForge.readFile?.bind(rawForge)
+        agentRun.filters = { mode: payload.mode, threads, ...(versions !== undefined ? { versions } : {}), compare: (from, to) => forge.compare(from, to), headSha: filterHead, ...(readFile !== undefined ? { readFile } : {}) }
+      }
       timer.mark('fetch')
       agentsStarted = true
       const postComment = (body: string) => forge.postNote(body)
@@ -567,14 +682,11 @@ export function createReviewEngine(ctx: Context, agents: EngineAgents = createEn
         const failed = settled.flatMap((r, i) => r.status === 'rejected' ? [{ chunk: chunks[i], reason: r.reason instanceof Error ? r.reason.message : String(r.reason) }] : [])
         if (done.length === 0) throw new Error(`every review part failed: ${[...new Set(failed.map((f) => f.reason))].join('; ')}`)
         const findings = mergeFindings(done.map((o) => o.findings ?? []))
-        const posted = await postFindingsSequentially(forge, findings, { minSeverity: agentRun.minSeverity, muted: agentRun.mutedCodes })
         const parts = [`Reviewed in ${chunks.length} parallel parts.`, ...(scopeTruncated ? ['The diff reached the file cap: files beyond it were not reviewed.'] : []), ...failed.map((f) => `Part ${f.chunk.id} (${f.chunk.files.length} files) failed: ${f.reason}; its files were not reviewed.`)]
+        const out = await postWithFilters(forge, findings, { minSeverity: agentRun.minSeverity, muted: agentRun.mutedCodes, filters: agentRun.filters, worktreePath, diffTruncated: false, extra: parts })
         return {
-          summary: summaryWithFloor(`${reviewerSummary(posted.postedNew, posted.postedReplies, false)} ${parts.join(' ')}`, posted.belowMinimum, agentRun.minSeverity),
-          failures: [...done.flatMap((o) => o.failures), ...posted.failures],
-          severityCounts: countFindingSeverities(findings),
-          findings,
-          postedFindings: posted.posted,
+          ...out,
+          failures: [...done.flatMap((o) => o.failures), ...out.failures],
           models: [...new Set(done.flatMap((o) => o.models ?? []))],
           // The count covers failed parts only, so a capped diff leaves it out (it would undercount).
           ...(failed.length > 0 || scopeTruncated ? { partial: true, ...(scopeTruncated ? { capped: true } : { unreviewed: failed.reduce((n, f) => n + f.chunk.files.length, 0) }) } : {}),

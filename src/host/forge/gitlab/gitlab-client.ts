@@ -6,6 +6,9 @@ import { join, resolve } from 'node:path'
 import { gitlabAuthHeaders } from './gitlab-auth.js'
 import { redact, type DiffHit } from '../../redact.js'
 import { ENGINE_FINDING_CODES, findingCodeOf } from '../../review-feedback.js'
+import { openerSeverity } from '../../finding-filters.js'
+import { sanitizeAgentText } from '../../agent-text.js'
+import type { ThreadState } from '../types.js'
 
 export const name = 'maestro-gitlab-client'
 export const inject = ['tools']
@@ -44,14 +47,8 @@ export const Config: z<Config> = z.object({
   readOnly: z.boolean(),
 })
 
-/**
- * Escapes HTML comments in anything an agent writes to GitLab, so no agent
- * text (steered by MR content) can carry a review marker or metadata block.
- * Only the engine writes those, after this escaping.
- */
-export function sanitizeAgentText(text: string): string {
-  return text.replace(/<!--/g, '&lt;!--')
-}
+// Re-exported for callers that already import it from here.
+export { sanitizeAgentText }
 
 /** Hard cap on diff files fetched for one review. */
 export const MAX_DIFF_FILES = 3000
@@ -159,6 +156,7 @@ interface GitlabDiscussionNote {
   resolved: boolean
   /** GitLab's own notes, e.g. "changed this line in version 3 of the diff". */
   system?: boolean
+  created_at?: string
 }
 
 interface GitlabDiscussion {
@@ -259,6 +257,28 @@ export function selectOwnThreads(
       resolved: d.notes[0].resolved === true,
     }))
   return { threads, totalDiscussions: discussions.length }
+}
+
+/** The engine's view of the bot's own threads: opener severity and who spoke last. Pure. */
+export function threadStates(discussions: GitlabDiscussion[], botUsername: string): ThreadState[] {
+  return discussions.flatMap((d) => {
+    const first = d.notes[0]
+    if (first === undefined || first.author.username !== botUsername) return []
+    const where = threadLocation(first)
+    if (where === undefined) return []
+    const spoken = d.notes.filter((n) => n.system !== true)
+    const human = spoken.filter((n) => n.author.username !== botUsername)
+    const bot = spoken.filter((n) => n.author.username === botUsername)
+    const severity = openerSeverity(first.body)
+    return [{
+      discussionId: d.id,
+      ...where,
+      ...(severity !== undefined ? { severity } : {}),
+      ...(human.at(-1)?.created_at !== undefined ? { lastHumanAt: human.at(-1)!.created_at } : {}),
+      ...(bot.at(-1)?.created_at !== undefined ? { lastBotAt: bot.at(-1)!.created_at } : {}),
+      lastIsHuman: spoken.at(-1)?.author.username !== botUsername,
+    }]
+  })
 }
 
 export function apply(ctx: Context, config: Config): void {

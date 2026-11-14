@@ -1,9 +1,9 @@
 import { normalize as posixNormalize } from 'node:path/posix'
 import type { ReviewFinding } from '../../review-findings-tool.js'
-import { severityPrefix } from '../../severity.js'
+import { SEVERITY_ORDER, normalizeFindingSeverity, severityPrefix } from '../../severity.js'
 import { findingCodeMarker } from '../../review-feedback.js'
 import { sanitizeAgentText } from './gitlab-client.js'
-import type { CompareResult } from '../types.js'
+import type { CompareResult, MrVersion } from '../types.js'
 import { gitlabAuthHeaders } from './gitlab-auth.js'
 import { fetchWithTimeout } from './gitlab-client.js'
 
@@ -41,6 +41,23 @@ export async function fetchCompare(
     )
     if (!response.ok) return undefined
     return await response.json() as CompareResult
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * Merge request versions (head sha and creation time), first page of 100,
+ * newest first as GitLab returns them; undefined on any error.
+ */
+export async function fetchMrVersions(
+  baseUrl: string, token: string, projectId: number, mrIid: number, fetcher: typeof fetch = fetch,
+): Promise<MrVersion[] | undefined> {
+  try {
+    const response = await fetcher(`${baseUrl}/api/v4/projects/${projectId}/merge_requests/${mrIid}/versions?per_page=100`, { headers: gitlabAuthHeaders(token) })
+    if (!response.ok) return undefined
+    const versions = await response.json() as Array<{ head_commit_sha?: string; created_at?: string }>
+    return versions.flatMap((v) => (typeof v.head_commit_sha === 'string' && typeof v.created_at === 'string' ? [{ headSha: v.head_commit_sha, createdAt: v.created_at }] : []))
   } catch {
     return undefined
   }
@@ -177,11 +194,76 @@ function lastNewLine(diff: string): number {
   return last
 }
 
-export function findingNoteBody(finding: ReviewFinding): string {
+const SEVERITY_LABELS = SEVERITY_ORDER.map((s) => severityPrefix(s))
+const SEVERITY_WORDS = SEVERITY_LABELS.map((l) => l.split(' ')[1])
+// A separator belongs to the echo only on its line and before a space: `- item` on
+// the next line is a list, `-1` is a number.
+const ECHO_SEPARATOR = /^(?:·|-|\u2014)(?:[ \t]+|$|(?=\n))/
+const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
+/**
+ * The model often restates the header it sees on earlier threads at the start
+ * of its body: the label with or without its emoji, a `·`, this finding's
+ * code, sometimes wrapped in bold or led by a question mark, then a separator.
+ * Removes that prefix and nothing else: a bare severity word, bold text or a
+ * question mark is removed only when it is part of such a header. A body that
+ * is nothing but an echo is returned as it was.
+ */
+export function stripHeaderEcho(body: string, code: string | undefined): string {
+  const codeToken = code === undefined ? undefined : `\`${code}\``
+  // What may follow a stripped bold or question mark: a label, a severity word that a `·` follows, or the code.
+  const wordThenDot = `(?:${SEVERITY_WORDS.join('|')})\\s*(?:\\*\\*)?\\s*·`
+  const headerAhead = `(?:${[...SEVERITY_LABELS, ...(codeToken !== undefined ? [codeToken] : [])].map(escapeRe).join('|')}|${wordThenDot})`
+  const tokens: RegExp[] = [
+    ...SEVERITY_LABELS.map((l) => new RegExp(`^${escapeRe(l)}`)),
+    // A severity word in any case a `·` follows, with its closing bold when the word was bold (`**Major** ·`).
+    new RegExp(`^(?:${SEVERITY_WORDS.join('|')})(?:\\s*\\*\\*)?(?=\\s*·)`, 'i'),
+    /^·/,
+    // A closing bold belongs to the echo only when it sits right after the code.
+    ...(codeToken !== undefined ? [new RegExp(`^${escapeRe(codeToken)}(?:\\*\\*)?`)] : []),
+    // Any one-word tag the model put before the code (`question · \`CODE\``), only when this finding's code follows.
+    ...(codeToken !== undefined ? [new RegExp(`^\\p{L}+\\s*·(?=\\s*${escapeRe(codeToken)})`, 'u')] : []),
+    // Any leading symbol (an emoji the model picked) in front of a severity word and a `·`.
+    new RegExp(`^[^\\p{L}\\p{N}\\s\\x60*]{1,4}(?=\\s*(?:\\*\\*)?\\s*(?:${SEVERITY_WORDS.join('|')})\\s*(?:\\*\\*)?\\s*·)`, 'iu'),
+    new RegExp(`^❓(?=\\s*(?:\\*\\*)?\\s*${headerAhead})`),
+    new RegExp(`^\\*\\*(?=\\s*${headerAhead})`),
+  ]
+  let rest = body.replace(/^\s+/, '')
+  let echoed = false
+  let gap = ''
+  for (;;) {
+    const hit = tokens.map((t) => t.exec(rest)).find((m) => m !== null)
+    if (hit === undefined || hit === null) break
+    rest = rest.slice(hit[0].length)
+    gap = /^\s*/.exec(rest)![0]
+    rest = rest.slice(gap.length)
+    echoed = true
+  }
+  if (!echoed) return body
+  if (!gap.includes('\n')) rest = rest.replace(ECHO_SEPARATOR, '').replace(/^\s+/, '')
+  return rest === '' ? body : rest
+}
+
+/**
+ * A reply in a thread whose severity is known shows a label only when it
+ * differs from the thread's (`🔵 Minor (was 🟡 Major)`); otherwise the code alone.
+ */
+function noteHeader(finding: ReviewFinding): string {
+  const code = finding.code === undefined ? undefined : `\`${finding.code}\``
   const label = severityPrefix(finding.severity)
-  const head = finding.code === undefined ? label : `${label} · \`${finding.code}\``
-  const text = sanitizeAgentText(finding.body.startsWith(label) ? finding.body.slice(label.length).replace(/^\s+/, '') : finding.body)
-  return `${head}\n\n${text}${finding.code === undefined ? '' : `\n\n${findingCodeMarker(finding.code)}`}`
+  if (finding.status === 'reply' && finding.threadSeverity !== undefined) {
+    if (normalizeFindingSeverity(finding.severity) === finding.threadSeverity) return code ?? ''
+    const changed = `${label} (was ${severityPrefix(finding.threadSeverity)})`
+    return code === undefined ? changed : `${changed} · ${code}`
+  }
+  return code === undefined ? label : `${label} · ${code}`
+}
+
+export function findingNoteBody(finding: ReviewFinding): string {
+  const head = noteHeader(finding)
+  const stripped = stripHeaderEcho(finding.body, finding.code)
+  const text = sanitizeAgentText(finding.severityNote === undefined ? stripped : `${finding.severityNote}\n\n${stripped}`)
+  return `${head === '' ? '' : `${head}\n\n`}${text}${finding.code === undefined ? '' : `\n\n${findingCodeMarker(finding.code)}`}`
 }
 
 export async function postReviewFindings(findings: ReviewFinding[], config: GitlabFindingPoster): Promise<void> {

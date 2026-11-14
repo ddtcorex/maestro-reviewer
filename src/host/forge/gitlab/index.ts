@@ -2,7 +2,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { ReviewForge } from '../types.js'
 import { gitlabAuthHeaders } from './gitlab-auth.js'
 import * as GitlabClient from './gitlab-client.js'
-import { fetchRepoFile, fetchCompare, fetchMrBaseSha, fetchMrDetailHeadSha, postReviewFindings, type GitlabFindingPoster } from './mr-api.js'
+import { fetchRepoFile, fetchCompare, fetchMrBaseSha, fetchMrDetailHeadSha, fetchMrVersions, postReviewFindings, type GitlabFindingPoster } from './mr-api.js'
 import { createReviewSignals } from './review-signals.js'
 import { DEFAULT_IGNORE_GLOBS, filterDiffs } from '../../diff-filter.js'
 import { redactDiff } from '../../redact.js'
@@ -107,6 +107,8 @@ export function gitlabForge(
       return { files: GitlabClient.diffFileList(scope.diffs), skipped: scope.skipped, redacted: scope.redacted ?? [], ...(scope.truncated ? { truncated: true } : {}) }
     },
     compare: (from, to) => fetchCompare(cfg.baseUrl, cfg.token, mr.projectId, from, to),
+    ownThreads: async () => GitlabClient.threadStates(await GitlabClient.fetchAllDiscussions(fetch, mrApi, gitlabAuthHeaders(cfg.token)), cfg.botUsername),
+    mrVersions: () => fetchMrVersions(cfg.baseUrl, cfg.token, mr.projectId, mr.mrIid),
     postNote: (body) => post(`${mrApi}/notes`, body),
     replyToDiscussion: (discussionId, body) => post(`${mrApi}/discussions/${encodeURIComponent(discussionId)}/notes`, body),
     postFindings: (findings) => postReviewFindings(findings, poster),
