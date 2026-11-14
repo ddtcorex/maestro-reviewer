@@ -129,6 +129,15 @@ describe('header echo variants seen in replay', () => {
     expect(stripHeaderEcho('question · `NOTIFY-X`\n\nThe flag defaults to true.', 'NOTIFY-X')).toBe('The flag defaults to true.')
   })
 
+  it('strips a bold one-word tag and a dot before the echoed code', () => {
+    expect(stripHeaderEcho('**Question · `NOTIFY-X`**\n\nIs the flag internal?', 'NOTIFY-X')).toBe('Is the flag internal?')
+  })
+
+  it('keeps bold prose that starts with a word and a dot', () => {
+    expect(stripHeaderEcho('**Note · the flag is internal.**', 'NOTIFY-X')).toBe('**Note · the flag is internal.**')
+    expect(stripHeaderEcho('**Question · `OTHER-Y`** is wrong', 'NOTIFY-X')).toBe('**Question · `OTHER-Y`** is wrong')
+  })
+
   it('keeps a one-word tag and a dot that another code follows', () => {
     expect(stripHeaderEcho('question · `OTHER-Y` is wrong', 'NOTIFY-X')).toBe('question · `OTHER-Y` is wrong')
     expect(stripHeaderEcho('Note · the flag defaults to true.', 'NOTIFY-X')).toBe('Note · the flag defaults to true.')
