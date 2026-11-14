@@ -208,3 +208,67 @@ describe('linesReader', () => {
     expect(linesReader(undefined, {}, 'h')).toBeUndefined()
   })
 })
+
+describe('restated replies', () => {
+  const versions = [{ headSha: 'h1', createdAt: '2026-11-01T00:00:00Z' }]
+  const open = (over: Partial<ThreadState> = {}): ThreadState => ({ discussionId: 'd1', path: 'a.php', line: 20, severity: 'minor', currentSeverity: 'minor', lastBotAt: '2026-11-02T00:00:00Z', lastIsHuman: false, ...over })
+  const reply = (severity: ReviewFinding['severity']): ReviewFinding => ({ status: 'reply', discussionId: 'd1', body: 'Still open.', severity })
+  const untouched = vi.fn(async () => ({ diffs: [{ new_path: 'a.php', old_path: 'a.php', diff: '@@ -90,1 +90,1 @@\n-x\n+y\n' }] }))
+  const touched = vi.fn(async () => ({ diffs: [{ new_path: 'a.php', old_path: 'a.php', diff: '@@ -19,2 +19,2 @@\n-x\n+y\n' }] }))
+
+  it('drops a same-severity reply on unchanged code', async () => {
+    const f = forge()
+    const r = await postFindingsSequentially(f, [reply('minor')], { filters: ctx({ threads: [open()], versions, compare: untouched }) })
+    expect(f.posted).toHaveLength(0)
+    expect(r.restated).toBe(1)
+  })
+
+  it('posts it when the code under the thread changed', async () => {
+    const f = forge()
+    const r = await postFindingsSequentially(f, [reply('minor')], { filters: ctx({ threads: [open()], versions, compare: touched }) })
+    expect(f.posted).toHaveLength(1)
+    expect(r.restated).toBe(0)
+  })
+
+  it('posts a reply that changes the severity', async () => {
+    const f = forge()
+    const r = await postFindingsSequentially(f, [reply('major')], { filters: ctx({ threads: [open()], versions, compare: untouched }) })
+    expect(f.posted).toHaveLength(1)
+    expect(r.restated).toBe(0)
+  })
+
+  it('posts it when versions cannot be read', async () => {
+    const f = forge()
+    await postFindingsSequentially(f, [reply('minor')], { filters: ctx({ threads: [open()], compare: untouched }) })
+    expect(f.posted).toHaveLength(1)
+  })
+
+  it('compares with the current severity, not the opener', async () => {
+    const f = forge()
+    const r = await postFindingsSequentially(f, [reply('minor')], { filters: ctx({ threads: [open({ severity: 'major', currentSeverity: 'minor' })], versions, compare: untouched }) })
+    expect(f.posted).toHaveLength(0)
+    expect(r.restated).toBe(1)
+  })
+
+  it('leaves answered threads to the answered filter', async () => {
+    const f = forge()
+    const r = await postFindingsSequentially(f, [reply('minor')], { filters: ctx({ threads: [open({ lastIsHuman: true, lastHumanAt: '2026-11-03T00:00:00Z' })], versions, compare: untouched }) })
+    expect(r.answered).toBe(1)
+    expect(r.restated).toBe(0)
+  })
+
+  it('records restated in the outcome and the notice', async () => {
+    const { filterOutcome } = await import('../src/host/engine.js')
+    const findings = [reply('minor')]
+    const r = await postFindingsSequentially(forge(), findings, { filters: ctx({ threads: [open()], versions, compare: untouched }) })
+    const o = filterOutcome(r, findings)
+    expect(o.filtered).toEqual({ external: 0, lowered: 0, answered: 0, restated: 1 })
+    expect(o.notice).toBe('1 restated reply on unchanged code not posted.')
+  })
+})
+
+describe('filterNotice with restated replies', () => {
+  it('counts them', () => {
+    expect(filterNotice({ lowered: 0, answered: 0, restated: 2, evidenceSkipped: false })).toBe('2 restated replies on unchanged code not posted.')
+  })
+})

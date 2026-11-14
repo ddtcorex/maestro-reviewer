@@ -347,7 +347,7 @@ export interface ReviewOutcome {
   /** The findings actually posted (muted and below-floor ones left out). */
   postedFindings?: ReviewFinding[]
   /** What the finding filters did, for the review metadata. */
-  filtered?: { external: number; lowered: number; answered: number }
+  filtered?: { external: number; lowered: number; answered: number; restated?: number }
 }
 
 function partialOf(outcome: Pick<ReviewOutcome, 'partial' | 'unreviewed'>): { partial?: { unreviewed?: number } } {

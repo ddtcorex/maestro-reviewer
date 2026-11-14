@@ -41,6 +41,8 @@ export interface ThreadState {
   line: number | null
   /** The opener's severity, when its label can be read. */
   severity?: FindingSeverity
+  /** The latest severity the reviewer stated in the thread (opener or a changed-severity reply). */
+  currentSeverity?: FindingSeverity
   lastHumanAt?: string
   lastBotAt?: string
   /** The last non-system note was written by a person. */

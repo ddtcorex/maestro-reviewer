@@ -178,3 +178,14 @@ describe('filter metadata', () => {
     expect(parseReviewMeta(wrap({ ...ok, findings: [{ code: 'A', fingerprint: 'f', severity: 'minor', premise: 'external', premiseBy: 'guess' }] }))).toBeUndefined()
   })
 })
+
+describe('restated metadata', () => {
+  it('round-trips restated and rejects a non-number', async () => {
+    const { buildReviewMeta, encodeReviewMeta, parseReviewMeta } = await import('../src/host/review-marker.js')
+    const meta = buildReviewMeta({ headSha: 'abc123', mode: 'quick', models: ['m'], findings: [], filtered: { external: 0, lowered: 0, answered: 0, restated: 3 } })
+    expect(parseReviewMeta(encodeReviewMeta(meta))?.filtered).toEqual({ external: 0, lowered: 0, answered: 0, restated: 3 })
+    const wrap = (m: unknown) => `<!-- maestro-review-meta:v1 ${Buffer.from(JSON.stringify(m)).toString('base64url')} -->`
+    const ok = { v: 1, headSha: 'abc', mode: 'quick', models: [], findings: [], at: '2026-11-13T00:00:00Z' }
+    expect(parseReviewMeta(wrap({ ...ok, filtered: { external: 0, lowered: 0, answered: 0, restated: 'x' } }))).toBeUndefined()
+  })
+})

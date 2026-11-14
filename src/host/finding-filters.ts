@@ -114,22 +114,22 @@ function touches(diff: string, line: number | null): boolean {
 }
 
 /**
- * The thread was answered by a person and no commit since touched its lines.
- * The head at the answer is the newest version created before it. Any missing
- * piece (versions, compare) answers false, so the reply is posted.
+ * No commit since `at` touched the thread's lines. The head at that time is the
+ * newest version created at or before it. Any missing piece (time, versions,
+ * compare) answers false, so the reply is posted.
  */
-export async function isAnsweredUnchanged(t: ThreadState, deps: {
+export async function isUnchangedSince(at: string | undefined, t: ThreadState, deps: {
   versions: MrVersion[] | undefined
   compare: (from: string, to: string) => Promise<CompareResult | undefined>
   headSha: string
 }): Promise<boolean> {
-  if (!t.lastIsHuman || t.lastHumanAt === undefined || deps.versions === undefined) return false
+  if (at === undefined || deps.versions === undefined) return false
   // Instants, not text: GitLab times may differ in offset form and milliseconds.
-  const answeredAt = Date.parse(t.lastHumanAt)
-  if (Number.isNaN(answeredAt)) return false
+  const since = Date.parse(at)
+  if (Number.isNaN(since)) return false
   const before = deps.versions
     .map((v) => ({ v, at: Date.parse(v.createdAt) }))
-    .filter((x) => !Number.isNaN(x.at) && x.at <= answeredAt)
+    .filter((x) => !Number.isNaN(x.at) && x.at <= since)
     .sort((a, b) => a.at - b.at)
     .at(-1)?.v
   if (before === undefined) return false
@@ -137,6 +137,11 @@ export async function isAnsweredUnchanged(t: ThreadState, deps: {
   const result = await deps.compare(before.headSha, deps.headSha)
   if (result === undefined || result.compare_timeout === true || result.diffs === undefined) return false
   return !result.diffs.some((d) => (d.new_path === t.path || d.old_path === t.path) && (d.diff === undefined || d.too_large === true || d.collapsed === true || touches(d.diff, t.line)))
+}
+
+/** The thread was answered by a person and no commit since touched its lines. */
+export async function isAnsweredUnchanged(t: ThreadState, deps: Parameters<typeof isUnchangedSince>[2]): Promise<boolean> {
+  return t.lastIsHuman && isUnchangedSince(t.lastHumanAt, t, deps)
 }
 
 /** A reply takes its thread's severity when it reports none, and records the thread's for rendering. */
@@ -163,6 +168,8 @@ export interface FilterResult {
   external: number
   lowered: number
   answered: number
+  /** Same-severity replies in unanswered threads whose code did not change since the reviewer's last note. */
+  restated: number
   /**
    * Each filtered input (by identity) to the finding the run records: the
    * effective one when posted or dropped (lowered, or a reply with its
@@ -180,7 +187,7 @@ export interface FilterResult {
  * reply's severity against its thread.
  */
 export async function applyFilters(findings: ReviewFinding[], ctx: FilterContext): Promise<FilterResult> {
-  const out: FilterResult = { post: [], external: 0, lowered: 0, answered: 0, effective: new Map(), evidenceSkipped: false }
+  const out: FilterResult = { post: [], external: 0, lowered: 0, answered: 0, restated: 0, effective: new Map(), evidenceSkipped: false }
   // Replies answered on the same version share one compare.
   const compares = new Map<string, Promise<CompareResult | undefined>>()
   const compare = (from: string, to: string) => {
@@ -200,8 +207,15 @@ export async function applyFilters(findings: ReviewFinding[], ctx: FilterContext
     const thread = f.status === 'reply' ? ctx.threads?.find((t) => t.discussionId === f.discussionId) : undefined
     const effective = effectiveReply(f, thread)
     out.effective.set(reported, effective)
-    if (thread !== undefined && await isAnsweredUnchanged(thread, { versions: ctx.versions, compare, headSha: ctx.headSha })) {
+    const deps = { versions: ctx.versions, compare, headSha: ctx.headSha }
+    if (thread !== undefined && await isAnsweredUnchanged(thread, deps)) {
       out.answered++
+      continue
+    }
+    // A reply that only restates an open finding on untouched code adds nothing; a severity change does.
+    const current = thread?.currentSeverity ?? thread?.severity
+    if (thread !== undefined && !thread.lastIsHuman && current !== undefined && effective.severity === current && await isUnchangedSince(thread.lastBotAt, thread, deps)) {
+      out.restated++
       continue
     }
     if (premiseBy !== undefined) out.external++
@@ -211,10 +225,12 @@ export async function applyFilters(findings: ReviewFinding[], ctx: FilterContext
 }
 
 /** One sentence on what the filters did; empty when they did nothing. */
-export function filterNotice(r: Pick<FilterResult, 'lowered' | 'answered' | 'evidenceSkipped'>): string {
+export function filterNotice(r: Pick<FilterResult, 'lowered' | 'answered' | 'evidenceSkipped'> & { restated?: number }): string {
+  const restated = r.restated ?? 0
   const parts = [
     ...(r.lowered > 0 ? [`${r.lowered} lowered to minor`] : []),
     ...(r.answered > 0 ? [`${r.answered} ${r.answered === 1 ? 'reply' : 'replies'} to answered threads not posted`] : []),
+    ...(restated > 0 ? [`${restated} restated ${restated === 1 ? 'reply' : 'replies'} on unchanged code not posted`] : []),
   ]
   const counts = parts.length > 0 ? `${parts.join(', ')}.` : ''
   return [counts, ...(r.evidenceSkipped ? ['Evidence check skipped: files could not be read.'] : [])].filter((s) => s !== '').join(' ')

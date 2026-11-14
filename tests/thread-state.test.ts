@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { threadStates } from '../src/host/forge/gitlab/gitlab-client.js'
 import { fetchMrVersions } from '../src/host/forge/gitlab/mr-api.js'
-import { effectiveReply, isAnsweredUnchanged, openerSeverity } from '../src/host/finding-filters.js'
+import { effectiveReply, isAnsweredUnchanged, isUnchangedSince, openerSeverity } from '../src/host/finding-filters.js'
 import type { ThreadState } from '../src/host/forge/types.js'
 
 const note = (author: string, body: string, created_at: string, extra: Record<string, unknown> = {}) => ({ body, author: { username: author }, created_at, resolved: false, ...extra })
@@ -28,7 +28,7 @@ describe('threadStates', () => {
       note('dev', 'By design.', '2026-11-01T11:00:00Z'),
       note('bot', 'gitlab system note', '2026-11-01T12:00:00Z', { system: true }),
     ] }], 'bot')
-    expect(t).toEqual({ discussionId: 'd1', path: 'a.php', line: 20, severity: 'major', lastHumanAt: '2026-11-01T11:00:00Z', lastBotAt: '2026-11-01T10:00:00Z', lastIsHuman: true })
+    expect(t).toEqual({ discussionId: 'd1', path: 'a.php', line: 20, severity: 'major', currentSeverity: 'major', lastHumanAt: '2026-11-01T11:00:00Z', lastBotAt: '2026-11-01T10:00:00Z', lastIsHuman: true })
   })
 
   it('is not answered when the bot spoke last', () => {
@@ -176,5 +176,35 @@ describe('threadStates on a shared bot account', () => {
 
   it('does not own a thread a person opened with the bot account', () => {
     expect(threadStates([{ id: 'd1', notes: [note('bot', 'Please check the cron.', '2026-11-01T10:00:00Z', { position: pos })] }], 'bot')).toEqual([])
+  })
+})
+
+describe('thread current severity', () => {
+  const m = (b: string) => `${b}\n\n<!-- maestro-note -->`
+  it('takes the latest severity the reviewer stated', () => {
+    const [t] = threadStates([{ id: 'd1', notes: [
+      note('bot', m('🟡 Major · `X`\n\nbody'), '2026-11-01T10:00:00Z', { position: pos }),
+      note('bot', m('🔵 Minor (was 🟡 Major) · `X`\n\nMostly fixed.'), '2026-11-02T10:00:00Z'),
+      note('bot', m('`X`\n\nStill open.'), '2026-11-03T10:00:00Z'),
+    ] }], 'bot')
+    expect(t.severity).toBe('major')
+    expect(t.currentSeverity).toBe('minor')
+  })
+
+  it('equals the opener severity when no reply changed it', () => {
+    const [t] = threadStates([{ id: 'd1', notes: [note('bot', m('⚪ Nit · `X`\n\nbody'), '2026-11-01T10:00:00Z', { position: pos })] }], 'bot')
+    expect(t.currentSeverity).toBe('nit')
+  })
+})
+
+describe('isUnchangedSince', () => {
+  const t: ThreadState = { discussionId: 'd', path: 'a.php', line: 20, lastIsHuman: false, lastBotAt: '2026-11-02T00:00:00Z' }
+  const versions = [{ headSha: 'h1', createdAt: '2026-11-01T00:00:00Z' }]
+  it('is false without a time', async () => {
+    expect(await isUnchangedSince(undefined, t, { versions, compare: async () => ({ diffs: [] }), headSha: 'h2' })).toBe(false)
+  })
+  it('is true when no change since then touches the thread line', async () => {
+    const compare = async () => ({ diffs: [{ new_path: 'a.php', old_path: 'a.php', diff: '@@ -80,1 +80,1 @@\n-x\n+y\n' }] })
+    expect(await isUnchangedSince(t.lastBotAt, t, { versions, compare, headSha: 'h2' })).toBe(true)
   })
 })

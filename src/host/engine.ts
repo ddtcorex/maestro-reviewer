@@ -210,11 +210,11 @@ export function linesReader(worktreePath: string | undefined, forge: Pick<Review
  * metadata: findings with the severity the run settled on (marked with their
  * premise when external), and severity counts of the findings posted.
  */
-export function filterOutcome(r: Omit<FilterResult, 'post'> & { posted: ReviewFinding[] }, findings: ReviewFinding[]): { notice: string; filtered?: { external: number; lowered: number; answered: number }; findings: ReviewFinding[]; severityCounts: Partial<Record<FindingSeverity, number>> } {
+export function filterOutcome(r: Omit<FilterResult, 'post'> & { posted: ReviewFinding[] }, findings: ReviewFinding[]): { notice: string; filtered?: { external: number; lowered: number; answered: number; restated?: number }; findings: ReviewFinding[]; severityCounts: Partial<Record<FindingSeverity, number>> } {
   const recorded = findings.map((f) => r.effective.get(f) ?? f)
   const notice = filterNotice(r)
-  const any = r.external + r.lowered + r.answered > 0
-  return { notice, ...(any ? { filtered: { external: r.external, lowered: r.lowered, answered: r.answered } } : {}), findings: recorded, severityCounts: countFindingSeverities(r.posted) }
+  const any = r.external + r.lowered + r.answered + r.restated > 0
+  return { notice, ...(any ? { filtered: { external: r.external, lowered: r.lowered, answered: r.answered, ...(r.restated > 0 ? { restated: r.restated } : {}) } } : {}), findings: recorded, severityCounts: countFindingSeverities(r.posted) }
 }
 
 /** The reviewer and auditor agent runs; separate so the run flow can be tested without agents. */
@@ -289,7 +289,7 @@ export async function postFindingsSequentially(
   const kept = aboveFloor.filter((f) => f.code === undefined || filter.muted?.has(f.code) !== true || normalizeFindingSeverity(f.severity) === 'blocking')
   // The floor and mute decide on the reported severity; the filters then lower, mark or drop.
   const filtered: FilterResult = filter.filters === undefined
-    ? { post: kept, external: 0, lowered: 0, answered: 0, effective: new Map(), evidenceSkipped: false }
+    ? { post: kept, external: 0, lowered: 0, answered: 0, restated: 0, effective: new Map(), evidenceSkipped: false }
     : await applyFilters(kept, filter.filters)
   const posted: ReviewFinding[] = []
   for (const finding of filtered.post) {
@@ -303,7 +303,7 @@ export async function postFindingsSequentially(
       failures.push(`${locator}: ${err instanceof Error ? err.message : String(err)}`)
     }
   }
-  return { postedNew, postedReplies, failures, belowMinimum: findings.length - aboveFloor.length, muted: aboveFloor.length - kept.length, posted, external: filtered.external, lowered: filtered.lowered, answered: filtered.answered, effective: filtered.effective, evidenceSkipped: filtered.evidenceSkipped }
+  return { postedNew, postedReplies, failures, belowMinimum: findings.length - aboveFloor.length, muted: aboveFloor.length - kept.length, posted, external: filtered.external, lowered: filtered.lowered, answered: filtered.answered, restated: filtered.restated, effective: filtered.effective, evidenceSkipped: filtered.evidenceSkipped }
 }
 
 /** Summary line, plus the count of findings below the project's minimum severity. */

@@ -272,10 +272,12 @@ export function threadStates(discussions: GitlabDiscussion[], botUsername: strin
     const human = spoken.filter((n) => !ours(n))
     const bot = spoken.filter((n) => ours(n))
     const severity = openerSeverity(first.body)
+    const currentSeverity = bot.map((n) => openerSeverity(n.body)).filter((s) => s !== undefined).at(-1) ?? severity
     return [{
       discussionId: d.id,
       ...where,
       ...(severity !== undefined ? { severity } : {}),
+      ...(currentSeverity !== undefined ? { currentSeverity } : {}),
       ...(human.at(-1)?.created_at !== undefined ? { lastHumanAt: human.at(-1)!.created_at } : {}),
       ...(bot.at(-1)?.created_at !== undefined ? { lastBotAt: bot.at(-1)!.created_at } : {}),
       lastIsHuman: spoken.at(-1) !== undefined && !ours(spoken.at(-1)!),
