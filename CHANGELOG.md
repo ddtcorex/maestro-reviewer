@@ -1,5 +1,34 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- Finding filters enforced in code: a finding may declare `premise` and `evidence`, and a major or blocking finding without a `file:line` inside the checkout is lowered to minor with the reason in its note. (#220)
+- A reply may report `resolution: "open" | "fixed"`; a `fixed` reply is never dropped as a restated finding. (#222)
+- Run metadata `filtered` carries `restated` beside `external`, `lowered` and `answered`. (#221)
+- Every note the reviewer posts carries a marker, `<!-- maestro-note -->` when it has no code and `<!-- maestro-head sha=... -->` with the head it was reviewed at, so its own notes are told from a person's on a shared account. (#221, #222)
+
+### Changed
+
+- Re-reviews are quieter: a reply that restates an open finding at the thread's current severity is not posted when no commit since the head the reviewer read touched the thread's lines. A reply that changes the severity, reports a fix, or names a file the new commits changed is still posted. (#221)
+- A push whose merge request patch is unchanged (a rebase, a base merge) is skipped, unless the prior review was partial. (#221)
+- A shared bot account works: a note written with the bot account counts as the reviewer's only when it carries a reviewer marker or an 0.21 severity label, so a person's `/maestro dismiss`, commands and answers written with that account count. A dedicated bot user stays the recommended setup. (#221)
+- A reply's `(was X)` label compares against the thread's current severity, not the opener's. (#221)
+- Summary severity counts cover posted findings only; muted and dropped findings are reported separately. (#220)
+- This release does not reduce refuted findings. A first candidate moved external-premise findings out of the threads and was withdrawn: it moved right findings at the same rate as wrong ones. The premise is recorded instead. (#220)
+
+### Fixed
+
+- The finding code is shown once. Header echoes the model writes before its text are stripped, including lowercase and one-word tags, bold forms, and a severity word with a parenthetical. (#220, #221, #222)
+- A reply that matches its thread's severity shows the code alone; a changed severity shows `🔵 Minor (was 🟡 Major)`.
+- The vendor-missing backstop requires the source to be absent, so a migration or a class missing from the repository is not read as an external premise. (#220)
+
+### Changed (breaking)
+
+- A blocking finding without evidence is lowered to minor before `REVIEW_GATE=blocking` reads it, so it no longer fails the job. A model that omits evidence on a real blocker lets the merge request through.
+- Notes for findings without a code now end with `<!-- maestro-note -->`, and finding notes carry `<!-- maestro-head sha=... -->`. A consumer that parses note bodies should ignore HTML comments.
+
 ## [0.21.0] - 2026-11-13
 
 ### Changed (breaking)
