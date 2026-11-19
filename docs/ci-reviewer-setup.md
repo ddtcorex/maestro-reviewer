@@ -170,14 +170,19 @@ Every note the reviewer posts is attributed to the owner of
 a personal token posts as that person and grants the review job everything
 that person can do.
 
-- **Dedicated bot user** (recommended for many source projects): create a
-  user such as `maestro-bot`, give it the roles from section 2, and create a
-  personal access token with scope `api` as that user.
-- **Group access token** (`api`, role Developer) on a group containing every
-  source project: GitLab creates a bot user for it. Use it only when the
-  reviewer and config projects sit **outside** that group: inside it, the bot
-  would inherit Developer on the config project, which `resolve` refuses, and
-  GitLab cannot lower an inherited role. Then give the bot Reporter on both.
+- **Dedicated bot user**: create a user such as `maestro-bot`, give it the
+  roles from section 2, and have an administrator issue it a personal access
+  token with scope `api` and an explicit expiry.
+- **Not a group or project access token.** Its bot user cannot be added to
+  any group or project outside its own, and inside its group it inherits the
+  token's role on every project, which GitLab cannot lower. The bot needs
+  Developer on the source projects and at most Reporter on the config
+  project, so no group layout satisfies both: `resolve` refuses it.
+
+Creating the account, the roles, the token flags, verification, rotation and
+what switching accounts costs: [bot-identity.md](bot-identity.md). On CE the
+dedicated identity is a plain user whose token an administrator issues;
+instance service accounts exist on EE only.
 
 If a dedicated identity is not available yet, the reviewer still works on a
 person's account. It tells its own notes apart by the markers it writes
@@ -195,9 +200,11 @@ Then:
 2. On the reviewer project, **Settings > Access tokens**: create a project
    access token, role **Maintainer**, scope **`read_api`**, and store it as
    `REVIEW_RESOLVE_TOKEN` with environment scope `resolve`.
-3. Record both expiry dates. An expired `REVIEW_GITLAB_TOKEN` makes reviews
-   "complete" without posting (`POST /notes` answers 401); an expired
-   `REVIEW_RESOLVE_TOKEN` fails `resolve` with a Maintainer hint.
+3. Record both expiry dates. An expired `REVIEW_GITLAB_TOKEN` fails
+   `resolve` with `cannot read the config project ... (401)`; an expired
+   `REVIEW_RESOLVE_TOKEN` fails `resolve` with a Maintainer hint. A bot token
+   that can read but not post (scope `read_api`) is the quiet case: reviews
+   "complete" without a note.
 
 `CI_JOB_TOKEN` cannot replace `REVIEW_GITLAB_TOKEN`: on GitLab 18.11 reads
 work but posting the comment fails (`POST /notes` = 401), even when the source
@@ -268,7 +275,7 @@ for any name from [4.5](#45-pinned-by-the-pipeline-never-define).
 | `REVIEW_GITLAB_TOKEN` | yes | protected, masked, expand off | The bot's token, scope `api` (3.3). Posts the review, reads the source MR and pipeline, clones for profile and deep reviews. Renamed from `MAESTRO_GITLAB_TOKEN` in 0.15. |
 | `REVIEW_RESOLVE_TOKEN` | yes, **scope `resolve`** | protected, masked, expand off | Project access token of the reviewer project, Maintainer, `read_api` (3.3). It can read every project's scoped keys, which is why its scope keeps it out of the review job, where an agent reads untrusted MR content. |
 | `REVIEW_ALLOWED_NAMESPACES` | yes | protected | Comma-separated groups or projects allowed to use the reviewer, for example `my-group/, other-group/app`. An entry matches itself and everything below it (`my-group` matches `my-group/app`, not `my-group-old/app`). A project outside it gets a no-op pipeline, no review and no note; an empty value fails `resolve`. |
-| `REVIEW_BOT_USERNAME` | strongly recommended (default `maestro-bot`) | protected | Username of the token's owner. The reviewer clears its own award markers (eyes while running) by this name; if it is wrong a stale eyes marker stays and later runs skip with `another review is running`. It grants no permission. |
+| `REVIEW_BOT_USERNAME` | strongly recommended (default `maestro-bot`) | protected | Username of the token's owner, compared case sensitively. The reviewer finds its own threads (dedupe), the codes it raised (dismiss counting) and its own award markers by this name; if it is wrong, a stale eyes marker stays and later runs skip with `another review is running`, and findings are opened again as new threads. The "already reviewed" gate uses the token's user id instead. It grants no permission. |
 | `DEEPSEEK_API_KEY` | one default provider is required | protected, masked, expand off | Key for the baked default route (DeepSeek, `api.deepseek.com`, model `deepseek-v4-flash`). |
 | `REVIEW_LLM_API_KEY` | instead of `DEEPSEEK_API_KEY` | protected, masked, expand off | Default bring-your-own key for any OpenAI-compatible endpoint. At `*` it needs `REVIEW_LLM_BASE_URL` and `REVIEW_LLM_MODEL` too (the job fails closed otherwise). |
 | `REVIEW_LLM_BASE_URL` | with `REVIEW_LLM_API_KEY` | protected, expand off | Endpoint base URL, for example `https://llm.example.com/v1`. Allowed characters: `A-Za-z0-9:/_.+-`. At `*`, `REVIEW_LLM_PROVIDER` presets are not applied: give the URL. |
@@ -636,7 +643,7 @@ works by design; test it on a separate reviewer project.
 | `REVIEW_ALLOWED_NAMESPACES is not set` / `project ... is not in REVIEW_ALLOWED_NAMESPACES` | add the project or its group to the allowlist |
 | `incomplete provider settings for project <id>` | the project's scope is partial; the message names the missing variables (4.3) |
 | `the project key changed since resolve` | the project's scoped key changed after `resolve` ran, or an old child job was retried: rerun the whole reviewer pipeline, never only the child job |
-| run "completes" but no comment appears | the bot token lacks `api`, has expired, or the bot is not Developer on the source project; the log shows `posting review comment failed` with the status |
+| run "completes" but no comment appears | the bot token lacks `api` or the bot is not Developer on the source project; the log shows `posting review comment failed` with the status (an expired token fails `resolve` instead) |
 | `another review is running, skipping` with no active review | a stale bot eyes award (a cancelled pipeline never ran its cleanup, or `REVIEW_BOT_USERNAME` is wrong): delete it from the MR's award emoji and retry |
 | job uses an old image | `REVIEWER_IMAGE` is pinned on purpose; bump it in the config project's file |
 | reports or artifacts missing | the entrypoint must `cd $CI_PROJECT_DIR` before capturing the report dir; keep that line if you fork `entrypoint.sh` |

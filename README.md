@@ -68,6 +68,8 @@ through a small bridge job, with no DSH host and no project mapping.
 
 Step-by-step GitLab setup, the access each user and token needs, every
 variable with its scope and flags, daily use, and troubleshooting: [`docs/ci-reviewer-setup.md`](docs/ci-reviewer-setup.md).
+How to create the bot account, role it and rotate its token:
+[`docs/bot-identity.md`](docs/bot-identity.md).
 Templates live in `templates/`, the image in `docker/`.
 
 ## Settings
