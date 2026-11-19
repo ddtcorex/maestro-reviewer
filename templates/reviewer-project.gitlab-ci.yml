@@ -80,8 +80,11 @@ report:
 # CI/CD variables of this project (Settings > CI/CD > Variables).
 #
 # Tokens, both masked and protected:
-# - REVIEW_GITLAB_TOKEN (environment scope *): bot user or group/project
-#   access token, api scope, Developer on every source project (posts the
+# - REVIEW_GITLAB_TOKEN (environment scope *): a dedicated bot user's
+#   personal access token (never a group or project access token: its bot
+#   cannot hold these roles across namespaces; see bot-identity.md in the
+#   @ddtcorex/maestro-reviewer docs),
+#   api scope, Developer on every source project (posts the
 #   review, clones for deep), Reporter on this project (resolve reads its own
 #   upstream through it; Maintainer is refused) and exactly Reporter on the
 #   config project (Developer or above is refused; REVIEW_ACCEPT_PRIVILEGED_BOT
