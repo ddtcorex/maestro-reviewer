@@ -1,5 +1,8 @@
 import { openerSeverity } from './finding-filters.js'
 
+/** The bot username assumed when REVIEW_BOT_USERNAME is unset or empty. */
+export const DEFAULT_BOT_USERNAME = 'maestro-bot'
+
 /** Marks a reviewer note that carries no other marker (a reply without a code). */
 export const NOTE_MARKER = '<!-- maestro-note -->'
 

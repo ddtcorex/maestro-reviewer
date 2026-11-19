@@ -98,6 +98,10 @@ report:
 #   project, so it is kept out of the review job, where an LLM agent reads
 #   untrusted MR content.
 #
+# Bot username, environment scope *, protected (not masked):
+# - REVIEW_BOT_USERNAME: the username of REVIEW_GITLAB_TOKEN's owner, exactly
+#   as GitLab shows it. Unset means maestro-bot. resolve refuses a mismatch.
+#
 # Allowlist, environment scope * (required; resolve refuses to run without it):
 # - REVIEW_ALLOWED_NAMESPACES: comma-separated groups or projects allowed to
 #   use this reviewer, for example "my-group/, other-group/app". A source

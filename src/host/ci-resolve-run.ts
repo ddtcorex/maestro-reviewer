@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import { join } from 'node:path'
 import { gitlabAuthHeaders } from './forge/gitlab/gitlab-auth.js'
 import { fetchBotUserId } from './ci-coexist.js'
+import { DEFAULT_BOT_USERNAME } from './reviewer-note.js'
 import { childPipelineYaml, decideRoute, namespaceAllowed, noopChildYaml, parseAllowedNamespaces, parseCiConfigPath, parseMrRef, protectionMatches, SCOPED_LLM_NAMES, type ScopedLlm } from './ci-resolve.js'
 
 /**
@@ -108,9 +109,16 @@ export async function runResolve(env: Record<string, string | undefined>, deps: 
     // variables, could be steered into leaking every key. Membership through
     // shared groups only shows in members/all, so both views count.
     const meRes = await get(botToken, '/user')
-    const me = meRes.ok ? await meRes.json() as { id?: number; is_admin?: boolean } : undefined
+    const me = meRes.ok ? await meRes.json() as { id?: number; username?: string; is_admin?: boolean } : undefined
     if (typeof me?.id !== 'number') throw new ResolveError(`cannot identify REVIEW_GITLAB_TOKEN's user (GET /user -> ${meRes.status})`)
     if (me.is_admin === true) throw new ResolveError(`REVIEW_GITLAB_TOKEN belongs to a GitLab administrator; use a dedicated bot user`)
+    // The review job finds its own threads, raised codes and award markers by
+    // this name: a wrong one strands eyes markers and reopens findings as new
+    // threads without any error, so it is checked here, where it can fail loudly.
+    const botUsername = env.REVIEW_BOT_USERNAME || DEFAULT_BOT_USERNAME
+    if (me.username !== botUsername) {
+      throw new ResolveError(`REVIEW_BOT_USERNAME is "${botUsername}"${env.REVIEW_BOT_USERNAME ? '' : ' (the default)'} but REVIEW_GITLAB_TOKEN belongs to "${me.username ?? 'unknown'}"; set REVIEW_BOT_USERNAME to the token owner's username`)
+    }
     const botLevel = async (projectId: number, permissions?: { project_access?: Access; group_access?: Access }) => {
       const res = await get(botToken, `/projects/${projectId}/members/all/${me.id}`)
       if (!res.ok && res.status !== 404) throw new ResolveError(`cannot read the bot's role on project ${projectId} (${res.status}): REVIEW_GITLAB_TOKEN's user needs Reporter on it`)

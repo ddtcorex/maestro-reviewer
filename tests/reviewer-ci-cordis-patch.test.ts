@@ -39,8 +39,10 @@ describe('profiles/reviewer-ci/cordis.patch.yml', () => {
     // during today's real E2E tests was posted as the token owner's real
     // GitLab username, never "maestro-bot").
     // Since the engine split the CI trigger reads it from the environment itself.
+    // The default is shared with resolve, which checks it against the token owner.
     const src = readFileSync('src/host/providers/ci-trigger.ts', 'utf-8')
-    expect(src).toMatch(/botUsername: env\.REVIEW_BOT_USERNAME \|\| 'maestro-bot'/)
+    expect(src).toMatch(/botUsername: env\.REVIEW_BOT_USERNAME \|\| DEFAULT_BOT_USERNAME/)
+    expect(readFileSync('src/host/reviewer-note.ts', 'utf-8')).toMatch(/export const DEFAULT_BOT_USERNAME = 'maestro-bot'/)
   })
 })
 
