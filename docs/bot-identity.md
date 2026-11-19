@@ -43,8 +43,10 @@ reviewer marker (or, for notes written before markers existed, starts with a
 severity label). Anything else written with the same account is treated as a
 person's note.
 
-Nothing checks that `REVIEW_BOT_USERNAME` is the token owner's username, so a
-mismatch passes `resolve` and only shows up later, see section 10.
+`resolve` compares `REVIEW_BOT_USERNAME`, or its default, with the username
+`GET /user` returns for the token, case included, and fails the pipeline on a
+mismatch before any review runs. Without that check a wrong name would only
+show up later as a stuck eyes award and findings reopened as new threads.
 
 ## 2. What a person's token costs
 
@@ -231,8 +233,8 @@ noisy pass.
    yet.
 2. Issue the token, then update `REVIEW_GITLAB_TOKEN` and
    `REVIEW_BOT_USERNAME` together, and delete `REVIEW_ACCEPT_PRIVILEGED_BOT`.
-   Updating only one of the two leaves the reviewer with a username that is
-   not the token owner's, see section 10.
+   Until both are updated, `resolve` refuses the pipeline with a username
+   mismatch, so a half done swap stops reviews instead of degrading them.
 3. Run the canary merge request from section 7.
 4. Keep the old personal token valid for a week as rollback, then revoke it.
    Notes posted before the swap stay attributed to the person, and eyes
@@ -263,16 +265,9 @@ Developer on the source project.
 | `cannot read the config project ... (401)` | expired or revoked token | issue a new token, section 11 |
 | `cannot read the config project ... (404)` | no membership on a private config project | add the bot as Reporter |
 | Review completes but no note appears | token without `api`, or bot not Developer on the source project | section 9 |
-| `another review is running, skipping` on every run | `REVIEW_BOT_USERNAME` is not the token owner's username, so the reviewer cannot remove its own eyes award | read `GET /user`, set the variable to that `username`, then delete the stale award |
-| The same finding opened again as a new thread, `/maestro dismiss` never mutes anything | same username mismatch: the reviewer does not see its own threads or which codes it raised | same fix |
+| `REVIEW_BOT_USERNAME is "..." but REVIEW_GITLAB_TOKEN belongs to "..."` | the variable, or the `maestro-bot` default when it is unset, is not the token owner's username | set `REVIEW_BOT_USERNAME` to the quoted owner, exactly as written |
+| `another review is running, skipping` with no review running | a stale eyes award: a cancelled pipeline never ran its cleanup, or one was left by a wrong username before `resolve` checked it | delete the bot's eyes award from the merge request |
 | Duplicate threads and repeated command answers on every open MR, once | the bot account was switched | expected, section 8 |
-
-**A gap worth closing.** `resolve` already calls `GET /user` for the
-administrator check, and it never compares that username with
-`REVIEW_BOT_USERNAME`. A mismatch therefore passes `resolve` and only shows up
-later as a stuck eyes award or duplicate threads. Comparing the two in
-`src/host/ci-resolve-run.ts` would turn a silent degradation into one clear
-error at pipeline start.
 
 ## 11. Rotation
 

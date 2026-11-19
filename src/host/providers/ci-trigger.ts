@@ -3,6 +3,7 @@ import z from '@deepseek-ai/schemastery'
 import { join } from 'node:path'
 import type { ReviewRequest, ReviewResult } from '../events.js'
 import { lastCompletedReview } from '../review-history.js'
+import { DEFAULT_BOT_USERNAME } from '../reviewer-note.js'
 import type { ReviewSkillProfile } from '../skills-tool.js'
 import type { ModelSelection } from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-agent-default-model'
@@ -117,7 +118,7 @@ export function parseCiEnvConfig(env: Record<string, string | undefined>): CiEnv
     gitlabHost: env.GITLAB_HOST.trim(),
     gitlabToken: env.REVIEW_GITLAB_TOKEN,
     // A personal or project token posts as its own username, not "maestro-bot".
-    botUsername: env.REVIEW_BOT_USERNAME || 'maestro-bot',
+    botUsername: env.REVIEW_BOT_USERNAME || DEFAULT_BOT_USERNAME,
     agentTimeoutMs: CI_AGENT_TIMEOUT_MS,
     // Optional as a pair: a model without a provider fails the review with a
     // provider error instead of silently calling the wrong model.

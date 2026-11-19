@@ -90,7 +90,7 @@ function gitlab(w: World) {
     }
     if (p === `/projects/${SOURCE}/pipelines/31`) return json(200, { id: 31, ref: w.ref ?? `refs/merge-requests/${MR}/head` })
     if (p === `/projects/${SOURCE}/merge_requests/${MR}`) return json(200, { iid: MR, labels: w.labels ?? [] })
-    if (p === '/user') return json(200, w.me ?? { id: 5, username: 'bot' })
+    if (p === '/user') return json(200, w.me ?? { id: 5, username: 'maestro-bot' })
     if (p === `/projects/${SOURCE}/merge_requests/${MR}/notes`) {
       if ((init.method ?? 'GET') === 'POST') { posted.push({ url, body: JSON.parse(String(init.body)) }); return json(w.noteStatus ?? 201, {}) }
       if (w.notesListStatus) return json(w.notesListStatus, {})
@@ -316,6 +316,25 @@ describe('runResolve', () => {
     }
     const admin = await run({ me: { id: 5, username: 'bot', is_admin: true } }, env({ REVIEW_ACCEPT_PRIVILEGED_BOT: '1' }))
     expect(admin.exitCode).toBe(1)
+  })
+
+  it('refuses a REVIEW_BOT_USERNAME that is not the token owner, which no flag accepts', async () => {
+    const r = await run({ me: { id: 5, username: 'someone' } }, env({ REVIEW_BOT_USERNAME: 'maestro-bot' }))
+    expect(r.exitCode).toBe(1)
+    expect(r.child?.review).toBeUndefined()
+    expect(r.logs.join('\n')).toMatch(/REVIEW_BOT_USERNAME is "maestro-bot".*"someone"/)
+    expect((await run({ me: { id: 5, username: 'someone' } }, env({ REVIEW_BOT_USERNAME: 'maestro-bot', REVIEW_ACCEPT_PRIVILEGED_BOT: '1' }))).exitCode).toBe(1)
+    // The engine compares usernames case sensitively, so resolve does too.
+    expect((await run({}, env({ REVIEW_BOT_USERNAME: 'Maestro-Bot' }))).exitCode).toBe(1)
+    expect((await run({ me: { id: 5, username: 'review-bot' } }, env({ REVIEW_BOT_USERNAME: 'review-bot' }))).exitCode).toBe(0)
+  })
+
+  it('compares against maestro-bot when REVIEW_BOT_USERNAME is unset or empty, as the engine does', async () => {
+    expect((await run({})).exitCode).toBe(0)
+    expect((await run({}, env({ REVIEW_BOT_USERNAME: '' }))).exitCode).toBe(0)
+    const other = await run({ me: { id: 5, username: 'bot' } })
+    expect(other.exitCode).toBe(1)
+    expect(other.logs.join('\n')).toMatch(/REVIEW_BOT_USERNAME is "maestro-bot" \(the default\)/)
   })
 
   it('no longer requires the reviewer branch itself to be Maintainers only', async () => {
